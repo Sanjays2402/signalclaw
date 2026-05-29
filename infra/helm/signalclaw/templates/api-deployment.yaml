@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: {{ .Release.Name }}-api }
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector: { matchLabels: { app: {{ .Release.Name }}-api } }
+  template:
+    metadata: { labels: { app: {{ .Release.Name }}-api } }
+    spec:
+      containers:
+        - name: api
+          image: {{ .Values.image.api }}
+          ports: [{ containerPort: {{ .Values.api.port }} }]
+          env:
+            - name: SIGNALCLAW_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.api.apiKeySecret }}, key: key } }
+          readinessProbe: { httpGet: { path: /health, port: {{ .Values.api.port }} } }

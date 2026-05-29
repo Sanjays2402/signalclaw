@@ -1,0 +1,15 @@
+image:
+  api: ghcr.io/sanjays2402/signalclaw-api:latest
+  web: ghcr.io/sanjays2402/signalclaw-web:latest
+api:
+  port: 7431
+  replicas: 1
+  apiKeySecret: signalclaw-api-key
+web:
+  port: 7430
+  replicas: 1
+service:
+  type: ClusterIP
+ingress:
+  enabled: false
+  host: signalclaw.local

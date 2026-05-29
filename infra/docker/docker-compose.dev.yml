@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  api:
+    build: { context: ../.., dockerfile: infra/docker/Dockerfile.api }
+    ports: ["7431:7431"]
+    environment:
+      SIGNALCLAW_API_KEY: dev-key
+      LOG_LEVEL: INFO
+    volumes:
+      - ../../data:/app/data
+  web:
+    build: { context: ../.., dockerfile: infra/docker/Dockerfile.web }
+    ports: ["7430:7430"]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:7431
+    depends_on: [api]

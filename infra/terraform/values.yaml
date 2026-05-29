@@ -1,0 +1,2 @@
+api: { replicas: 1 }
+web: { replicas: 1 }

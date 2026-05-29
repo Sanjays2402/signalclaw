@@ -1,0 +1,6 @@
+apiVersion: v2
+name: signalclaw
+description: SignalClaw chart (NOT FINANCIAL ADVICE)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
