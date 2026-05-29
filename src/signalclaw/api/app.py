@@ -12,6 +12,7 @@ from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest
 from .schemas import DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut
 from .security import require_api_key
+from .middleware import AccessLogMiddleware
 
 
 def create_app() -> FastAPI:
@@ -22,6 +23,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="SignalClaw API", version="0.1.0",
                   description="NOT FINANCIAL ADVICE.")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    app.add_middleware(AccessLogMiddleware)
     wl_path = settings.data_dir / "watchlist.json"
     store = WatchlistStore(wl_path)
 
