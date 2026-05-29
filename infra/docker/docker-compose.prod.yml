@@ -1,0 +1,14 @@
+version: "3.9"
+services:
+  api:
+    image: ghcr.io/sanjays2402/signalclaw-api:latest
+    environment:
+      SIGNALCLAW_API_KEY: ${SIGNALCLAW_API_KEY}
+      LOG_LEVEL: INFO
+    ports: ["7431:7431"]
+  web:
+    image: ghcr.io/sanjays2402/signalclaw-web:latest
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:7431
+    depends_on: [api]
+    ports: ["7430:7430"]
