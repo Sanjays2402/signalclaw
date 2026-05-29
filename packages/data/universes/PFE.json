@@ -1,0 +1,8 @@
+{
+  "ticker": "PFE",
+  "sector": "health",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "PFE",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

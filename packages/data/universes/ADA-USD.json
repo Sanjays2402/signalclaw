@@ -1,0 +1,8 @@
+{
+  "ticker": "ADA-USD",
+  "sector": "crypto",
+  "asset_class": "crypto",
+  "yfinance_symbol": "ADA-USD",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

@@ -1,0 +1,8 @@
+{
+  "ticker": "TMO",
+  "sector": "health",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "TMO",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

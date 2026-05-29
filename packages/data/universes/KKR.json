@@ -1,0 +1,8 @@
+{
+  "ticker": "KKR",
+  "sector": "financials",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "KKR",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

@@ -1,0 +1,8 @@
+{
+  "ticker": "VXUS",
+  "sector": "etf_broad",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "VXUS",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

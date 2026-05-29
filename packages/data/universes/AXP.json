@@ -1,0 +1,8 @@
+{
+  "ticker": "AXP",
+  "sector": "financials",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "AXP",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

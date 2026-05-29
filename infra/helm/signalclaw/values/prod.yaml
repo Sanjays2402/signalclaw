@@ -1,0 +1,7 @@
+api:
+  replicas: 2
+web:
+  replicas: 2
+image:
+  api: ghcr.io/sanjays2402/signalclaw-api:prod
+  web: ghcr.io/sanjays2402/signalclaw-web:prod

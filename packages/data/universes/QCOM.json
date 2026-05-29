@@ -1,0 +1,8 @@
+{
+  "ticker": "QCOM",
+  "sector": "semis",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "QCOM",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

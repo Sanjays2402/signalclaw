@@ -1,0 +1,8 @@
+{
+  "ticker": "FNILX",
+  "sector": "mutual_fund",
+  "asset_class": "mutual_fund",
+  "yfinance_symbol": "FNILX",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

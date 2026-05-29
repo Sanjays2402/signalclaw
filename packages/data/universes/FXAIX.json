@@ -1,0 +1,8 @@
+{
+  "ticker": "FXAIX",
+  "sector": "mutual_fund",
+  "asset_class": "mutual_fund",
+  "yfinance_symbol": "FXAIX",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

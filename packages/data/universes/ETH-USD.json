@@ -1,0 +1,8 @@
+{
+  "ticker": "ETH-USD",
+  "sector": "crypto",
+  "asset_class": "crypto",
+  "yfinance_symbol": "ETH-USD",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

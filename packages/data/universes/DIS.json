@@ -1,0 +1,8 @@
+{
+  "ticker": "DIS",
+  "sector": "other",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "DIS",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

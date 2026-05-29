@@ -1,0 +1,8 @@
+{
+  "ticker": "SOL-USD",
+  "sector": "crypto",
+  "asset_class": "crypto",
+  "yfinance_symbol": "SOL-USD",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

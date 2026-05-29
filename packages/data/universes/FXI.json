@@ -1,0 +1,8 @@
+{
+  "ticker": "FXI",
+  "sector": "other",
+  "asset_class": "mutual_fund",
+  "yfinance_symbol": "FXI",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

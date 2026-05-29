@@ -1,0 +1,8 @@
+{
+  "ticker": "ARKK",
+  "sector": "other",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "ARKK",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}

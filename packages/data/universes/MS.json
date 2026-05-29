@@ -1,0 +1,8 @@
+{
+  "ticker": "MS",
+  "sector": "financials",
+  "asset_class": "equity_or_etf",
+  "yfinance_symbol": "MS",
+  "default_horizon_days": 5,
+  "disclaimer": "NOT FINANCIAL ADVICE"
+}
