@@ -347,6 +347,37 @@ write contention. Back up `DATA_DIR` (parquet, JSON stores, audit/) on the
 same cadence as your other stateful volumes. On-call playbook lives under
 `docs/playbook.md`.
 
+### Data lifecycle (GDPR export and delete)
+
+SignalClaw exposes two endpoints so an operator can fulfil data subject
+requests without writing ad hoc scripts. Both require the `admin` scope.
+
+`GET /privacy/export` returns a single JSON blob containing every
+user-state record on the instance: watchlist, alerts, portfolio trades,
+stops, journal, brackets, earnings calendar, news events, webhooks,
+drawdown history, scaling plans, FX currencies, and the full persisted
+audit log grouped by UTC day. Stream it to a file:
+
+```
+curl -H "x-api-key: $ADMIN_KEY" http://localhost:8000/privacy/export \
+  > export-$(date -u +%Y%m%d).json
+```
+
+`POST /privacy/delete` erases user state in place. To guard against
+accidents the call must include `confirm=DELETE` exactly. Audit log,
+archived daily reports, and cached OHLCV are preserved by default since
+they are typically retained for compliance; opt in per category with
+`wipe_audit=true`, `wipe_reports=true`, and `wipe_ohlcv=true`:
+
+```
+curl -X POST -H "x-api-key: $ADMIN_KEY" \
+  "http://localhost:8000/privacy/delete?confirm=DELETE"
+```
+
+Response body returns `{"ok": true, "removed": {...}, "files_removed":
+[...], "errors": []}` so the action is itself auditable. The deletion
+is also written to the audit log via the standard middleware.
+
 ---
 
 Not investment advice. Paper-trading and research use only. See `FINANCIAL_DISCLAIMER.md`.

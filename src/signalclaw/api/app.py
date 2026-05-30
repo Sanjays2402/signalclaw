@@ -52,6 +52,7 @@ from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
+from ..privacy import StoreBundle, collect_user_data, erase_user_data
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
@@ -1199,6 +1200,65 @@ def create_app() -> FastAPI:
             dlq=dlq,
         )
         return {"channel": body.channel.lower(), "ok": ok}
+
+    def _store_bundle() -> StoreBundle:
+        return StoreBundle(
+            data_dir=settings.data_dir,
+            watchlist=store,
+            alerts=alert_store,
+            portfolio=portfolio_store,
+            stops=stops_store,
+            earnings=earnings_store,
+            journal=journal_store,
+            brackets=bracket_store,
+            news_events=news_event_store,
+            webhooks=webhooks_store,
+            drawdown=drawdown_store,
+            fx=fx_store,
+            ccy_map=ccy_map,
+            dlq=dlq,
+            ledger=ledger_store,
+            scaling=scaling_store,
+            archive=archive,
+            audit=audit_log,
+        )
+
+    @app.get("/privacy/export",
+             dependencies=[Depends(require_scope("admin"))])
+    def privacy_export():
+        """Return every user-state record as a single JSON blob (GDPR Article 20).
+
+        Requires the ``admin`` scope on the calling API key. Output
+        contains watchlist, alerts, portfolio trades, stops, journal,
+        brackets, earnings calendar, news events, webhooks, drawdown
+        history, scaling plans, FX currencies, and the full persisted
+        audit log grouped by UTC day.
+        """
+        return collect_user_data(_store_bundle())
+
+    @app.post("/privacy/delete",
+              dependencies=[Depends(require_scope("admin"))])
+    def privacy_delete(confirm: str = "",
+                       wipe_audit: bool = False,
+                       wipe_reports: bool = False,
+                       wipe_ohlcv: bool = False):
+        """Erase user-state stores (GDPR Article 17).
+
+        Caller must pass ``confirm=DELETE`` (exact, case-sensitive) to
+        avoid accidental wipes. Audit log, archived reports, and
+        cached OHLCV are preserved by default since they are typically
+        retained for compliance; opt in per-category with the flags.
+        """
+        if confirm != "DELETE":
+            raise HTTPException(400, "pass confirm=DELETE to proceed")
+        summary = erase_user_data(
+            _store_bundle(),
+            wipe_audit=wipe_audit,
+            wipe_reports=wipe_reports,
+            wipe_ohlcv=wipe_ohlcv,
+        )
+        log.info("privacy.delete", **summary.to_dict())
+        return summary.to_dict()
 
     return app
 
