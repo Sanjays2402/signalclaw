@@ -619,6 +619,89 @@ def stops_check_cmd():
                       f" ref={e.reference_price:.2f}")
 
 
+@cli.group("webhooks")
+def webhooks_grp():
+    """Manage pick-change webhook subscriptions."""
+
+
+@webhooks_grp.command("list")
+def webhooks_list_cmd():
+    from ..webhooks import WebhookStore
+    s = get_settings()
+    store = WebhookStore(s.data_dir / "webhooks.json")
+    table = Table(title="Webhook subscriptions")
+    for c in ["id", "url", "events", "tickers", "enabled", "last_status"]:
+        table.add_column(c)
+    for sub in store.list():
+        table.add_row(sub.id, sub.url, ",".join(sub.events),
+                      ",".join(sub.tickers) or "*",
+                      "Y" if sub.enabled else "N",
+                      str(sub.last_status) if sub.last_status is not None else "-")
+    console.print(table)
+
+
+@webhooks_grp.command("add")
+@click.argument("url")
+@click.option("--events", default="",
+              help="comma list: entered,exited,upgraded,downgraded,score_jump")
+@click.option("--tickers", default="", help="comma list, empty = all")
+@click.option("--secret", default="")
+def webhooks_add_cmd(url, events, tickers, secret):
+    from ..webhooks import WebhookStore, WebhookSubscription, EVENT_KINDS
+    ev = [e.strip() for e in events.split(",") if e.strip()] or sorted(EVENT_KINDS)
+    bad = [e for e in ev if e not in EVENT_KINDS]
+    if bad:
+        console.print(f"unknown event(s): {bad}")
+        return
+    s = get_settings()
+    store = WebhookStore(s.data_dir / "webhooks.json")
+    sub = WebhookSubscription(
+        url=url, events=ev,
+        tickers=[t.strip().upper() for t in tickers.split(",") if t.strip()],
+        secret=secret,
+    )
+    store.add(sub)
+    console.print(f"added {sub.id}")
+
+
+@webhooks_grp.command("remove")
+@click.argument("sub_id")
+def webhooks_remove_cmd(sub_id):
+    from ..webhooks import WebhookStore
+    s = get_settings()
+    store = WebhookStore(s.data_dir / "webhooks.json")
+    if store.remove(sub_id):
+        console.print(f"removed {sub_id}")
+    else:
+        console.print("not found")
+
+
+@webhooks_grp.command("fire")
+def webhooks_fire_cmd():
+    """Diff latest archived report vs prior, deliver events to all subs."""
+    from ..webhooks import WebhookStore, diff_picks, deliver_events
+    from ..history import ReportArchive
+    s = get_settings()
+    arc = ReportArchive(s.data_dir / "reports")
+    latest = arc.latest()
+    if latest is None:
+        console.print("no archived reports")
+        return
+    prior = arc.prior_of(latest.as_of)
+    events = diff_picks(
+        current=[p.to_dict() for p in latest.picks],
+        prior=[p.to_dict() for p in prior.picks] if prior else None,
+        current_as_of=latest.as_of,
+        prior_as_of=prior.as_of if prior else None,
+    )
+    store = WebhookStore(s.data_dir / "webhooks.json")
+    results = deliver_events(events, store)
+    console.print(f"{len(events)} event(s), {len(results)} delivery attempt(s)")
+    for r in results:
+        console.print(f"  {r['url']} -> {r['status']} ({r['n_events']} events)"
+                      + (f" err={r['error']}" if r['error'] else ""))
+
+
 def main():
     cli()
 

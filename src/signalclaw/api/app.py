@@ -23,7 +23,9 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        EarningsIn, EarningsOut, EarningsListOut,
                        ConcentrationOut, SectorExposureOut,
                        TaxReportOut,
-                       OptFoldOut, OptResultOut)
+                       OptFoldOut, OptResultOut,
+                       WebhookIn, WebhookOut, WebhookListOut,
+                       PickEventOut, WebhookDeliveryOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -34,6 +36,8 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
+from ..webhooks import (WebhookStore, WebhookSubscription, diff_picks,
+                         deliver_events, EVENT_KINDS)
 from ..regime import detect_regime
 from ..earnings import EarningsStore, EarningsDate
 
@@ -60,6 +64,7 @@ def create_app() -> FastAPI:
     stops_store = StopStore(settings.data_dir / "stops.json")
     earnings_store = EarningsStore(settings.data_dir / "earnings.json")
     archive = ReportArchive(settings.data_dir / "reports")
+    webhooks_store = WebhookStore(settings.data_dir / "webhooks.json")
 
     @app.get("/health")
     def health():
@@ -462,6 +467,53 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "report not found")
         return DailyReportOut(as_of=r.as_of,
                               picks=[Pick(**p.to_dict()) for p in r.picks])
+
+    @app.get("/webhooks", response_model=WebhookListOut, dependencies=[Depends(require_api_key)])
+    def webhooks_list():
+        return WebhookListOut(subscriptions=[WebhookOut(**s.to_dict())
+                                             for s in webhooks_store.list()])
+
+    @app.post("/webhooks", response_model=WebhookOut, dependencies=[Depends(require_api_key)])
+    def webhooks_add(body: WebhookIn):
+        if not body.url.startswith(("http://", "https://")):
+            raise HTTPException(400, "url must be http(s)")
+        bad = [e for e in body.events if e and e not in EVENT_KINDS]
+        if bad:
+            raise HTTPException(400, f"unknown event(s): {bad}")
+        sub = WebhookSubscription(
+            url=body.url,
+            events=list(body.events) if body.events else sorted(EVENT_KINDS),
+            tickers=[t.upper() for t in body.tickers],
+            secret=body.secret,
+            enabled=body.enabled,
+        )
+        webhooks_store.add(sub)
+        return WebhookOut(**sub.to_dict())
+
+    @app.delete("/webhooks/{sub_id}", dependencies=[Depends(require_api_key)])
+    def webhooks_remove(sub_id: str):
+        if not webhooks_store.remove(sub_id):
+            raise HTTPException(404, "subscription not found")
+        return {"removed": sub_id}
+
+    @app.post("/webhooks/fire/latest", response_model=WebhookDeliveryOut,
+              dependencies=[Depends(require_api_key)])
+    def webhooks_fire_latest():
+        latest = archive.latest()
+        if latest is None:
+            raise HTTPException(404, "no archived reports")
+        prior = archive.prior_of(latest.as_of)
+        events = diff_picks(
+            current=[p.to_dict() for p in latest.picks],
+            prior=[p.to_dict() for p in prior.picks] if prior else None,
+            current_as_of=latest.as_of,
+            prior_as_of=prior.as_of if prior else None,
+        )
+        deliveries = deliver_events(events, webhooks_store)
+        return WebhookDeliveryOut(
+            events=[PickEventOut(**e.to_dict()) for e in events],
+            deliveries=deliveries,
+        )
 
     return app
 

@@ -331,6 +331,48 @@ class OptResultOut(BaseModel):
     grid_size: int
 
 
+class WebhookIn(BaseModel):
+    url: str
+    events: List[str] = []
+    tickers: List[str] = []
+    secret: str = ""
+    enabled: bool = True
+
+
+class WebhookOut(BaseModel):
+    id: str
+    url: str
+    events: List[str]
+    tickers: List[str]
+    secret: str = ""
+    enabled: bool
+    created_at: str
+    last_status: Optional[int] = None
+    last_error: Optional[str] = None
+    last_delivered_at: Optional[str] = None
+
+
+class WebhookListOut(BaseModel):
+    subscriptions: List[WebhookOut]
+
+
+class PickEventOut(BaseModel):
+    kind: str
+    ticker: str
+    as_of: str
+    prior_as_of: Optional[str] = None
+    prior_label: Optional[str] = None
+    new_label: Optional[str] = None
+    prior_score: Optional[float] = None
+    new_score: Optional[float] = None
+    score_delta: Optional[float] = None
+
+
+class WebhookDeliveryOut(BaseModel):
+    events: List[PickEventOut]
+    deliveries: List[dict]
+
+
 class EarningsIn(BaseModel):
     next_report: str
     confirmed: bool = False
