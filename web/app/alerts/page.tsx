@@ -2,15 +2,27 @@
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
-import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd } from "@/components/ui";
+import RuleVisual from "@/components/RuleVisual";
+import {
+  Card,
+  Badge,
+  Loading,
+  ErrorBox,
+  Empty,
+  Button,
+  Input,
+  Select,
+  Field,
+  fmtUsd,
+} from "@/components/ui";
 import { api, swrFetcher, type Alert, type AlertIn } from "@/lib/api";
-import { Bell, BellRinging, Trash, Plus } from "@phosphor-icons/react/dist/ssr";
+import { BellRinging, Trash, Plus } from "@phosphor-icons/react/dist/ssr";
 
 const CONDITIONS = [
-  { v: "price_above", l: "price above" },
-  { v: "price_below", l: "price below" },
-  { v: "pct_change_above", l: "% change above" },
-  { v: "pct_change_below", l: "% change below" },
+  { v: "price_above", l: "price >" },
+  { v: "price_below", l: "price <" },
+  { v: "pct_change_above", l: "% chg >" },
+  { v: "pct_change_below", l: "% chg <" },
 ];
 
 export default function AlertsPage() {
@@ -64,17 +76,18 @@ function Alerts() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-5">
+    <div className="max-w-6xl mx-auto space-y-4">
       <header className="flex items-end justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
-            <Bell weight="duotone" />
+          <h1 className="text-base font-semibold uppercase tracking-widest" style={{ letterSpacing: "0.1em" }}>
             Alerts
           </h1>
-          <p className="muted text-xs">Trigger on price levels or percent moves.</p>
+          <p className="muted text-[10px] uppercase tracking-widest">
+            Price levels and % moves. Fires once per cooldown.
+          </p>
         </div>
         <Button variant="ghost" onClick={onCheck} disabled={busy === "check"}>
-          <BellRinging weight="duotone" className="inline mr-1" />
+          <BellRinging weight="duotone" className="inline mr-1" size={12} />
           {busy === "check" ? "Checking" : "Run check"}
         </Button>
       </header>
@@ -82,55 +95,75 @@ function Alerts() {
       <CreateAlertForm onSubmit={onCreate} busy={busy === "create"} err={formErr} />
 
       <Card title="Active alerts">
-        {error ? <ErrorBox err={error} /> :
-          isLoading || !data ? <Loading /> :
-            data.alerts.length === 0 ? (
-              <Empty title="No alerts yet" hint="Create one above to start watching a level." />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left muted text-xs uppercase border-b border-[var(--border)]">
-                      <th className="py-2 pr-3">Ticker</th>
-                      <th className="pr-3">Condition</th>
-                      <th className="text-right pr-3">Value</th>
-                      <th className="pr-3">Cooldown</th>
-                      <th className="pr-3">Last fired</th>
-                      <th className="pr-3">Note</th>
-                      <th className="pr-3">State</th>
-                      <th />
+        {error ? (
+          <ErrorBox err={error} />
+        ) : isLoading || !data ? (
+          <Loading />
+        ) : data.alerts.length === 0 ? (
+          <Empty title="No alerts armed" hint="Add one above to watch a level." />
+        ) : (
+          <div className="overflow-x-auto -mx-3">
+            <table className="trade">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Rule</th>
+                  <th style={{ width: 240 }}>Visual</th>
+                  <th className="r">Value</th>
+                  <th className="r">Cooldown</th>
+                  <th>Last fired</th>
+                  <th>Note</th>
+                  <th>State</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {data.alerts.map((a) => {
+                  const val = typeof a.value === "number" ? a.value : parseFloat(String(a.value));
+                  const isPct = a.condition.includes("pct");
+                  const valDisp =
+                    typeof a.value === "number"
+                      ? isPct
+                        ? `${(a.value * 100).toFixed(2)}%`
+                        : fmtUsd(a.value)
+                      : String(a.value);
+                  return (
+                    <tr key={a.id}>
+                      <td className="mono font-semibold">{a.ticker}</td>
+                      <td className="mono muted" style={{ fontSize: 11 }}>
+                        {CONDITIONS.find((c) => c.v === a.condition)?.l ?? a.condition}
+                      </td>
+                      <td>
+                        <RuleVisual kind="alert" trigger={val} condition={a.condition} />
+                      </td>
+                      <td className="r mono">{valDisp}</td>
+                      <td className="r mono muted">{a.cooldown_hours}h</td>
+                      <td className="muted mono" style={{ fontSize: 11 }}>
+                        {a.last_fired_at ?? "never"}
+                      </td>
+                      <td className="muted" style={{ fontSize: 11, maxWidth: 200, whiteSpace: "normal" }}>
+                        {a.note || ""}
+                      </td>
+                      <td>
+                        <Badge tone={a.enabled ? "up" : "neutral"}>{a.enabled ? "on" : "off"}</Badge>
+                      </td>
+                      <td>
+                        <Button
+                          variant="danger"
+                          onClick={() => onDelete(a.id)}
+                          disabled={busy === a.id}
+                          className="text-[10px]"
+                        >
+                          <Trash weight="duotone" size={11} />
+                        </Button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {data.alerts.map((a) => (
-                      <tr key={a.id} className="border-b border-[var(--border)] hover:bg-white/[0.02]">
-                        <td className="py-2 pr-3 mono">{a.ticker}</td>
-                        <td className="pr-3 text-xs">{a.condition}</td>
-                        <td className="num text-right pr-3">
-                          {typeof a.value === "number" ? (a.condition.includes("price") ? fmtUsd(a.value) : `${(a.value * 100).toFixed(2)}%`) : a.value}
-                        </td>
-                        <td className="pr-3 text-xs">{a.cooldown_hours}h</td>
-                        <td className="pr-3 text-xs muted">{a.last_fired_at ?? "never"}</td>
-                        <td className="pr-3 text-xs muted">{a.note || ""}</td>
-                        <td className="pr-3">
-                          <Badge tone={a.enabled ? "up" : "neutral"}>{a.enabled ? "on" : "off"}</Badge>
-                        </td>
-                        <td>
-                          <Button
-                            variant="danger"
-                            onClick={() => onDelete(a.id)}
-                            disabled={busy === a.id}
-                            className="text-xs"
-                          >
-                            <Trash weight="duotone" className="inline" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
     </div>
   );
@@ -166,30 +199,39 @@ function CreateAlertForm({
   }
 
   return (
-    <Card title="New alert">
+    <Card title="Arm new alert">
       <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
         <Field label="Ticker">
           <Input value={ticker} onChange={(e) => setTicker(e.target.value)} placeholder="AAPL" required />
         </Field>
         <Field label="Condition">
           <Select value={condition} onChange={(e) => setCondition(e.target.value)}>
-            {CONDITIONS.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
+            {CONDITIONS.map((c) => (
+              <option key={c.v} value={c.v}>
+                {c.l}
+              </option>
+            ))}
           </Select>
         </Field>
         <Field label={condition.startsWith("pct") ? "Value (%)" : "Value ($)"}>
           <Input value={value} onChange={(e) => setValue(e.target.value)} type="number" step="any" required />
         </Field>
-        <Field label="Cooldown (h)">
-          <Input value={cooldown} onChange={(e) => setCooldown(parseInt(e.target.value || "0", 10))} type="number" min={0} />
+        <Field label="Cooldown h">
+          <Input
+            value={cooldown}
+            onChange={(e) => setCooldown(parseInt(e.target.value || "0", 10))}
+            type="number"
+            min={0}
+          />
         </Field>
         <Field label="Note">
           <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" />
         </Field>
         <Button type="submit" disabled={busy}>
-          <Plus weight="duotone" className="inline mr-1" />
-          {busy ? "Saving" : "Create"}
+          <Plus weight="bold" className="inline mr-1" size={11} />
+          {busy ? "Arming" : "Arm"}
         </Button>
-        {err && <div className="md:col-span-6 text-xs down">{err}</div>}
+        {err && <div className="md:col-span-6 text-[11px] down mono">{err}</div>}
       </form>
     </Card>
   );
