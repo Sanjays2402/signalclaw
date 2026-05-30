@@ -483,6 +483,65 @@ the event appears in the Sentry project under the configured
 `SENTRY_ENVIRONMENT`. The startup log line `sentry.enabled` confirms
 the SDK initialised inside the pod.
 
+### Distributed tracing (OpenTelemetry)
+
+The API ships a real OpenTelemetry pipeline: a `TracerProvider` with a
+stable `service.name` resource, OTLP/HTTP span export, and ASGI plus
+httpx auto-instrumentation. It stays inert until you point
+`OTEL_EXPORTER_OTLP_ENDPOINT` at a collector, so local dev and CI never
+need a running OTel stack.
+
+Enable it by setting these environment variables (see `.env.example`):
+
+```
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+OTEL_TRACES_SAMPLER_ARG=0.1          # 0.0 to 1.0 parent-based ratio sampler
+OTEL_SERVICE_VERSION=0.1.0           # optional, falls back to package version
+```
+
+If the endpoint already includes the `/v1/traces` path it is used as-is;
+otherwise the OTLP/HTTP exporter appends it. The standard upstream
+`OTEL_EXPORTER_OTLP_HEADERS` is honoured by the exporter for tenant
+authentication against managed backends (Honeycomb, Grafana Cloud,
+Datadog OTLP intake).
+
+What gets traced:
+
+- Every inbound HTTP request via the FastAPI ASGI instrumentor. Span
+  names use the route template (for example `GET /watchlist/{ticker}`)
+  so cardinality stays bounded.
+- Every outbound httpx call (yfinance fetches, notifier webhooks)
+  becomes a child span under the request that triggered it.
+- `/health`, `/ready`, and `/metrics` are excluded from span creation
+  so probe and scrape traffic do not drown out real signal.
+
+Log and trace correlation:
+
+`RequestContextMiddleware` reads the active span context inside every
+request and binds `trace_id` plus `span_id` into the `structlog`
+contextvars alongside `request_id`. Every structured log line emitted
+during the request automatically carries all three, so you can click
+from a Sentry event or a log search straight to the matching trace in
+your OTel backend without manually stitching ids. When tracing is
+disabled the trace fields are simply absent.
+
+Sampling guidance:
+
+- Dev and CI: leave `OTEL_TRACES_SAMPLER_ARG=1.0` to record everything.
+- Staging: `0.5` is a good starting point while you tune dashboards.
+- Production: `0.05` to `0.1` keeps cost predictable; raise it during
+  incident response. The sampler is parent-based, so an upstream that
+  forces `sampled=1` on a trace context will always be honoured even
+  when the local ratio would have dropped it.
+
+Smoke test after rollout: hit any non-exempt endpoint and confirm a
+span appears in the collector with `service.name=signalclaw-api` and
+`http.route` matching the FastAPI template. Coverage lives in
+`tests/test_otel_tracing.py`, which uses an in-memory exporter to
+assert that the request middleware and the FastAPI instrumentor
+actually emit spans and that the trace id makes it into the log
+contextvars.
+
 ### Per-IP rate limiting (DoS guard)
 
 A separate `PerIPRateLimitMiddleware` sits outside the per-API-key limiter

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import get_settings
 from ..logging_ import configure_logging, get_logger
-from ..utils import init_tracing
+from ..utils import init_tracing, instrument_fastapi, instrument_httpx
 from ..observability import init_sentry, is_enabled as sentry_enabled
 from ..data import WatchlistStore, load_ohlcv, fetch_ohlcv, save_ohlcv
 from ..engine import run_daily, render_markdown
@@ -87,11 +87,20 @@ def create_app() -> FastAPI:
     # integration can wrap the ASGI stack. No-op when SENTRY_DSN is unset.
     init_sentry()
     init_tracing("signalclaw-api", settings.otel_endpoint)
+    # httpx is shared across yfinance + notifier outbound calls; instrument
+    # the client globally so spans for upstream fetches show up under the
+    # request that triggered them.
+    instrument_httpx()
     log = get_logger("api")
     if sentry_enabled():
         log.info("sentry.enabled")
     app = FastAPI(title="SignalClaw API", version="0.1.0",
                   description="NOT FINANCIAL ADVICE.")
+    # OTel ASGI instrumentation must wrap the app before other middleware
+    # add_middleware calls so spans cover the whole request, including
+    # auth + audit. Excluded URLs (health/ready/metrics) are configured
+    # inside instrument_fastapi to keep span volume bounded.
+    instrument_fastapi(app)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(AccessLogMiddleware)
     # Request context: binds request_id (and optional correlation_id)

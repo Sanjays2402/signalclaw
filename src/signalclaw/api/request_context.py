@@ -66,6 +66,22 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         bind = {"request_id": rid}
         if cid:
             bind["correlation_id"] = cid
+        # Bind the active OTel trace/span ids when a span is recording.
+        # This is what stitches log lines to traces in the collector
+        # UI; without it the structured logs and the spans live in
+        # separate worlds. Falls back silently when OTel is not
+        # configured (TracerProvider returns invalid ids).
+        try:
+            from opentelemetry import trace as _otel_trace
+
+            _span = _otel_trace.get_current_span()
+            _ctx = _span.get_span_context() if _span else None
+            if _ctx is not None and _ctx.is_valid:
+                bind["trace_id"] = format(_ctx.trace_id, "032x")
+                bind["span_id"] = format(_ctx.span_id, "016x")
+        except Exception:
+            # Never let observability wiring break a real request.
+            pass
         structlog.contextvars.bind_contextvars(**bind)
         request.state.request_id = rid
         if cid:
