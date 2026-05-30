@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException
@@ -24,6 +25,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        TaxReportOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
+from .rate_limit import RateLimitMiddleware, require_scope
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
@@ -44,6 +46,12 @@ def create_app() -> FastAPI:
                   description="NOT FINANCIAL ADVICE.")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(AccessLogMiddleware)
+    if os.environ.get("SIGNALCLAW_RATE_LIMIT_ENABLED", "0") == "1":
+        app.add_middleware(
+            RateLimitMiddleware,
+            default_per_minute=int(os.environ.get("SIGNALCLAW_RATE_LIMIT_READ_PER_MIN", "120")),
+            write_per_minute=int(os.environ.get("SIGNALCLAW_RATE_LIMIT_WRITE_PER_MIN", "30")),
+        )
     wl_path = settings.data_dir / "watchlist.json"
     store = WatchlistStore(wl_path)
     alert_store = AlertStore(settings.data_dir / "alerts.json")
