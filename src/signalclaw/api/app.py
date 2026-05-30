@@ -40,7 +40,9 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        SectorScoreOut, RotationOut,
                        NewsEventIn, NewsEventOut, NewsEventListOut, EventStudyOut,
                        CostModelIn, PretradeIn, PretradeOut,
-                       ExecSimulateIn, ExecReportOut, ExecFillOut)
+                       ExecSimulateIn, ExecReportOut, ExecFillOut,
+                       LedgerEntryIn, LedgerEntryOut, LedgerListOut,
+                       MarginConfigIn, MarginConfigOut, AccountSnapshotOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -52,7 +54,9 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           filter_picks as drawdown_filter_picks,
                           JournalEntry, JournalStore, conviction_stats,
                           FxStore, TradeCurrencyMap, convert_trades, USD,
-                          BracketPlan, BracketStore, compute_bracket_stats)
+                          BracketPlan, BracketStore, compute_bracket_stats,
+                          LedgerStore, LedgerEntry, EntryKind, MarginConfig,
+                          ledger_snapshot)
 from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
                          DeadLetterQueue, RetryPolicy, send_with_retry,
                          replay_dlq, Notifier)
@@ -100,6 +104,7 @@ def create_app() -> FastAPI:
     news_event_store = NewsEventStore(settings.data_dir / "news_events.json")
     ccy_map = TradeCurrencyMap(settings.data_dir / "trade_currency.json")
     dlq = DeadLetterQueue(settings.data_dir / "notifier_dlq.json")
+    ledger_store = LedgerStore(settings.data_dir / "ledger.json")
 
     def _notifier_for(channel: str) -> Notifier | None:
         c = (channel or "").lower()
@@ -417,6 +422,67 @@ def create_app() -> FastAPI:
             raise HTTPException(400, str(e))
         d = rep.to_dict()
         return ExecReportOut(**d)
+
+    @app.get("/ledger/{account}", response_model=LedgerListOut,
+             dependencies=[Depends(require_api_key)])
+    def ledger_list(account: str):
+        es = ledger_store.entries(account)
+        return LedgerListOut(
+            account=account,
+            entries=[LedgerEntryOut(**e.to_dict()) for e in es],
+        )
+
+    @app.post("/ledger/{account}", response_model=LedgerEntryOut,
+              dependencies=[Depends(require_api_key)])
+    def ledger_append(account: str, body: LedgerEntryIn):
+        try:
+            kind = EntryKind(body.kind.lower())
+        except ValueError:
+            raise HTTPException(400, f"invalid kind: {body.kind}")
+        entry = LedgerEntry(
+            ts=body.ts, kind=kind, amount=body.amount,
+            ticker=body.ticker, shares=body.shares,
+            price=body.price, note=body.note,
+        )
+        ledger_store.append(account, entry)
+        return LedgerEntryOut(**entry.to_dict())
+
+    @app.get("/ledger/{account}/snapshot", response_model=AccountSnapshotOut,
+             dependencies=[Depends(require_api_key)])
+    def ledger_snapshot_endpoint(account: str, marks: str | None = None):
+        # marks is a comma-separated TICKER:PRICE list
+        mark_map: dict[str, float] = {}
+        if marks:
+            for part in marks.split(","):
+                part = part.strip()
+                if not part or ":" not in part:
+                    continue
+                t, p = part.split(":", 1)
+                try:
+                    mark_map[t.strip().upper()] = float(p)
+                except ValueError:
+                    raise HTTPException(400, f"invalid mark: {part}")
+        state = ledger_store.state(account)
+        snap = ledger_snapshot(state, mark_map or None)
+        return AccountSnapshotOut(account=account, **snap.to_dict())
+
+    @app.put("/ledger/{account}/config", response_model=MarginConfigOut,
+             dependencies=[Depends(require_api_key)])
+    def ledger_set_config(account: str, body: MarginConfigIn):
+        try:
+            cfg = MarginConfig(
+                initial_margin=body.initial_margin,
+                maintenance_margin=body.maintenance_margin,
+                annual_interest_rate=body.annual_interest_rate,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        ledger_store.set_config(account, cfg)
+        return MarginConfigOut(
+            initial_margin=cfg.initial_margin,
+            maintenance_margin=cfg.maintenance_margin,
+            annual_interest_rate=cfg.annual_interest_rate,
+        )
 
     @app.get("/rotation", response_model=RotationOut,
              dependencies=[Depends(require_api_key)])

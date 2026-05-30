@@ -740,3 +740,47 @@ class ExecReportOut(BaseModel):
 class ExecSimulateIn(BaseModel):
     order: ExecOrderIn
     bars: List[ExecBarIn]
+
+
+class LedgerEntryIn(BaseModel):
+    ts: str
+    kind: str
+    amount: float
+    ticker: Optional[str] = None
+    shares: int = 0
+    price: float = 0.0
+    note: str = ""
+
+
+class LedgerEntryOut(LedgerEntryIn):
+    pass
+
+
+class LedgerListOut(BaseModel):
+    account: str
+    entries: List[LedgerEntryOut]
+
+
+class MarginConfigIn(BaseModel):
+    initial_margin: float = 0.5
+    maintenance_margin: float = 0.25
+    annual_interest_rate: float = 0.0825
+
+
+class MarginConfigOut(MarginConfigIn):
+    pass
+
+
+class AccountSnapshotOut(BaseModel):
+    account: str
+    cash: float
+    long_market_value: float
+    short_market_value: float
+    equity: float
+    margin_used: float
+    initial_requirement: float
+    maintenance_requirement: float
+    buying_power: float
+    excess_liquidity: float
+    margin_call: bool
+    margin_call_amount: float
