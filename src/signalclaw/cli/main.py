@@ -20,7 +20,7 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           JournalEntry, JournalStore, conviction_stats,
                           FxStore, TradeCurrencyMap, convert_trades, USD,
                           BracketPlan, BracketStore, compute_bracket_stats)
-from ..risk import RiskConfig, size_pick
+from ..risk import RiskConfig, size_pick, CostModel, OrderRequest, simulate_order
 from ..correlation import correlation_matrix, diversification_warnings
 from ..rotation import sector_rotation
 from ..news_events import NewsEvent, NewsEventStore, event_study, events_to_csv
@@ -1257,6 +1257,42 @@ def news_events_export(out):
     from pathlib import Path as _P
     _P(out).write_text(events_to_csv(store.list()))
     console.print(f"wrote {out}")
+
+
+@cli.command("pretrade")
+@click.argument("ticker")
+@click.option("--side", type=click.Choice(["long", "short"]), default="long")
+@click.option("--price", required=True, type=float)
+@click.option("--stop", required=True, type=float)
+@click.option("--target", required=True, type=float)
+@click.option("--equity", required=True, type=float)
+@click.option("--risk-pct", default=0.01, type=float)
+@click.option("--max-pos-pct", default=0.20, type=float)
+@click.option("--max-portfolio-pct", default=1.0, type=float)
+@click.option("--commission", default=0.0, type=float, help="flat commission per trade")
+@click.option("--commission-per-share", default=0.0, type=float)
+@click.option("--slippage-bps", default=0.0, type=float)
+@click.option("--existing-shares", default=0, type=int)
+@click.option("--existing-avg", default=0.0, type=float)
+def pretrade_cmd(ticker, side, price, stop, target, equity, risk_pct, max_pos_pct,
+                  max_portfolio_pct, commission, commission_per_share, slippage_bps,
+                  existing_shares, existing_avg):
+    """Simulate an order: shares, fees, planned risk, binding cap."""
+    try:
+        req = OrderRequest(
+            ticker=ticker, side=side, price=price, stop=stop, target=target,
+            equity=equity, risk_per_trade=risk_pct, max_position_pct=max_pos_pct,
+            max_portfolio_pct=max_portfolio_pct,
+            cost=CostModel(commission_per_trade=commission,
+                            commission_per_share=commission_per_share,
+                            slippage_bps=slippage_bps),
+            existing_shares=existing_shares, existing_avg_price=existing_avg,
+        )
+    except ValueError as e:
+        console.print(f"[red]invalid:[/red] {e}")
+        return
+    sim = simulate_order(req)
+    console.print(json.dumps(sim.to_dict(), indent=2))
 
 
 def main():

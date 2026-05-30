@@ -38,7 +38,8 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        BracketPlanIn, BracketFillIn, BracketCloseIn,
                        BracketPlanOut, BracketListOut, BracketStatsOut,
                        SectorScoreOut, RotationOut,
-                       NewsEventIn, NewsEventOut, NewsEventListOut, EventStudyOut)
+                       NewsEventIn, NewsEventOut, NewsEventListOut, EventStudyOut,
+                       CostModelIn, PretradeIn, PretradeOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -55,6 +56,7 @@ from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
                          DeadLetterQueue, RetryPolicy, send_with_retry,
                          replay_dlq, Notifier)
 from ..risk import RiskConfig, size_pick
+from ..risk.pretrade import CostModel, OrderRequest, simulate_order
 from ..correlation import correlation_matrix, diversification_warnings
 from ..rotation import sector_rotation
 from ..news_events import NewsEvent, NewsEventStore, event_study
@@ -354,6 +356,33 @@ def create_app() -> FastAPI:
         except ValueError as e:
             raise HTTPException(400, str(e))
         return EventStudyOut(**rep.to_dict())
+
+    @app.post("/risk/pretrade", response_model=PretradeOut,
+              dependencies=[Depends(require_api_key)])
+    def pretrade_endpoint(body: PretradeIn):
+        cm = body.cost or CostModelIn()
+        try:
+            req = OrderRequest(
+                ticker=body.ticker, side=body.side,
+                price=body.price, stop=body.stop, target=body.target,
+                equity=body.equity,
+                risk_per_trade=body.risk_per_trade,
+                max_position_pct=body.max_position_pct,
+                max_portfolio_pct=body.max_portfolio_pct,
+                min_shares=body.min_shares,
+                existing_shares=body.existing_shares,
+                existing_avg_price=body.existing_avg_price,
+                cost=CostModel(
+                    commission_per_trade=cm.commission_per_trade,
+                    commission_per_share=cm.commission_per_share,
+                    slippage_bps=cm.slippage_bps,
+                    min_commission=cm.min_commission,
+                ),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        sim = simulate_order(req)
+        return PretradeOut(**sim.to_dict())
 
     @app.get("/rotation", response_model=RotationOut,
              dependencies=[Depends(require_api_key)])

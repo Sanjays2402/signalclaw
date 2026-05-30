@@ -7,6 +7,12 @@ from .sizing import (
     atr_stops,
     size_pick,
 )
+from .pretrade import (
+    CostModel,
+    OrderRequest,
+    OrderSimulation,
+    simulate_order,
+)
 
 __all__ = [
     "RiskConfig",
@@ -16,4 +22,8 @@ __all__ = [
     "position_size",
     "atr_stops",
     "size_pick",
+    "CostModel",
+    "OrderRequest",
+    "OrderSimulation",
+    "simulate_order",
 ]

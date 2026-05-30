@@ -647,3 +647,45 @@ class EventStudyOut(BaseModel):
     overall: dict
     by_tag: dict
     by_ticker: dict
+
+
+class CostModelIn(BaseModel):
+    commission_per_trade: float = 0.0
+    commission_per_share: float = 0.0
+    slippage_bps: float = 0.0
+    min_commission: float = 0.0
+
+
+class PretradeIn(BaseModel):
+    ticker: str
+    side: str = "long"
+    price: float
+    stop: float
+    target: float
+    equity: float
+    risk_per_trade: float = 0.01
+    max_position_pct: float = 0.20
+    max_portfolio_pct: float = 1.0
+    min_shares: int = 1
+    existing_shares: int = 0
+    existing_avg_price: float = 0.0
+    cost: Optional[CostModelIn] = None
+
+
+class PretradeOut(BaseModel):
+    ticker: str
+    side: str
+    shares: int
+    notional: float
+    fees: float
+    total_cost: float
+    risk_per_share: float
+    reward_per_share: float
+    planned_r_multiple: float
+    planned_risk_dollars: float
+    planned_reward_dollars: float
+    weight: float
+    post_trade_ticker_pct: float
+    cap_reason: str
+    accepted: bool
+    warnings: List[str]
