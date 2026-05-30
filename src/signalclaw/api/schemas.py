@@ -228,3 +228,25 @@ class StopCheckOut(BaseModel):
     checked: int
     events: List[StopEventOut]
 
+
+class TickerContributionOut(BaseModel):
+    ticker: str
+    weight: float
+    period_return: float
+    contribution: float
+
+
+class AttributionOut(BaseModel):
+    benchmark: str
+    window: int
+    portfolio_return: float
+    benchmark_return: float
+    excess_return: float
+    alpha_daily: float
+    alpha_annualized: float
+    beta: float
+    tracking_error_annualized: float
+    information_ratio: float
+    r_squared: float
+    contributions: List[TickerContributionOut]
+

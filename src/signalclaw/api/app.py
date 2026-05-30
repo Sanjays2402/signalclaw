@@ -17,12 +17,14 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        CorrelationMatrixOut, DiversificationOut,
                        ReportSummaryOut, ReportHistoryOut, ReportDiffOut,
                        StopRuleIn, StopRuleOut, StopRuleListOut,
-                       StopEventOut, StopCheckOut)
+                       StopEventOut, StopCheckOut,
+                       AttributionOut, TickerContributionOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
-                          StopRule, StopKind, StopStore, evaluate_rules)
+                          StopRule, StopKind, StopStore, evaluate_rules,
+                          attribution)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -245,6 +247,35 @@ def create_app() -> FastAPI:
                                        cluster_threshold=threshold)
         d = rep.to_dict()
         return DiversificationOut(**d)
+
+    @app.get("/portfolio/attribution", response_model=AttributionOut, dependencies=[Depends(require_api_key)])
+    def portfolio_attribution(window: int = 60, benchmark: str = "SPY"):
+        positions = portfolio_store.positions()
+        if not positions:
+            raise HTTPException(404, "no positions")
+        last_prices: dict = {}
+        closes: dict = {}
+        for t in positions:
+            df = load_ohlcv(t)
+            if not df.empty and "close" in df.columns:
+                last_prices[t] = float(df["close"].iloc[-1])
+                closes[t] = df["close"]
+        snap = compute_snapshot(positions, last_prices, trades=portfolio_store.trades())
+        if not snap.weights:
+            raise HTTPException(422, "weights unavailable (need last prices)")
+        bdf = load_ohlcv(benchmark)
+        if bdf.empty:
+            bdf = fetch_ohlcv(benchmark, period="2y")
+            if not bdf.empty:
+                save_ohlcv(benchmark, bdf)
+        if bdf.empty or "close" not in bdf.columns:
+            raise HTTPException(404, f"no benchmark data for {benchmark}")
+        rep = attribution(snap.weights, closes, bdf["close"], window=window)
+        if rep is None:
+            raise HTTPException(422, "insufficient overlapping history")
+        d = rep.to_dict()
+        d["benchmark"] = benchmark.upper()
+        return AttributionOut(**d)
 
     @app.get("/regime", dependencies=[Depends(require_api_key)])
     def regime_endpoint(ticker: str = "SPY"):
