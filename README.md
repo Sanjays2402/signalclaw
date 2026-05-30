@@ -508,6 +508,32 @@ Response body returns `{"ok": true, "removed": {...}, "files_removed":
 [...], "errors": []}` so the action is itself auditable. The deletion
 is also written to the audit log via the standard middleware.
 
+### Container image
+
+The API ships as a hardened multi-stage image defined in
+`infra/docker/Dockerfile.api`. The builder stage compiles dependencies and
+builds a non-editable wheel into an isolated virtualenv; the runtime stage
+copies only that venv onto a slim `python:3.11-slim` base, drops to a
+dedicated non-root system account (`signalclaw`, uid/gid 10001), and uses
+`tini` as PID 1 so `SIGTERM` from Kubernetes or `docker stop` reaches
+uvicorn cleanly. A `HEALTHCHECK` probes `/health` every 30 seconds so
+`docker ps` and compose-level restarts see real liveness signal even when
+run outside Kubernetes.
+
+Build and run locally:
+
+```
+docker build -f infra/docker/Dockerfile.api -t signalclaw-api:local .
+docker run --rm -p 7431:7431 --env-file .env signalclaw-api:local
+```
+
+The data directory inside the container is `/var/lib/signalclaw`, owned by
+the `signalclaw` user. Mount a persistent volume there in production so
+the audit log, cached OHLCV, and archived reports survive pod restarts.
+The shape of the image (multi-stage, non-root, wheel install, healthcheck,
+tini entrypoint) is enforced by `tests/test_docker_api_image.py` so a
+regression in any of those properties breaks CI before it ships.
+
 ---
 
 Not investment advice. Paper-trading and research use only. See `FINANCIAL_DISCLAIMER.md`.

@@ -1,9 +1,91 @@
-FROM python:3.11-slim
-WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential libgomp1 && rm -rf /var/lib/apt/lists/*
-COPY pyproject.toml ./
+# Multi-stage production Dockerfile for the SignalClaw API.
+#
+# Stage 1 (builder): installs build toolchain, resolves dependencies into
+# a self-contained virtualenv, and produces a wheel for the project.
+# Stage 2 (runtime): copies only the venv and the wheel onto a slim base,
+# runs as a non-root user, and exposes a HEALTHCHECK against /health.
+#
+# Build:
+#   docker build -f infra/docker/Dockerfile.api -t signalclaw-api:local .
+# Run:
+#   docker run --rm -p 7431:7431 --env-file .env signalclaw-api:local
+
+ARG PYTHON_VERSION=3.11
+ARG APP_PORT=7431
+
+############################
+# Stage 1: builder
+############################
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Build-time deps. libgomp1 is needed by lightgbm/xgboost at build and runtime.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        g++ \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Provision an isolated venv so the runtime stage can copy a self-contained tree.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# Copy only files needed to resolve and build the wheel first so layer cache
+# survives source-only edits.
+COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir -e .
-ENV PORT=7431 LOG_LEVEL=INFO
-EXPOSE 7431
-CMD ["uvicorn", "signalclaw.api:app", "--host", "0.0.0.0", "--port", "7431"]
+
+# Install runtime deps and the project itself as a wheel (not editable).
+RUN pip install --upgrade pip wheel build \
+    && pip install .
+
+############################
+# Stage 2: runtime
+############################
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG APP_PORT=7431
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:${PATH}" \
+    PORT=${APP_PORT} \
+    LOG_LEVEL=INFO \
+    DATA_DIR=/var/lib/signalclaw
+
+# Runtime-only system deps. libgomp1 stays; curl is used by HEALTHCHECK.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        curl \
+        tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 signalclaw \
+    && useradd --system --uid 10001 --gid signalclaw --home /home/signalclaw --create-home signalclaw \
+    && mkdir -p ${DATA_DIR} \
+    && chown -R signalclaw:signalclaw ${DATA_DIR}
+
+# Copy the pre-built virtualenv from the builder stage.
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /app
+USER signalclaw:signalclaw
+
+EXPOSE ${APP_PORT}
+
+# Container-level liveness probe. Kubernetes/Helm still owns full readiness,
+# but this gives `docker run` and docker-compose a baseline signal.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl --fail --silent --show-error "http://127.0.0.1:${PORT}/health" || exit 1
+
+# tini provides PID 1 signal handling so SIGTERM from k8s/docker reaches uvicorn.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sh", "-c", "uvicorn signalclaw.api:app --host 0.0.0.0 --port ${PORT}"]
