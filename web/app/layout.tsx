@@ -1,6 +1,8 @@
 import "./globals.css";
 import type { ReactNode } from "react";
 import NavLink from "@/components/NavLink";
+import CommandPalette from "@/components/CommandPalette";
+import PaletteHint from "@/components/PaletteHint";
 
 export const metadata = {
   title: "SignalClaw",
@@ -15,6 +17,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-3">
             <span className="font-bold tracking-tight">SignalClaw</span>
             <span className="muted text-xs">v0.2</span>
+            <PaletteHint />
           </div>
           <nav className="flex flex-wrap gap-1 text-sm">
             <NavLink href="/">Today</NavLink>
@@ -31,6 +34,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </nav>
         </header>
         <main className="p-4 md:p-6">{children}</main>
+        <CommandPalette />
         <footer className="border-t border-[var(--border)] px-4 py-3 text-xs muted">
           NOT FINANCIAL ADVICE. SignalClaw is a personal research tool. See FINANCIAL_DISCLAIMER.md.
         </footer>
