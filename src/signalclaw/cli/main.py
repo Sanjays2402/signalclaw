@@ -13,7 +13,8 @@ from ..backtest import WalkForwardBacktest
 from ..notifier import TelegramNotifier, DiscordNotifier
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatch_hits
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
-                          StopRule, StopKind, StopStore, evaluate_rules)
+                          StopRule, StopKind, StopStore, evaluate_rules,
+                          DrawdownConfig, DrawdownGuardStore, evaluate_guard)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -420,6 +421,51 @@ def portfolio_tax_cmd(method, wash_window):
                           f"${w.loss:.2f} <-> buy {w.triggering_buy_date} "
                           f"({w.days_between}d)")
     console.print("[dim]NOT TAX ADVICE. Verify with a CPA.[/dim]")
+
+
+@portfolio_grp.command("drawdown")
+@click.option("--trigger", default=0.10, type=float,
+              help="fraction of peak below which the guard trips")
+@click.option("--rearm", default=0.05, type=float,
+              help="drawdown must fall under this fraction before re-arming")
+@click.option("--min-history-days", default=5, type=int)
+@click.option("--cash", default=0.0, type=float, help="starting cash balance")
+@click.option("--persist/--no-persist", default=False)
+def portfolio_drawdown_cmd(trigger, rearm, min_history_days, cash, persist):
+    """Compute portfolio equity drawdown and report guard state."""
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    gstore = DrawdownGuardStore(s.data_dir / "drawdown_guard.json")
+    trades = pstore.trades()
+    if not trades:
+        console.print("no trades")
+        return
+    hist = {}
+    for tk in set(t.ticker for t in trades):
+        df = load_ohlcv(tk)
+        if not df.empty:
+            hist[tk] = df
+    try:
+        cfg = DrawdownConfig(trigger=trigger, rearm=rearm,
+                              min_history_days=min_history_days)
+    except ValueError as e:
+        console.print(f"[red]invalid config:[/red] {e}")
+        return
+    report = evaluate_guard(
+        trades, hist, cfg,
+        previously_tripped=gstore.previously_tripped(),
+        cash=cash,
+    )
+    if persist:
+        gstore.record(report.state)
+    st = report.state
+    color = "red" if st.tripped else "green"
+    console.print(f"[{color}]tripped={st.tripped}[/{color}] "
+                   f"equity ${st.equity:.2f} peak ${st.peak:.2f} on {st.peak_date} "
+                   f"drawdown {st.drawdown:.2%}")
+    console.print(f"reason: {st.reason}")
+    if persist:
+        console.print("[dim]state recorded[/dim]")
 
 
 @cli.command("size")

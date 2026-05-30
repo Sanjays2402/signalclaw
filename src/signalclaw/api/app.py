@@ -25,14 +25,18 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        TaxReportOut,
                        OptFoldOut, OptResultOut,
                        WebhookIn, WebhookOut, WebhookListOut,
-                       PickEventOut, WebhookDeliveryOut)
+                       PickEventOut, WebhookDeliveryOut,
+                       DrawdownReportOut, DrawdownConfigIn,
+                       DrawdownStateOut, DrawdownConfigOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
-                          attribution, sector_exposure, tax_summary, LotMethod)
+                          attribution, sector_exposure, tax_summary, LotMethod,
+                          DrawdownConfig, DrawdownGuardStore, evaluate_guard,
+                          filter_picks as drawdown_filter_picks)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -65,6 +69,7 @@ def create_app() -> FastAPI:
     earnings_store = EarningsStore(settings.data_dir / "earnings.json")
     archive = ReportArchive(settings.data_dir / "reports")
     webhooks_store = WebhookStore(settings.data_dir / "webhooks.json")
+    drawdown_store = DrawdownGuardStore(settings.data_dir / "drawdown_guard.json")
 
     @app.get("/health")
     def health():
@@ -514,6 +519,73 @@ def create_app() -> FastAPI:
             events=[PickEventOut(**e.to_dict()) for e in events],
             deliveries=deliveries,
         )
+
+    def _drawdown_price_history():
+        hist = {}
+        for tk in set(t.ticker for t in portfolio_store.trades()):
+            df = load_ohlcv(tk)
+            if not df.empty:
+                hist[tk] = df
+        return hist
+
+    @app.get("/portfolio/drawdown", response_model=DrawdownReportOut,
+             dependencies=[Depends(require_api_key)])
+    def portfolio_drawdown(trigger: float = 0.10, rearm: float = 0.05,
+                            min_history_days: int = 5, cash: float = 0.0,
+                            persist: bool = False):
+        try:
+            cfg = DrawdownConfig(trigger=trigger, rearm=rearm,
+                                  min_history_days=min_history_days)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        trades = portfolio_store.trades()
+        if not trades:
+            raise HTTPException(404, "no trades")
+        report = evaluate_guard(
+            trades, _drawdown_price_history(), cfg,
+            previously_tripped=drawdown_store.previously_tripped(),
+            cash=cash,
+        )
+        if persist:
+            drawdown_store.record(report.state)
+        return DrawdownReportOut(**report.to_dict())
+
+    @app.get("/portfolio/drawdown/history", dependencies=[Depends(require_api_key)])
+    def portfolio_drawdown_history():
+        return {"history": drawdown_store.history()}
+
+    @app.post("/portfolio/drawdown/clear", dependencies=[Depends(require_api_key)])
+    def portfolio_drawdown_clear():
+        drawdown_store.clear()
+        return {"ok": True}
+
+    @app.get("/picks/guarded", response_model=DailyReportOut,
+             dependencies=[Depends(require_api_key)])
+    def picks_guarded(refresh: bool = False, trigger: float = 0.10,
+                       rearm: float = 0.05, min_history_days: int = 5,
+                       cash: float = 0.0):
+        rep = run_daily(store.list(), refresh=refresh)
+        trades = portfolio_store.trades()
+        if trades:
+            try:
+                cfg = DrawdownConfig(trigger=trigger, rearm=rearm,
+                                      min_history_days=min_history_days)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            report = evaluate_guard(
+                trades, _drawdown_price_history(), cfg,
+                previously_tripped=drawdown_store.previously_tripped(),
+                cash=cash,
+            )
+            pick_dicts = drawdown_filter_picks(
+                [p.to_dict() for p in rep.picks], report.state,
+            )
+            return DailyReportOut(
+                as_of=rep.as_of,
+                picks=[Pick(**p) for p in pick_dicts],
+            )
+        return DailyReportOut(as_of=rep.as_of,
+                                picks=[Pick(**p.to_dict()) for p in rep.picks])
 
     return app
 

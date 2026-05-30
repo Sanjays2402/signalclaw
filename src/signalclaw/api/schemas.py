@@ -389,3 +389,32 @@ class EarningsOut(BaseModel):
 class EarningsListOut(BaseModel):
     rows: List[EarningsOut]
 
+
+
+class DrawdownConfigOut(BaseModel):
+    trigger: float
+    rearm: float
+    min_history_days: int
+
+
+class DrawdownStateOut(BaseModel):
+    as_of: str
+    equity: float
+    peak: float
+    peak_date: str
+    drawdown: float
+    tripped: bool
+    reason: str
+
+
+class DrawdownReportOut(BaseModel):
+    state: DrawdownStateOut
+    config: DrawdownConfigOut
+    equity_curve: List[dict]
+
+
+class DrawdownConfigIn(BaseModel):
+    trigger: Optional[float] = None
+    rearm: Optional[float] = None
+    min_history_days: Optional[int] = None
+    cash: Optional[float] = None

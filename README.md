@@ -71,6 +71,7 @@ Seeded from `MEMORY.md`: BTC-USD, SOXX, MSFT, FXAIX, TSLA, SPY.
 - Position sizing: ATR-based stop and target, fractional Kelly with hard cap, risk-per-trade and max-position-percent constraints, binding-constraint reporting
 - Correlation and diversification: pairwise correlation matrix on aligned log returns, single-linkage cluster grouping, warnings for high average correlation, single-name concentration, and cluster concentration
 - Report history: daily reports auto-archived to data/reports, CLI + REST to list summaries, fetch any past report, and diff against a prior date (new/dropped/upgraded/downgraded picks and top score movers)
+- Drawdown guard: portfolio circuit breaker that tracks peak equity, trips when current drawdown exceeds a configured trigger, holds tripped state via re-arm hysteresis, and demotes new watch picks to hold while tripped (CLI + REST)
 
 
 ## Enterprise scaffolding

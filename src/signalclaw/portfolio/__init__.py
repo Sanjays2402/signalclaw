@@ -24,6 +24,16 @@ from .tax import (
     detect_wash_sales,
     tax_summary,
 )
+from .drawdown import (
+    DrawdownConfig,
+    DrawdownState,
+    DrawdownGuardReport,
+    DrawdownGuardStore,
+    compute_equity_curve,
+    evaluate_drawdown,
+    evaluate_guard,
+    filter_picks,
+)
 
 __all__ = [
     "Position",
@@ -56,4 +66,12 @@ __all__ = [
     "compute_realized",
     "detect_wash_sales",
     "tax_summary",
+    "DrawdownConfig",
+    "DrawdownState",
+    "DrawdownGuardReport",
+    "DrawdownGuardStore",
+    "compute_equity_curve",
+    "evaluate_drawdown",
+    "evaluate_guard",
+    "filter_picks",
 ]
