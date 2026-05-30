@@ -209,6 +209,96 @@ def alerts_check(notify):
         console.print(f"dispatched={sent}")
 
 
+@cli.group("portfolio")
+def portfolio_grp():
+    """Manage trades and view positions / P&L."""
+
+
+@portfolio_grp.command("add")
+@click.argument("ticker")
+@click.argument("side", type=click.Choice(["buy", "sell"]))
+@click.argument("quantity", type=float)
+@click.argument("price", type=float)
+@click.option("--date", "trade_date", default=None, help="YYYY-MM-DD (default today)")
+@click.option("--fees", default=0.0, type=float)
+@click.option("--note", default="")
+def portfolio_add(ticker, side, quantity, price, trade_date, fees, note):
+    from datetime import date as _date
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    tr = Trade(ticker=ticker.upper(), side=TradeSide(side), quantity=quantity,
+               price=price, date=trade_date or _date.today().isoformat(),
+               fees=fees, note=note)
+    pstore.add_trade(tr)
+    console.print(f"added {tr.id} {tr.ticker} {tr.side.value} {tr.quantity} @ {tr.price}"
+                  + (f" realized=${tr.realized_pnl:.2f}" if tr.side == TradeSide.SELL else ""))
+
+
+@portfolio_grp.command("remove")
+@click.argument("trade_id")
+def portfolio_remove(trade_id):
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    console.print("removed" if pstore.remove_trade(trade_id) else "not found")
+
+
+@portfolio_grp.command("trades")
+def portfolio_trades():
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    rows = pstore.trades()
+    if not rows:
+        console.print("(no trades)")
+        return
+    table = Table(title="Trades")
+    for c in ["id", "date", "ticker", "side", "qty", "price", "fees", "realized", "note"]:
+        table.add_column(c)
+    for t in sorted(rows, key=lambda x: x.date):
+        table.add_row(t.id, t.date, t.ticker, t.side.value, f"{t.quantity:g}",
+                      f"{t.price:.2f}", f"{t.fees:.2f}",
+                      f"{t.realized_pnl:.2f}", t.note)
+    console.print(table)
+
+
+@portfolio_grp.command("import")
+@click.argument("csv_path", type=click.Path(exists=True))
+def portfolio_import(csv_path):
+    from pathlib import Path as _P
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    n = pstore.import_csv(_P(csv_path).read_text())
+    console.print(f"imported {n} trades")
+
+
+@portfolio_grp.command("show")
+def portfolio_show():
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    positions = pstore.positions()
+    last_prices = {}
+    for t in positions:
+        df = _po_load_ohlcv(t)
+        if not df.empty and "close" in df.columns:
+            last_prices[t] = float(df["close"].iloc[-1])
+    snap = compute_snapshot(positions, last_prices, trades=pstore.trades())
+    table = Table(title="Portfolio (NOT FINANCIAL ADVICE)")
+    for c in ["ticker", "qty", "avg_cost", "last", "cost", "mv", "unrealized", "%", "realized", "weight"]:
+        table.add_column(c)
+    for p in snap.positions:
+        table.add_row(
+            p.ticker, f"{p.quantity:g}", f"{p.avg_cost:.2f}",
+            f"{p.last_price:.2f}" if p.last_price else "-",
+            f"{p.cost:.2f}", f"{p.market_value:.2f}",
+            f"{p.unrealized_pnl:.2f}", f"{p.unrealized_pct:.2%}",
+            f"{p.realized_pnl:.2f}",
+            f"{snap.weights.get(p.ticker, 0.0):.2%}",
+        )
+    console.print(table)
+    console.print(f"total cost ${snap.total_cost:.2f} | market value ${snap.total_market_value:.2f}"
+                  f" | unrealized ${snap.total_unrealized:.2f}"
+                  f" | realized ${snap.total_realized:.2f}")
+
+
 def main():
     cli()
 

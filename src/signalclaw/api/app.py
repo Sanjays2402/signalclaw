@@ -10,10 +10,13 @@ from ..utils import init_tracing
 from ..data import WatchlistStore, load_ohlcv, fetch_ohlcv, save_ohlcv
 from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest
-from .schemas import DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut, AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut
+from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut,
+                       AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut,
+                       TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
+from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
 
 
 def create_app() -> FastAPI:
@@ -28,6 +31,7 @@ def create_app() -> FastAPI:
     wl_path = settings.data_dir / "watchlist.json"
     store = WatchlistStore(wl_path)
     alert_store = AlertStore(settings.data_dir / "alerts.json")
+    portfolio_store = PortfolioStore(settings.data_dir / "portfolio.json")
 
     @app.get("/health")
     def health():
@@ -119,6 +123,43 @@ def create_app() -> FastAPI:
             checked=len(rows),
             hits=[AlertHitOut(**h.to_dict()) for h in hits],
         )
+
+    @app.get("/portfolio/trades", response_model=TradeListOut, dependencies=[Depends(require_api_key)])
+    def portfolio_trades_list():
+        return TradeListOut(trades=[TradeOut(**t.to_dict()) for t in portfolio_store.trades()])
+
+    @app.post("/portfolio/trades", response_model=TradeOut, dependencies=[Depends(require_api_key)])
+    def portfolio_trade_add(body: TradeIn):
+        try:
+            side = TradeSide(body.side.lower())
+        except ValueError:
+            raise HTTPException(400, f"unknown side {body.side}")
+        tr = Trade(ticker=body.ticker.upper(), side=side, quantity=body.quantity,
+                   price=body.price, date=body.date, fees=body.fees, note=body.note)
+        portfolio_store.add_trade(tr)
+        return TradeOut(**tr.to_dict())
+
+    @app.delete("/portfolio/trades/{trade_id}", dependencies=[Depends(require_api_key)])
+    def portfolio_trade_remove(trade_id: str):
+        ok = portfolio_store.remove_trade(trade_id)
+        if not ok:
+            raise HTTPException(404, "trade not found")
+        return {"removed": trade_id}
+
+    @app.get("/portfolio/snapshot", response_model=PortfolioSnapshotOut, dependencies=[Depends(require_api_key)])
+    def portfolio_snapshot():
+        positions = portfolio_store.positions()
+        last_prices: dict = {}
+        for t in positions:
+            df = load_ohlcv(t)
+            if df.empty:
+                df = fetch_ohlcv(t, period="3mo")
+                if not df.empty:
+                    save_ohlcv(t, df)
+            if not df.empty and "close" in df.columns:
+                last_prices[t] = float(df["close"].iloc[-1])
+        snap = compute_snapshot(positions, last_prices, trades=portfolio_store.trades())
+        return PortfolioSnapshotOut(**snap.to_dict())
 
     return app
 

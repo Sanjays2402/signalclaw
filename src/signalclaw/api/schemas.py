@@ -75,3 +75,50 @@ class AlertHitOut(BaseModel):
 class AlertCheckOut(BaseModel):
     checked: int
     hits: List[AlertHitOut]
+
+
+class TradeIn(BaseModel):
+    ticker: str
+    side: str
+    quantity: float
+    price: float
+    date: str
+    fees: float = 0.0
+    note: str = ""
+
+
+class TradeOut(BaseModel):
+    id: str
+    ticker: str
+    side: str
+    quantity: float
+    price: float
+    date: str
+    fees: float = 0.0
+    note: str = ""
+    realized_pnl: float = 0.0
+
+
+class TradeListOut(BaseModel):
+    trades: List[TradeOut]
+
+
+class PositionPnLOut(BaseModel):
+    ticker: str
+    quantity: float
+    avg_cost: float
+    last_price: Optional[float] = None
+    market_value: float
+    cost: float
+    unrealized_pnl: float
+    unrealized_pct: float
+    realized_pnl: float
+
+
+class PortfolioSnapshotOut(BaseModel):
+    positions: List[PositionPnLOut]
+    total_cost: float
+    total_market_value: float
+    total_unrealized: float
+    total_realized: float
+    weights: dict
