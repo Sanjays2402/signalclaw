@@ -229,6 +229,50 @@ export type Diversification = {
   warnings: string[];
 };
 
+export type SectorScore = {
+  sector: string;
+  n_tickers: number;
+  ret_1m: number;
+  ret_3m: number;
+  ret_6m: number;
+  rs_slope: number;
+  breadth: number;
+  composite: number;
+  call: string;
+  members: string[];
+};
+export type RotationReport = {
+  benchmark: string;
+  asof: string;
+  overweight: string[];
+  underweight: string[];
+  scores: SectorScore[];
+  skipped_unknown_sector: string[];
+  skipped_short_history: string[];
+};
+
+export type SectorExposure = {
+  sector: string;
+  market_value: number;
+  weight: number;
+  tickers: string[];
+};
+export type Concentration = {
+  total_market_value: number;
+  sectors: SectorExposure[];
+  hhi: number;
+  effective_n_sectors: number;
+  max_sector: string | null;
+  max_sector_weight: number;
+  max_position: string | null;
+  max_position_weight: number;
+  sector_cap: number;
+  position_cap: number;
+  breaches: string[];
+  warnings: string[];
+  unknown_tickers: string[];
+};
+
 // Back-compat aliases
 export type Report = DailyReport;
 export type Backtest = {
