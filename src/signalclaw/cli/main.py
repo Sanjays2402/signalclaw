@@ -124,6 +124,45 @@ def backtest(ticker, from_date, period):
     console.print(table)
 
 
+@cli.command("optimize")
+@click.argument("ticker")
+@click.option("--train", default=252, type=int)
+@click.option("--test", default=63, type=int)
+@click.option("--period", default="5y")
+def optimize_cmd(ticker, train, test, period):
+    """Walk-forward parameter sweep for SMA crossover + RSI filter."""
+    from ..backtest import walk_forward_optimize
+    t = ticker.upper()
+    df = load_ohlcv(t)
+    if df.empty:
+        df = fetch_ohlcv(t, period=period)
+        if not df.empty:
+            save_ohlcv(t, df)
+    if df.empty or "close" not in df.columns:
+        console.print(f"no data for {t}")
+        return
+    try:
+        res = walk_forward_optimize(df["close"], train_window=train,
+                                    test_window=test)
+    except ValueError as e:
+        console.print(f"error: {e}")
+        return
+    table = Table(title=f"Walk-forward optimization {t}")
+    for c in ["fold", "train_end", "test_end", "params", "train_sh",
+              "test_sh", "test_ret", "test_mdd"]:
+        table.add_column(c)
+    for i, f in enumerate(res.folds, 1):
+        table.add_row(str(i), f.train_end, f.test_end, str(f.chosen),
+                      f"{f.train_sharpe:.2f}", f"{f.test_sharpe:.2f}",
+                      f"{f.test_return:.2%}", f"{f.test_max_drawdown:.2%}")
+    console.print(table)
+    console.print(f"folds {res.n_folds} | grid {res.grid_size} | "
+                  f"median OOS Sharpe {res.median_test_sharpe:.2f} | "
+                  f"mean OOS return {res.mean_test_return:.2%} | "
+                  f"most common params {res.most_common_params} "
+                  f"({res.most_common_share:.0%})")
+
+
 @cli.command("serve")
 @click.option("--host", default="0.0.0.0")
 @click.option("--port", default=7431, type=int)

@@ -306,6 +306,31 @@ class TaxReportOut(BaseModel):
     wash_sales: List[WashSaleFlagOut]
 
 
+class OptFoldOut(BaseModel):
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
+    chosen: List[float]
+    train_sharpe: float
+    test_sharpe: float
+    test_return: float
+    test_hit_rate: float
+    test_max_drawdown: float
+
+
+class OptResultOut(BaseModel):
+    ticker: str
+    folds: List[OptFoldOut]
+    most_common_params: Optional[List[float]] = None
+    most_common_share: float
+    median_test_sharpe: float
+    mean_test_sharpe: float
+    mean_test_return: float
+    n_folds: int
+    grid_size: int
+
+
 class EarningsIn(BaseModel):
     next_report: str
     confirmed: bool = False

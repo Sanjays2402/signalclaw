@@ -10,7 +10,7 @@ from ..logging_ import configure_logging, get_logger
 from ..utils import init_tracing
 from ..data import WatchlistStore, load_ohlcv, fetch_ohlcv, save_ohlcv
 from ..engine import run_daily, render_markdown
-from ..backtest import WalkForwardBacktest
+from ..backtest import WalkForwardBacktest, walk_forward_optimize
 from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut,
                        AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut,
                        TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut,
@@ -22,7 +22,8 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        AttributionOut, TickerContributionOut,
                        EarningsIn, EarningsOut, EarningsListOut,
                        ConcentrationOut, SectorExposureOut,
-                       TaxReportOut)
+                       TaxReportOut,
+                       OptFoldOut, OptResultOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -323,6 +324,27 @@ def create_app() -> FastAPI:
         trades = portfolio_store.trades()
         rep = tax_summary(trades, method=m, wash_window=wash_window)
         return TaxReportOut(**rep.to_dict())
+
+    @app.get("/optimize/{ticker}", response_model=OptResultOut, dependencies=[Depends(require_api_key)])
+    def optimize(ticker: str, train: int = 252, test: int = 63,
+                 refresh: bool = False):
+        t = ticker.upper()
+        df = load_ohlcv(t)
+        if df.empty or refresh:
+            df = fetch_ohlcv(t, period="5y")
+            if not df.empty:
+                save_ohlcv(t, df)
+        if df.empty or "close" not in df.columns:
+            raise HTTPException(404, "no data")
+        try:
+            res = walk_forward_optimize(df["close"], train_window=train,
+                                        test_window=test)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        d = res.to_dict()
+        # tuples come back as lists when serialized
+        d["ticker"] = t
+        return OptResultOut(**d)
 
     @app.get("/regime", dependencies=[Depends(require_api_key)])
     def regime_endpoint(ticker: str = "SPY"):
