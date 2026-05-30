@@ -14,6 +14,7 @@ from ..notifier import TelegramNotifier, DiscordNotifier
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatch_hits
 from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
 from ..risk import RiskConfig, size_pick
+from ..correlation import correlation_matrix, diversification_warnings
 
 console = Console()
 
@@ -334,6 +335,44 @@ def size_cmd(ticker, label, score, equity, risk, max_pct):
     table.add_row("kelly capped", f"{res.kelly_capped:.4f}")
     table.add_row("binding constraint", res.cap_reason)
     console.print(table)
+
+
+@cli.command("correlation")
+@click.option("--window", default=60, type=int)
+@click.option("--threshold", default=0.70, type=float)
+def correlation_cmd(window, threshold):
+    """Show correlation matrix and diversification warnings for the watchlist."""
+    s = get_settings()
+    wl = WatchlistStore(s.data_dir / "watchlist.json").list()
+    closes = {}
+    for t in wl:
+        df = load_ohlcv(t)
+        if df.empty:
+            df = fetch_ohlcv(t, period="1y")
+            if not df.empty:
+                save_ohlcv(t, df)
+        if not df.empty and "close" in df.columns:
+            closes[t] = df["close"]
+    m = correlation_matrix(closes, window=window)
+    if m.empty:
+        console.print("(insufficient data)")
+        return
+    table = Table(title=f"Correlation (window={window})")
+    table.add_column("")
+    for t in m.columns:
+        table.add_column(t)
+    for t in m.index:
+        row = [t] + [f"{m.loc[t, c]:+.2f}" for c in m.columns]
+        table.add_row(*row)
+    console.print(table)
+    rep = diversification_warnings(closes, window=window, cluster_threshold=threshold)
+    console.print(f"avg pairwise corr {rep.avg_pairwise_corr:+.2f}"
+                  f" | max {rep.max_pairwise_corr:+.2f}"
+                  + (f" | most correlated {rep.most_correlated_pair}" if rep.most_correlated_pair else ""))
+    console.print(f"clusters (>= {threshold:.2f}): {rep.clusters}")
+    if rep.warnings:
+        for w in rep.warnings:
+            console.print(f"[WARN] {w}")
 
 
 def main():

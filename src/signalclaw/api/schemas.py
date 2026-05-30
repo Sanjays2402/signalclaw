@@ -151,3 +151,20 @@ class SizingRequest(BaseModel):
     kelly_cap: float = 0.10
     atr_stop_mult: float = 2.0
     atr_target_mult: float = 3.0
+
+
+class CorrelationMatrixOut(BaseModel):
+    tickers: List[str]
+    matrix: List[List[float]]
+    window: int
+
+
+class DiversificationOut(BaseModel):
+    window: int
+    threshold: float
+    n_tickers: int
+    avg_pairwise_corr: float
+    max_pairwise_corr: float
+    most_correlated_pair: Optional[List[str]] = None
+    clusters: List[List[str]]
+    warnings: List[str]

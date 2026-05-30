@@ -13,12 +13,14 @@ from ..backtest import WalkForwardBacktest
 from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut,
                        AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut,
                        TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut,
-                       SizingOut, SizingRequest)
+                       SizingOut, SizingRequest,
+                       CorrelationMatrixOut, DiversificationOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
 from ..risk import RiskConfig, size_pick
+from ..correlation import correlation_matrix, diversification_warnings
 
 
 def create_app() -> FastAPI:
@@ -183,6 +185,58 @@ def create_app() -> FastAPI:
         )
         res = size_pick(body.ticker.upper(), df, body.label, body.score, cfg)
         return SizingOut(**res.to_dict())
+
+    def _gather_closes(tickers):
+        out = {}
+        for t in tickers:
+            t = t.upper()
+            df = load_ohlcv(t)
+            if df.empty:
+                df = fetch_ohlcv(t, period="1y")
+                if not df.empty:
+                    save_ohlcv(t, df)
+            if not df.empty and "close" in df.columns:
+                out[t] = df["close"]
+        return out
+
+    @app.get("/correlation", response_model=CorrelationMatrixOut, dependencies=[Depends(require_api_key)])
+    def correlation_endpoint(window: int = 60, tickers: str | None = None):
+        if tickers:
+            tlist = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+        else:
+            tlist = store.list()
+        closes = _gather_closes(tlist)
+        m = correlation_matrix(closes, window=window)
+        if m.empty:
+            return CorrelationMatrixOut(tickers=list(closes.keys()), matrix=[], window=window)
+        return CorrelationMatrixOut(
+            tickers=list(m.index),
+            matrix=[[float(x) for x in row] for row in m.values],
+            window=window,
+        )
+
+    @app.get("/diversification", response_model=DiversificationOut, dependencies=[Depends(require_api_key)])
+    def diversification_endpoint(window: int = 60, threshold: float = 0.70):
+        tlist = store.list()
+        closes = _gather_closes(tlist)
+        # Use portfolio weights if a snapshot is available
+        weights = None
+        try:
+            positions = portfolio_store.positions()
+            last_prices = {}
+            for t in positions:
+                df = load_ohlcv(t)
+                if not df.empty and "close" in df.columns:
+                    last_prices[t] = float(df["close"].iloc[-1])
+            snap = compute_snapshot(positions, last_prices, trades=portfolio_store.trades())
+            if snap.weights:
+                weights = snap.weights
+        except Exception:
+            weights = None
+        rep = diversification_warnings(closes, weights=weights, window=window,
+                                       cluster_threshold=threshold)
+        d = rep.to_dict()
+        return DiversificationOut(**d)
 
     return app
 
