@@ -42,3 +42,28 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - run: cd web && npm ci && npm run build
+  helm:
+    # Render and validate the production Helm chart on every PR so the
+    # hardening invariants documented in README "Operations" (resource
+    # limits, non-root pod security, dropped caps, RO root FS, probes,
+    # HPA/PDB/NetworkPolicy toggles, Sentry env wiring) are actually
+    # gated, not silently skipped because the test runner had no helm
+    # binary on PATH.
+    if: ${{ vars.ENABLE_CI == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: Helm lint
+        run: helm lint infra/helm/signalclaw
+      - name: Helm template (default values)
+        run: helm template t infra/helm/signalclaw > /dev/null
+      - name: Install test deps
+        run: pip install pytest pyyaml
+      - name: Run helm chart tests
+        run: pytest -q tests/test_helm_chart.py tests/test_helm_chart_ci.py

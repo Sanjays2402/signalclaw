@@ -634,11 +634,31 @@ web build:
   and either pins around it or adds it to the ignore list with a
   link to the upstream fix PR.
 
+A fourth job, `helm`, installs the `helm` CLI on the runner and renders
+the chart end to end so the hardening invariants documented above are
+actually gated. It runs:
+
+- `helm lint infra/helm/signalclaw` to catch schema regressions.
+- `helm template t infra/helm/signalclaw` to confirm the default values
+  render without error.
+- `pytest tests/test_helm_chart.py tests/test_helm_chart_ci.py` to
+  assert resource limits, non-root security context, dropped
+  capabilities, read-only root filesystem, probes, and the
+  HPA/PDB/NetworkPolicy/PVC/Sentry toggles all produce the expected
+  manifests. `test_helm_chart.py` self-skips when `helm` is missing, so
+  the dedicated CI job exists to guarantee it never silently skips on
+  the GitHub runner. `test_helm_chart_ci.py` parses `ci.yml` itself and
+  fails if the helm job ever loses its `azure/setup-helm` install,
+  `helm lint`, `helm template`, or PyYAML setup steps, which closes the
+  "chart hardening tests skipped because the runner had no helm" loop
+  for good.
+
 Run the same gate locally before pushing:
 
 ```
 ruff check .
 pip-audit
+helm lint infra/helm/signalclaw
 pytest -q
 ```
 
