@@ -1,5 +1,8 @@
 # SignalClaw
 
+![landing](docs/screenshots/landing.png)
+
+
 Personal stock and crypto signal bot. Ingests OHLCV from yfinance plus news sentiment, runs a small ML ensemble (LightGBM 3-class classifier, XGBoost regressor, LSTM baseline), and produces daily watch / hold / skip recommendations with rationale.
 
 > **NOT FINANCIAL ADVICE.** See [FINANCIAL_DISCLAIMER.md](FINANCIAL_DISCLAIMER.md).
