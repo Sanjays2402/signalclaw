@@ -11,8 +11,10 @@ export default function NavLink({ href, children }: { href: string; children: Re
     <Link
       href={href}
       className={clsx(
-        "px-2.5 py-1 rounded transition",
-        active ? "bg-white/10 text-white" : "text-[var(--muted)] hover:text-white hover:bg-white/5",
+        "px-2 py-1 rounded-sm transition border-b-2",
+        active
+          ? "text-white border-[var(--amber)] bg-white/[0.03]"
+          : "text-[var(--muted)] border-transparent hover:text-white hover:bg-white/[0.03]",
       )}
     >
       {children}
