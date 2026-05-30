@@ -1,9 +1,10 @@
 "use client";
+import { useState } from "react";
 import useSWR from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, fmtPct } from "@/components/ui";
 import { swrFetcher, type DailyReport, type Regime, type Pick } from "@/lib/api";
-import { Pulse, ShieldWarning, TrendUp, Eye, Prohibit, Lightning } from "@phosphor-icons/react/dist/ssr";
+import { Pulse, ShieldWarning, TrendUp, Eye, Prohibit, Lightning, ShieldCheck } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
 export default function Page() {
@@ -26,7 +27,9 @@ function regimeTone(label: string): "up" | "down" | "warn" | "info" {
 }
 
 function Today() {
-  const picks = useSWR<DailyReport>("/picks", swrFetcher, { refreshInterval: 60000 });
+  const [guarded, setGuarded] = useState(false);
+  const picksKey = guarded ? "/picks/guarded" : "/picks";
+  const picks = useSWR<DailyReport>(picksKey, swrFetcher, { refreshInterval: 60000 });
   const reg = useSWR<Regime>("/regime?ticker=SPY", swrFetcher, { refreshInterval: 60000 });
 
   return (
@@ -47,11 +50,33 @@ function Today() {
         <RegimeBanner reg={reg.data} loading={!reg.data && !reg.error} err={reg.error} />
       </header>
 
-      <Card title="Signals">
+      <Card
+        title="Signals"
+        right={
+          <button
+            onClick={() => setGuarded((g) => !g)}
+            className={`text-xs px-2 py-1 rounded border flex items-center gap-1.5 ${
+              guarded
+                ? "bg-[var(--accent)]/15 text-[var(--accent)] border-[var(--accent)]/30"
+                : "border-[var(--border)] muted hover:text-white"
+            }`}
+            aria-pressed={guarded}
+            title="Filter picks through portfolio drawdown guard"
+          >
+            <ShieldCheck weight="duotone" size={14} />
+            {guarded ? "Guard on" : "Guard off"}
+          </button>
+        }
+      >
         {picks.error ? <ErrorBox err={picks.error} /> :
-          !picks.data ? <Loading label="Fetching picks" /> :
+          !picks.data ? <Loading label={guarded ? "Applying drawdown guard" : "Fetching picks"} /> :
             picks.data.picks.length === 0 ? (
-              <Empty title="No picks for today" hint="Watchlist may be empty or the pipeline has not run." />
+              <Empty
+                title={guarded ? "No picks survive the guard" : "No picks for today"}
+                hint={guarded
+                  ? "Drawdown guard is suppressing signals. Toggle it off or review portfolio risk."
+                  : "Watchlist may be empty or the pipeline has not run."}
+              />
             ) : (
               <PicksTable picks={picks.data.picks} riskScale={reg.data?.risk_scale ?? 1} />
             )}
