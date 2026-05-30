@@ -784,3 +784,20 @@ class AccountSnapshotOut(BaseModel):
     excess_liquidity: float
     margin_call: bool
     margin_call_amount: float
+
+
+class AnomalyOut(BaseModel):
+    index: str
+    reasons: List[str]
+    severity: float
+    return_z: float
+    return_atr_mult: float
+    range_iqr_mult: float
+
+
+class AnomalyReportOut(BaseModel):
+    ticker: str
+    n_bars: int
+    n_anomalous: int
+    rate: float
+    anomalies: List[AnomalyOut]

@@ -42,7 +42,8 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        CostModelIn, PretradeIn, PretradeOut,
                        ExecSimulateIn, ExecReportOut, ExecFillOut,
                        LedgerEntryIn, LedgerEntryOut, LedgerListOut,
-                       MarginConfigIn, MarginConfigOut, AccountSnapshotOut)
+                       MarginConfigIn, MarginConfigOut, AccountSnapshotOut,
+                       AnomalyOut, AnomalyReportOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -72,6 +73,7 @@ from ..webhooks import (WebhookStore, WebhookSubscription, diff_picks,
                          deliver_events, EVENT_KINDS)
 from ..regime import detect_regime
 from ..earnings import EarningsStore, EarningsDate
+from ..quality import detect_anomalies, DetectorConfig
 
 
 def create_app() -> FastAPI:
@@ -482,6 +484,32 @@ def create_app() -> FastAPI:
             initial_margin=cfg.initial_margin,
             maintenance_margin=cfg.maintenance_margin,
             annual_interest_rate=cfg.annual_interest_rate,
+        )
+
+    @app.get("/quality/anomalies/{ticker}", response_model=AnomalyReportOut,
+             dependencies=[Depends(require_api_key)])
+    def quality_anomalies(ticker: str,
+                           z_threshold: float = 6.0,
+                           atr_mult_threshold: float = 5.0,
+                           iqr_mult_threshold: float = 4.0):
+        df = load_ohlcv(ticker)
+        if df is None or df.empty:
+            raise HTTPException(404, f"no OHLCV cached for {ticker}")
+        try:
+            cfg = DetectorConfig(
+                z_threshold=z_threshold,
+                atr_mult_threshold=atr_mult_threshold,
+                iqr_mult_threshold=iqr_mult_threshold,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        rep = detect_anomalies(df, cfg)
+        return AnomalyReportOut(
+            ticker=ticker.upper(),
+            n_bars=rep.n_bars,
+            n_anomalous=rep.n_anomalous,
+            rate=rep.rate,
+            anomalies=[AnomalyOut(**a.to_dict()) for a in rep.anomalies],
         )
 
     @app.get("/rotation", response_model=RotationOut,
