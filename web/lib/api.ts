@@ -497,6 +497,70 @@ export type TaxReport = {
   wash_sales: WashSale[];
 };
 
+export type OptFold = {
+  train_start: string;
+  train_end: string;
+  test_start: string;
+  test_end: string;
+  chosen: number[];
+  train_sharpe: number;
+  test_sharpe: number;
+  test_return: number;
+  test_hit_rate: number;
+  test_max_drawdown: number;
+};
+
+export type OptResult = {
+  ticker: string;
+  folds: OptFold[];
+  most_common_params: number[] | null;
+  most_common_share: number;
+  median_test_sharpe: number;
+  mean_test_sharpe: number;
+  mean_test_return: number;
+  n_folds: number;
+  grid_size: number;
+};
+
+export type ExecBar = { index: number; price: number; volume: number };
+export type ExecOrder = {
+  ticker: string;
+  side: string;
+  shares: number;
+  arrival_price: number;
+  schedule: string;
+  expected_curve?: number[] | null;
+  participation_rate?: number;
+  max_participation?: number;
+  base_slippage_bps?: number;
+  slippage_bps_per_pct_adv?: number;
+  commission_per_share?: number;
+};
+export type ExecFill = {
+  bar_index: number;
+  shares: number;
+  fill_price: number;
+  market_price: number;
+  participation: number;
+  slippage_bps: number;
+  commission: number;
+};
+export type ExecReport = {
+  ticker: string;
+  side: string;
+  requested_shares: number;
+  filled_shares: number;
+  unfilled_shares: number;
+  arrival_price: number;
+  avg_fill_price: number;
+  interval_vwap: number;
+  notional: number;
+  commission_total: number;
+  slippage_vs_arrival_bps: number;
+  slippage_vs_vwap_bps: number;
+  fills: ExecFill[];
+};
+
 // Back-compat aliases
 export type Report = DailyReport;
 export type Backtest = {

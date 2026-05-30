@@ -34,6 +34,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <NavLink href="/news">News</NavLink>
             <NavLink href="/stops">Stops</NavLink>
             <NavLink href="/correlation">Correlation</NavLink>
+            <NavLink href="/diversification">Diversify</NavLink>
             <NavLink href="/ledger">Ledger</NavLink>
             <NavLink href="/tax">Tax</NavLink>
             <NavLink href="/scaling">Scaling</NavLink>
