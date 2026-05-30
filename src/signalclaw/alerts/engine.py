@@ -136,6 +136,34 @@ def dispatch_hits(hits: List[AlertHit], notifiers: Iterable) -> int:
     return sent
 
 
+def dispatch_hits_with_retry(
+    hits: List[AlertHit],
+    notifiers_by_channel,  # dict[str, Notifier]
+    *,
+    policy=None,
+    dlq=None,
+) -> dict:
+    """Send each hit through every notifier using send_with_retry.
+
+    `notifiers_by_channel` maps channel name (e.g. 'slack', 'telegram') to a
+    Notifier instance. On final failure the message is enqueued to `dlq`.
+    Returns counts {sent, failed}.
+    """
+    from ..notifier import send_with_retry, RetryPolicy
+    p = policy or RetryPolicy()
+    sent = 0
+    failed = 0
+    for hit in hits:
+        text = hit.format()
+        for channel, n in notifiers_by_channel.items():
+            ok = send_with_retry(n, text, channel=channel, policy=p, dlq=dlq)
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+    return {"sent": sent, "failed": failed}
+
+
 def evaluate_with_store(
     store: AlertStore,
     ohlcv_by_ticker: Dict[str, pd.DataFrame],

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
     telegram_enabled: bool = Field(default=False, alias="TELEGRAM_ENABLED")
     discord_webhook_url: str = Field(default="", alias="DISCORD_WEBHOOK_URL")
+    slack_webhook_url: str = Field(default="", alias="SLACK_WEBHOOK_URL")
     newsapi_key: str = Field(default="", alias="NEWSAPI_KEY")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     data_dir: Path = Field(default=Path("./data"), alias="DATA_DIR")

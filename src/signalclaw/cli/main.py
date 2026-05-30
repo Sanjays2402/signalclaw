@@ -10,7 +10,9 @@ from ..logging_ import configure_logging
 from ..data import WatchlistStore, fetch_ohlcv, save_ohlcv, load_ohlcv, default_watchlist
 from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest
-from ..notifier import TelegramNotifier, DiscordNotifier
+from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
+                         DeadLetterQueue, RetryPolicy, send_with_retry,
+                         replay_dlq, Notifier)
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatch_hits
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
@@ -916,6 +918,78 @@ def fx_convert():
     console.print(table)
     console.print(f"total USD notional: ${total_base:.2f} | "
                    f"unconverted (fallback): {total_fb:.2f} native units")
+
+
+@cli.group("notifier")
+def notifier_grp():
+    """Notifier diagnostics and dead-letter queue."""
+
+
+def _notifier_for_channel(channel: str) -> Notifier | None:
+    c = channel.lower()
+    if c == "slack":
+        return SlackNotifier()
+    if c == "telegram":
+        return TelegramNotifier()
+    if c == "discord":
+        return DiscordNotifier()
+    return None
+
+
+@notifier_grp.command("test")
+@click.argument("channel", type=click.Choice(["slack", "telegram", "discord"]))
+@click.option("--text", default="SignalClaw test message")
+def notifier_test_cmd(channel, text):
+    s = get_settings()
+    dlq = DeadLetterQueue(s.data_dir / "notifier_dlq.json")
+    n = _notifier_for_channel(channel)
+    if n is None:
+        console.print(f"[red]no notifier for {channel}[/red]")
+        return
+    ok = send_with_retry(n, text, channel=channel,
+                          policy=RetryPolicy(max_attempts=2, initial_delay=0,
+                                              jitter=0.0),
+                          dlq=dlq)
+    console.print(f"{channel}: {'ok' if ok else 'failed (enqueued to DLQ)'}")
+
+
+@notifier_grp.command("dlq")
+@click.option("--channel", default=None)
+def notifier_dlq_cmd(channel):
+    s = get_settings()
+    dlq = DeadLetterQueue(s.data_dir / "notifier_dlq.json")
+    rows = dlq.list(channel=channel)
+    if not rows:
+        console.print("empty")
+        return
+    table = Table(title="Notifier dead-letter queue")
+    for c in ["id", "channel", "attempts", "enqueued_at", "last_error", "text"]:
+        table.add_column(c)
+    for r in rows:
+        table.add_row(r.id, r.channel, str(r.attempts), r.enqueued_at,
+                       (r.last_error[:40] + ("\u2026" if len(r.last_error) > 40 else "")),
+                       (r.text[:40] + ("\u2026" if len(r.text) > 40 else "")))
+    console.print(table)
+
+
+@notifier_grp.command("replay")
+def notifier_replay_cmd():
+    s = get_settings()
+    dlq = DeadLetterQueue(s.data_dir / "notifier_dlq.json")
+    counts = replay_dlq(
+        dlq, _notifier_for_channel,
+        policy=RetryPolicy(max_attempts=2, initial_delay=0.5, jitter=0.0),
+    )
+    console.print(f"sent {counts['sent']} | kept {counts['kept']} | "
+                   f"skipped {counts['skipped']}")
+
+
+@notifier_grp.command("clear")
+@click.confirmation_option(prompt="Clear all DLQ items?")
+def notifier_clear_cmd():
+    s = get_settings()
+    DeadLetterQueue(s.data_dir / "notifier_dlq.json").clear()
+    console.print("cleared")
 
 
 def main():

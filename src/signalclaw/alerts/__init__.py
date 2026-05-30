@@ -1,6 +1,6 @@
 from .rules import Alert, AlertCondition, AlertHit
 from .store import AlertStore
-from .engine import evaluate_alerts, dispatch_hits
+from .engine import evaluate_alerts, dispatch_hits, dispatch_hits_with_retry
 
 __all__ = [
     "Alert",
@@ -9,4 +9,5 @@ __all__ = [
     "AlertStore",
     "evaluate_alerts",
     "dispatch_hits",
+    "dispatch_hits_with_retry",
 ]

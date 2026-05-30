@@ -32,7 +32,9 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        ConvictionBucketOut, ConvictionStatsOut,
                        FxRateIn, FxRateOut, FxListOut,
                        TradeCurrencyIn, TradeCurrencyOut,
-                       ConversionAuditOut, ConvertedTradesOut)
+                       ConversionAuditOut, ConvertedTradesOut,
+                       DeadLetterOut, DeadLetterListOut, DlqReplayOut,
+                       NotifyTestIn)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -44,6 +46,9 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           filter_picks as drawdown_filter_picks,
                           JournalEntry, JournalStore, conviction_stats,
                           FxStore, TradeCurrencyMap, convert_trades, USD)
+from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
+                         DeadLetterQueue, RetryPolicy, send_with_retry,
+                         replay_dlq, Notifier)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -80,6 +85,17 @@ def create_app() -> FastAPI:
     journal_store = JournalStore(settings.data_dir / "journal.json")
     fx_store = FxStore(settings.data_dir / "fx")
     ccy_map = TradeCurrencyMap(settings.data_dir / "trade_currency.json")
+    dlq = DeadLetterQueue(settings.data_dir / "notifier_dlq.json")
+
+    def _notifier_for(channel: str) -> Notifier | None:
+        c = (channel or "").lower()
+        if c == "slack":
+            return SlackNotifier()
+        if c == "telegram":
+            return TelegramNotifier()
+        if c == "discord":
+            return DiscordNotifier()
+        return None
 
     @app.get("/health")
     def health():
@@ -707,6 +723,40 @@ def create_app() -> FastAPI:
             total_base_cost=total_base,
             total_fallback_native=total_fallback,
         )
+
+    @app.get("/notifier/dlq", response_model=DeadLetterListOut,
+             dependencies=[Depends(require_api_key)])
+    def dlq_list(channel: str | None = None):
+        items = dlq.list(channel=channel)
+        return DeadLetterListOut(items=[DeadLetterOut(**i.to_dict()) for i in items])
+
+    @app.delete("/notifier/dlq/{item_id}", dependencies=[Depends(require_api_key)])
+    def dlq_remove(item_id: str):
+        if not dlq.remove(item_id):
+            raise HTTPException(404, "item not found")
+        return {"removed": item_id}
+
+    @app.post("/notifier/dlq/replay", response_model=DlqReplayOut,
+              dependencies=[Depends(require_api_key)])
+    def dlq_replay():
+        counts = replay_dlq(
+            dlq, _notifier_for,
+            policy=RetryPolicy(max_attempts=2, initial_delay=0.5, jitter=0.0),
+        )
+        return DlqReplayOut(**counts)
+
+    @app.post("/notifier/test", dependencies=[Depends(require_api_key)])
+    def notifier_test(body: NotifyTestIn):
+        n = _notifier_for(body.channel)
+        if n is None:
+            raise HTTPException(400,
+                                  f"unknown channel '{body.channel}'")
+        ok = send_with_retry(
+            n, body.text, channel=body.channel.lower(),
+            policy=RetryPolicy(max_attempts=2, initial_delay=0, jitter=0.0),
+            dlq=dlq,
+        )
+        return {"channel": body.channel.lower(), "ok": ok}
 
     return app
 

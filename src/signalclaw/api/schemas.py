@@ -494,3 +494,27 @@ class ConvertedTradesOut(BaseModel):
     audits: List[ConversionAuditOut]
     total_base_cost: float
     total_fallback_native: float
+
+
+class DeadLetterOut(BaseModel):
+    id: str
+    channel: str
+    text: str
+    attempts: int
+    last_error: str
+    enqueued_at: str
+
+
+class DeadLetterListOut(BaseModel):
+    items: List[DeadLetterOut]
+
+
+class DlqReplayOut(BaseModel):
+    sent: int
+    kept: int
+    skipped: int
+
+
+class NotifyTestIn(BaseModel):
+    channel: str  # slack | telegram | discord
+    text: str = "SignalClaw test"
