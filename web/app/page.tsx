@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import AuthGate from "@/components/AuthGate";
 import Sparkline from "@/components/Sparkline";
-import { api, type Report } from "@/lib/api";
+import { api, type Report, type Pick } from "@/lib/api";
 
 function Disclaimer() {
   return (
@@ -39,7 +39,7 @@ function Today() {
             </tr>
           </thead>
           <tbody>
-            {r.picks.map(p => (
+            {r.picks.map((p: Pick) => (
               <tr key={p.ticker} className="border-b border-[var(--border)]">
                 <td className="py-2 mono">{p.ticker}</td>
                 <td className={p.label === "watch" ? "up" : p.label === "skip" ? "down" : ""}>

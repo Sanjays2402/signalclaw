@@ -192,3 +192,17 @@ export type JournalEntryIn = {
 };
 
 export type FxRate = { currency: string; date: string; rate: number };
+
+// Back-compat aliases
+export type Report = DailyReport;
+export type Backtest = {
+  ticker: string;
+  sharpe: number;
+  sortino: number;
+  max_drawdown: number;
+  hit_rate: number;
+  cagr: number;
+  n_trades: number;
+  equity_curve: number[];
+  dates: string[];
+};
