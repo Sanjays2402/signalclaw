@@ -66,6 +66,12 @@ Seeded from `MEMORY.md`: BTC-USD, SOXX, MSFT, FXAIX, TSLA, SPY.
 - Telegram + Discord notifiers (disabled by default; print sample payload to logs)
 - FastAPI on `:7431` with API key, CORS, structlog JSON, OTel scaffold
 - Next.js 15 + Tailwind v4 dashboard with watchlist CRUD, today picks, equity curve, sparklines
+- Alerts engine: price above/below, 1-day percent change, RSI cross, signal-label match, with per-alert cooldown, JSON-persisted store, CLI + REST + notifier dispatch
+- Portfolio tracking: trades with FIFO cost basis, realized + unrealized P&L, CSV import / export, position weights, REST + CLI
+- Position sizing: ATR-based stop and target, fractional Kelly with hard cap, risk-per-trade and max-position-percent constraints, binding-constraint reporting
+- Correlation and diversification: pairwise correlation matrix on aligned log returns, single-linkage cluster grouping, warnings for high average correlation, single-name concentration, and cluster concentration
+- Report history: daily reports auto-archived to data/reports, CLI + REST to list summaries, fetch any past report, and diff against a prior date (new/dropped/upgraded/downgraded picks and top score movers)
+
 
 ## Enterprise scaffolding
 
