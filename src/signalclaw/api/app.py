@@ -50,6 +50,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
+from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
@@ -91,6 +92,11 @@ def create_app() -> FastAPI:
                   description="NOT FINANCIAL ADVICE.")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(AccessLogMiddleware)
+    # Prometheus instrumentation. Mounts /metrics and wraps every
+    # request with a counter + latency histogram keyed by route
+    # template (bounded cardinality). Installed before audit so the
+    # /metrics path is excluded from audit via the exempt list below.
+    install_metrics(app, version="0.1.0")
     # Audit log: persist who/what/when for mutating + auth-failed requests.
     # Sits inside CORS so it sees the real request status, including 401/403.
     audit_log = get_audit_log(settings.data_dir / "audit")
@@ -135,7 +141,23 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health():
+        # Liveness probe: cheap, no I/O. If the process can answer
+        # this, Kubernetes should leave it running.
         return {"status": "ok", "ts": datetime.utcnow().isoformat()}
+
+    @app.get("/ready")
+    def ready():
+        # Readiness probe: confirm the data directory is writable
+        # before declaring the pod ready to take traffic. Fails closed
+        # with 503 so the service mesh removes the endpoint from
+        # rotation rather than serving 500s.
+        ok = data_dir_ready(settings.data_dir)
+        body = {"status": "ready" if ok else "not_ready",
+                "data_dir": str(settings.data_dir),
+                "ts": datetime.utcnow().isoformat()}
+        if not ok:
+            raise HTTPException(status_code=503, detail=body)
+        return body
 
     @app.get("/audit", dependencies=[Depends(require_scope("admin"))])
     def audit_tail(limit: int = 100, day: str | None = None):

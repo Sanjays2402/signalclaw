@@ -304,6 +304,40 @@ Retention is operator-controlled. A simple cron is sufficient:
 find "$DATA_DIR/audit" -name 'audit-*.jsonl' -mtime +90 -delete
 ```
 
+### Metrics and probes
+
+The API exposes Prometheus metrics at `GET /metrics` in the standard
+text exposition format. The endpoint is open (no API key) so that
+scrapers running inside the cluster can reach it without rotating
+secrets; lock it down at the ingress or NetworkPolicy layer if you
+expose the API to the public internet.
+
+Series currently exported:
+
+- `signalclaw_http_requests_total{method,route,status}` counter
+- `signalclaw_http_request_duration_seconds{method,route}` histogram
+  with buckets at 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s,
+  2.5s, 5s, 10s
+- `signalclaw_http_in_flight_requests` gauge
+- `signalclaw_build_info{version}` gauge pinned at 1
+
+The `route` label uses the FastAPI route template (for example
+`/watchlist/{ticker}`) so cardinality stays bounded under scanner or
+fuzzer traffic. Unmatched paths bucket into `__unmatched__`.
+
+Two probe endpoints back the Helm chart:
+
+- `GET /health` is a cheap liveness probe. No I/O, no auth. If the
+  process answers, Kubernetes leaves it running.
+- `GET /ready` is a readiness probe. It confirms that `DATA_DIR` is
+  writable by touching a `.ready_probe` file. Returns 503 when the
+  data volume is missing or read-only so the service mesh removes the
+  pod from rotation instead of serving 500s.
+
+The deployment template adds standard `prometheus.io/scrape`
+annotations so a default kube-prometheus install picks the API up
+automatically.
+
 ### Deployment, scaling, backup, on-call
 
 Deployment is described in `infra/helm/signalclaw` (chart with values) and
