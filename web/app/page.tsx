@@ -5,6 +5,7 @@ import Sparkline from "@/components/Sparkline";
 import { Card, Badge, Loading, ErrorBox, Empty, fmtPct } from "@/components/ui";
 import { swrFetcher, type DailyReport, type Regime, type Pick } from "@/lib/api";
 import { Pulse, ShieldWarning, TrendUp, Eye, Prohibit, Lightning } from "@phosphor-icons/react/dist/ssr";
+import Link from "next/link";
 
 export default function Page() {
   return (
@@ -121,7 +122,9 @@ function PicksTable({ picks, riskScale }: { picks: Pick[]; riskScale: number }) 
         <tbody>
           {picks.map((p) => (
             <tr key={p.ticker} className="border-b border-[var(--border)] hover:bg-white/[0.02]">
-              <td className="py-2 pr-3 mono">{p.ticker}</td>
+              <td className="py-2 pr-3 mono">
+                <Link href={`/ticker/${p.ticker}`} className="hover:text-[var(--accent)]">{p.ticker}</Link>
+              </td>
               <td className="pr-3">
                 <Badge tone={labelTone(p.label)}>
                   <span className="mr-1">{labelIcon(p.label)}</span>{p.label}
