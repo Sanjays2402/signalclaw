@@ -1,23 +1,112 @@
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: {{ .Release.Name }}-api }
+metadata:
+  name: {{ .Release.Name }}-api
+  labels:
+    {{- include "signalclaw.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
+  {{- if not .Values.api.autoscaling.enabled }}
   replicas: {{ .Values.api.replicas }}
-  selector: { matchLabels: { app: {{ .Release.Name }}-api } }
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-api
   template:
     metadata:
-      labels: { app: {{ .Release.Name }}-api }
+      labels:
+        app: {{ .Release.Name }}-api
+        app.kubernetes.io/component: api
+        {{- include "signalclaw.commonLabels" . | nindent 8 }}
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/metrics"
         prometheus.io/port: {{ .Values.api.port | quote }}
     spec:
+      serviceAccountName: {{ include "signalclaw.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: api
           image: {{ .Values.image.api }}
-          ports: [{ containerPort: {{ .Values.api.port }} }]
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
           env:
             - name: SIGNALCLAW_API_KEY
-              valueFrom: { secretKeyRef: { name: {{ .Values.api.apiKeySecret }}, key: key } }
-          readinessProbe: { httpGet: { path: /ready, port: {{ .Values.api.port }} } }
-          livenessProbe: { httpGet: { path: /health, port: {{ .Values.api.port }} }, initialDelaySeconds: 10, periodSeconds: 20 }
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.apiKeySecret }}
+                  key: key
+            - name: LOG_LEVEL
+              value: {{ .Values.api.logLevel | quote }}
+            - name: DATA_DIR
+              value: {{ .Values.api.dataDir | quote }}
+            {{- if .Values.api.sentry.dsnSecret }}
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.sentry.dsnSecret }}
+                  key: dsn
+            {{- end }}
+            - name: SENTRY_ENVIRONMENT
+              value: {{ .Values.api.sentry.environment | quote }}
+            - name: SENTRY_RELEASE
+              value: {{ .Values.api.sentry.release | quote }}
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              value: {{ .Values.api.sentry.tracesSampleRate | quote }}
+            - name: SENTRY_PROFILES_SAMPLE_RATE
+              value: {{ .Values.api.sentry.profilesSampleRate | quote }}
+            - name: SENTRY_SEND_DEFAULT_PII
+              value: {{ .Values.api.sentry.sendDefaultPii | quote }}
+            {{- with .Values.api.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.api.dataDir }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          {{- if .Values.api.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-api-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

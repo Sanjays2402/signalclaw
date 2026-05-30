@@ -1,15 +1,98 @@
 image:
   api: ghcr.io/sanjays2402/signalclaw-api:latest
   web: ghcr.io/sanjays2402/signalclaw-web:latest
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
 api:
   port: 7431
   replicas: 1
   apiKeySecret: signalclaw-api-key
+  logLevel: INFO
+  dataDir: /data
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  persistence:
+    enabled: false
+    storageClass: ""
+    size: 10Gi
+    accessMode: ReadWriteOnce
+  extraEnv: []
+  sentry:
+    dsnSecret: ""        # name of an existing secret with key `dsn`
+    environment: production
+    release: ""
+    tracesSampleRate: "0.0"
+    profilesSampleRate: "0.0"
+    sendDefaultPii: "false"
+
 web:
   port: 7430
   replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 75
+
 service:
   type: ClusterIP
+
 ingress:
   enabled: false
+  className: ""
   host: signalclaw.local
+  annotations: {}
+  tls: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+networkPolicy:
+  enabled: false
+  ingressNamespaceSelector: {}
+  ingressPodSelector: {}
+  allowDNS: true
+  egressCIDRs:
+    - 0.0.0.0/0
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

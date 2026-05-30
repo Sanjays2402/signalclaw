@@ -1,13 +1,45 @@
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: {{ .Release.Name }}-web }
+metadata:
+  name: {{ .Release.Name }}-web
+  labels:
+    {{- include "signalclaw.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: web
 spec:
+  {{- if not .Values.web.autoscaling.enabled }}
   replicas: {{ .Values.web.replicas }}
-  selector: { matchLabels: { app: {{ .Release.Name }}-web } }
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-web
   template:
-    metadata: { labels: { app: {{ .Release.Name }}-web } }
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-web
+        app.kubernetes.io/component: web
+        {{- include "signalclaw.commonLabels" . | nindent 8 }}
     spec:
+      serviceAccountName: {{ include "signalclaw.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: web
           image: {{ .Values.image.web }}
-          ports: [{ containerPort: {{ .Values.web.port }} }]
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.port }}
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

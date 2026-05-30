@@ -417,6 +417,29 @@ write contention. Back up `DATA_DIR` (parquet, JSON stores, audit/) on the
 same cadence as your other stateful volumes. On-call playbook lives under
 `docs/playbook.md`.
 
+The Helm chart ships hardened defaults: non-root pod security context
+(`runAsNonRoot`, `seccompProfile: RuntimeDefault`), per-container CPU and
+memory requests/limits, dropped Linux capabilities, read-only root filesystem
+with `emptyDir` mounts for `/tmp` and `DATA_DIR`, a dedicated
+`ServiceAccount` with `automountServiceAccountToken: false`, and Prometheus
+scrape annotations on the API pod. Production-only toggles (all opt-in):
+
+| Key | Effect |
+| --- | --- |
+| `api.autoscaling.enabled=true` | Renders an HPA on CPU and memory utilisation. `web.autoscaling.enabled=true` does the same for the web pod. |
+| `api.podDisruptionBudget.enabled=true` | Renders a PDB with `minAvailable: 1` so the API survives node drains. |
+| `networkPolicy.enabled=true` | Locks API ingress to the web pod only, restricts egress to DNS plus the configured `egressCIDRs` on 80/443. |
+| `api.persistence.enabled=true` | Creates a PVC bound at `DATA_DIR` (default `/data`) so audit log, journal, and parquet stores survive pod restarts. |
+| `api.sentry.dsnSecret=<secret>` | Threads `SENTRY_DSN` from the named secret (`key: dsn`) plus environment, release, and sample rates into the API container. |
+| `ingress.enabled=true` | Renders an Ingress with `ingressClassName`, `annotations`, and `tls` passthrough from values. |
+
+The chart is covered by `tests/test_helm_chart.py`, which shells out to
+`helm template` and asserts every container has resource limits, the pod
+security context is non-root, capabilities are dropped, read-only root
+filesystem has writable volume mounts, probes are wired to `/health` and
+`/ready`, and each opt-in toggle produces the expected manifest. Run
+`pytest tests/test_helm_chart.py` after any chart change.
+
 ### Data lifecycle (GDPR export and delete)
 
 SignalClaw exposes two endpoints so an operator can fulfil data subject
