@@ -14,7 +14,8 @@ from ..notifier import TelegramNotifier, DiscordNotifier
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatch_hits
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
-                          DrawdownConfig, DrawdownGuardStore, evaluate_guard)
+                          DrawdownConfig, DrawdownGuardStore, evaluate_guard,
+                          JournalEntry, JournalStore, conviction_stats)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -466,6 +467,85 @@ def portfolio_drawdown_cmd(trigger, rearm, min_history_days, cash, persist):
     console.print(f"reason: {st.reason}")
     if persist:
         console.print("[dim]state recorded[/dim]")
+
+
+@cli.group("journal")
+def journal_grp():
+    """Trade journal: structured notes per trade id."""
+
+
+@journal_grp.command("add")
+@click.argument("trade_id")
+@click.option("--thesis", default="")
+@click.option("--conviction", default=3, type=click.IntRange(1, 5))
+@click.option("--tag", "tags", multiple=True)
+@click.option("--exit-reason", default=None)
+def journal_add(trade_id, thesis, conviction, tags, exit_reason):
+    """Add or update a journal entry for a trade."""
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    if not any(t.id == trade_id for t in pstore.trades()):
+        console.print(f"[red]no trade with id {trade_id}[/red]")
+        return
+    jstore = JournalStore(s.data_dir / "journal.json")
+    try:
+        entry = JournalEntry(trade_id=trade_id, thesis=thesis,
+                              conviction=conviction, tags=list(tags),
+                              exit_reason=exit_reason)
+    except ValueError as e:
+        console.print(f"[red]invalid:[/red] {e}")
+        return
+    jstore.upsert(entry)
+    console.print(f"saved entry for {trade_id} (conviction={conviction})")
+
+
+@journal_grp.command("list")
+@click.option("--tag", default=None)
+@click.option("--min-conviction", default=None, type=int)
+def journal_list_cmd(tag, min_conviction):
+    s = get_settings()
+    jstore = JournalStore(s.data_dir / "journal.json")
+    rows = jstore.list(tag=tag, min_conviction=min_conviction)
+    if not rows:
+        console.print("no journal entries")
+        return
+    table = Table(title="Trade journal")
+    for c in ["trade_id", "conviction", "tags", "thesis", "exit_reason", "updated_at"]:
+        table.add_column(c)
+    for e in rows:
+        table.add_row(e.trade_id, str(e.conviction), ", ".join(e.tags),
+                       (e.thesis[:60] + (("\u2026") if len(e.thesis) > 60 else "")),
+                       e.exit_reason or "", e.updated_at)
+    console.print(table)
+
+
+@journal_grp.command("remove")
+@click.argument("trade_id")
+def journal_remove_cmd(trade_id):
+    s = get_settings()
+    jstore = JournalStore(s.data_dir / "journal.json")
+    ok = jstore.remove(trade_id)
+    console.print("removed" if ok else "not found")
+
+
+@journal_grp.command("stats")
+def journal_stats_cmd():
+    """Realized P&L grouped by conviction bucket."""
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    jstore = JournalStore(s.data_dir / "journal.json")
+    buckets = conviction_stats(pstore.trades(), jstore.list())
+    if not buckets:
+        console.print("no journaled closed trades")
+        return
+    table = Table(title="Realized P&L by conviction")
+    for c in ["conviction", "n_trades", "realized", "avg", "win_rate"]:
+        table.add_column(c)
+    for b in buckets:
+        table.add_row(str(b.conviction), str(b.n_trades),
+                       f"{b.realized_pnl:.2f}", f"{b.avg_realized_pnl:.2f}",
+                       f"{b.win_rate:.2%}")
+    console.print(table)
 
 
 @cli.command("size")

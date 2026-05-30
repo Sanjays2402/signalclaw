@@ -418,3 +418,37 @@ class DrawdownConfigIn(BaseModel):
     rearm: Optional[float] = None
     min_history_days: Optional[int] = None
     cash: Optional[float] = None
+
+
+class JournalEntryIn(BaseModel):
+    trade_id: str
+    thesis: str = ""
+    conviction: int = 3
+    tags: List[str] = []
+    exit_reason: Optional[str] = None
+
+
+class JournalEntryOut(BaseModel):
+    trade_id: str
+    thesis: str
+    conviction: int
+    tags: List[str]
+    exit_reason: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class JournalListOut(BaseModel):
+    entries: List[JournalEntryOut]
+
+
+class ConvictionBucketOut(BaseModel):
+    conviction: int
+    n_trades: int
+    realized_pnl: float
+    avg_realized_pnl: float
+    win_rate: float
+
+
+class ConvictionStatsOut(BaseModel):
+    buckets: List[ConvictionBucketOut]

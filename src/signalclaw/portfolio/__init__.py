@@ -34,6 +34,12 @@ from .drawdown import (
     evaluate_guard,
     filter_picks,
 )
+from .journal import (
+    JournalEntry,
+    JournalStore,
+    ConvictionBucketStat,
+    conviction_stats,
+)
 
 __all__ = [
     "Position",
@@ -74,4 +80,8 @@ __all__ = [
     "evaluate_drawdown",
     "evaluate_guard",
     "filter_picks",
+    "JournalEntry",
+    "JournalStore",
+    "ConvictionBucketStat",
+    "conviction_stats",
 ]

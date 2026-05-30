@@ -27,7 +27,9 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        WebhookIn, WebhookOut, WebhookListOut,
                        PickEventOut, WebhookDeliveryOut,
                        DrawdownReportOut, DrawdownConfigIn,
-                       DrawdownStateOut, DrawdownConfigOut)
+                       DrawdownStateOut, DrawdownConfigOut,
+                       JournalEntryIn, JournalEntryOut, JournalListOut,
+                       ConvictionBucketOut, ConvictionStatsOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -36,7 +38,8 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
                           attribution, sector_exposure, tax_summary, LotMethod,
                           DrawdownConfig, DrawdownGuardStore, evaluate_guard,
-                          filter_picks as drawdown_filter_picks)
+                          filter_picks as drawdown_filter_picks,
+                          JournalEntry, JournalStore, conviction_stats)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -70,6 +73,7 @@ def create_app() -> FastAPI:
     archive = ReportArchive(settings.data_dir / "reports")
     webhooks_store = WebhookStore(settings.data_dir / "webhooks.json")
     drawdown_store = DrawdownGuardStore(settings.data_dir / "drawdown_guard.json")
+    journal_store = JournalStore(settings.data_dir / "journal.json")
 
     @app.get("/health")
     def health():
@@ -553,7 +557,6 @@ def create_app() -> FastAPI:
     @app.get("/portfolio/drawdown/history", dependencies=[Depends(require_api_key)])
     def portfolio_drawdown_history():
         return {"history": drawdown_store.history()}
-
     @app.post("/portfolio/drawdown/clear", dependencies=[Depends(require_api_key)])
     def portfolio_drawdown_clear():
         drawdown_store.clear()
@@ -586,6 +589,56 @@ def create_app() -> FastAPI:
             )
         return DailyReportOut(as_of=rep.as_of,
                                 picks=[Pick(**p.to_dict()) for p in rep.picks])
+
+    @app.get("/journal", response_model=JournalListOut,
+             dependencies=[Depends(require_api_key)])
+    def journal_list(tag: str | None = None,
+                     min_conviction: int | None = None,
+                     max_conviction: int | None = None):
+        rows = journal_store.list(tag=tag, min_conviction=min_conviction,
+                                    max_conviction=max_conviction)
+        return JournalListOut(entries=[JournalEntryOut(**e.to_dict()) for e in rows])
+
+    @app.post("/journal", response_model=JournalEntryOut,
+              dependencies=[Depends(require_api_key)])
+    def journal_upsert(body: JournalEntryIn):
+        # Verify trade exists
+        if not any(t.id == body.trade_id for t in portfolio_store.trades()):
+            raise HTTPException(404, f"trade {body.trade_id} not found")
+        try:
+            entry = JournalEntry(
+                trade_id=body.trade_id,
+                thesis=body.thesis,
+                conviction=body.conviction,
+                tags=list(body.tags),
+                exit_reason=body.exit_reason,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        stored = journal_store.upsert(entry)
+        return JournalEntryOut(**stored.to_dict())
+
+    @app.get("/journal/stats/conviction", response_model=ConvictionStatsOut,
+             dependencies=[Depends(require_api_key)])
+    def journal_conviction_stats():
+        buckets = conviction_stats(portfolio_store.trades(), journal_store.list())
+        return ConvictionStatsOut(
+            buckets=[ConvictionBucketOut(**b.to_dict()) for b in buckets],
+        )
+
+    @app.get("/journal/{trade_id}", response_model=JournalEntryOut,
+             dependencies=[Depends(require_api_key)])
+    def journal_get(trade_id: str):
+        e = journal_store.get(trade_id)
+        if e is None:
+            raise HTTPException(404, "journal entry not found")
+        return JournalEntryOut(**e.to_dict())
+
+    @app.delete("/journal/{trade_id}", dependencies=[Depends(require_api_key)])
+    def journal_remove(trade_id: str):
+        if not journal_store.remove(trade_id):
+            raise HTTPException(404, "journal entry not found")
+        return {"removed": trade_id}
 
     return app
 
