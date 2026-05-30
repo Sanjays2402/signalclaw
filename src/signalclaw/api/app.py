@@ -29,7 +29,10 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        DrawdownReportOut, DrawdownConfigIn,
                        DrawdownStateOut, DrawdownConfigOut,
                        JournalEntryIn, JournalEntryOut, JournalListOut,
-                       ConvictionBucketOut, ConvictionStatsOut)
+                       ConvictionBucketOut, ConvictionStatsOut,
+                       FxRateIn, FxRateOut, FxListOut,
+                       TradeCurrencyIn, TradeCurrencyOut,
+                       ConversionAuditOut, ConvertedTradesOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -39,7 +42,8 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           attribution, sector_exposure, tax_summary, LotMethod,
                           DrawdownConfig, DrawdownGuardStore, evaluate_guard,
                           filter_picks as drawdown_filter_picks,
-                          JournalEntry, JournalStore, conviction_stats)
+                          JournalEntry, JournalStore, conviction_stats,
+                          FxStore, TradeCurrencyMap, convert_trades, USD)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -74,6 +78,8 @@ def create_app() -> FastAPI:
     webhooks_store = WebhookStore(settings.data_dir / "webhooks.json")
     drawdown_store = DrawdownGuardStore(settings.data_dir / "drawdown_guard.json")
     journal_store = JournalStore(settings.data_dir / "journal.json")
+    fx_store = FxStore(settings.data_dir / "fx")
+    ccy_map = TradeCurrencyMap(settings.data_dir / "trade_currency.json")
 
     @app.get("/health")
     def health():
@@ -639,6 +645,68 @@ def create_app() -> FastAPI:
         if not journal_store.remove(trade_id):
             raise HTTPException(404, "journal entry not found")
         return {"removed": trade_id}
+
+    @app.get("/fx", response_model=FxListOut, dependencies=[Depends(require_api_key)])
+    def fx_list():
+        return FxListOut(currencies=fx_store.currencies())
+
+    @app.post("/fx", response_model=FxRateOut, dependencies=[Depends(require_api_key)])
+    def fx_upsert(body: FxRateIn):
+        cur = body.currency.upper().strip()
+        if len(cur) != 3 or not cur.isalpha():
+            raise HTTPException(400, "currency must be 3-letter ISO code")
+        if body.rate <= 0:
+            raise HTTPException(400, "rate must be positive")
+        fx_store.upsert_rate(cur, body.date, body.rate)
+        return FxRateOut(currency=cur, date=body.date, rate=body.rate)
+
+    @app.get("/fx/{currency}", response_model=FxRateOut,
+             dependencies=[Depends(require_api_key)])
+    def fx_get(currency: str, as_of: str):
+        rate = fx_store.get(currency, as_of)
+        if rate is None:
+            raise HTTPException(404, f"no rate for {currency} as of {as_of}")
+        return FxRateOut(currency=currency.upper(), date=as_of, rate=rate)
+
+    @app.get("/portfolio/currency", response_model=TradeCurrencyOut,
+             dependencies=[Depends(require_api_key)])
+    def trade_currency_list():
+        return TradeCurrencyOut(map=ccy_map.all())
+
+    @app.post("/portfolio/currency", response_model=TradeCurrencyOut,
+              dependencies=[Depends(require_api_key)])
+    def trade_currency_set(body: TradeCurrencyIn):
+        if not any(t.id == body.trade_id for t in portfolio_store.trades()):
+            raise HTTPException(404, f"trade {body.trade_id} not found")
+        try:
+            ccy_map.set(body.trade_id, body.currency)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return TradeCurrencyOut(map=ccy_map.all())
+
+    @app.delete("/portfolio/currency/{trade_id}",
+                dependencies=[Depends(require_api_key)])
+    def trade_currency_remove(trade_id: str):
+        if not ccy_map.remove(trade_id):
+            raise HTTPException(404, "trade currency not set")
+        return {"removed": trade_id}
+
+    @app.get("/portfolio/converted", response_model=ConvertedTradesOut,
+             dependencies=[Depends(require_api_key)])
+    def portfolio_converted(base: str = "USD"):
+        if base.upper() != USD:
+            raise HTTPException(400, "only USD base currency supported")
+        trades = portfolio_store.trades()
+        audits = convert_trades(trades, ccy_map, fx_store, base=USD)
+        rows = [audit.to_dict() for audit in audits.values()]
+        total_base = sum(a["base_amount"] or 0.0 for a in rows)
+        total_fallback = sum(a["native_amount"] for a in rows if a["fallback"])
+        return ConvertedTradesOut(
+            base=USD,
+            audits=[ConversionAuditOut(**a) for a in rows],
+            total_base_cost=total_base,
+            total_fallback_native=total_fallback,
+        )
 
     return app
 

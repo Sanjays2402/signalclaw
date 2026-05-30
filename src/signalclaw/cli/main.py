@@ -15,7 +15,8 @@ from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatc
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
                           DrawdownConfig, DrawdownGuardStore, evaluate_guard,
-                          JournalEntry, JournalStore, conviction_stats)
+                          JournalEntry, JournalStore, conviction_stats,
+                          FxStore, TradeCurrencyMap, convert_trades, USD)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -826,6 +827,95 @@ def webhooks_fire_cmd():
     for r in results:
         console.print(f"  {r['url']} -> {r['status']} ({r['n_events']} events)"
                       + (f" err={r['error']}" if r['error'] else ""))
+
+
+@cli.group("fx")
+def fx_grp():
+    """Foreign exchange rates and trade currency mapping."""
+
+
+@fx_grp.command("set")
+@click.argument("currency")
+@click.argument("as_of")
+@click.argument("rate", type=float)
+def fx_set(currency, as_of, rate):
+    """Set USD-per-unit FX rate for CURRENCY on AS_OF."""
+    if rate <= 0:
+        console.print("[red]rate must be positive[/red]")
+        return
+    s = get_settings()
+    store = FxStore(s.data_dir / "fx")
+    store.upsert_rate(currency, as_of, rate)
+    console.print(f"set {currency.upper()} {as_of} = {rate:.6f} USD/unit")
+
+
+@fx_grp.command("get")
+@click.argument("currency")
+@click.argument("as_of")
+def fx_get_cmd(currency, as_of):
+    s = get_settings()
+    store = FxStore(s.data_dir / "fx")
+    rate = store.get(currency, as_of)
+    console.print(f"{currency.upper()} {as_of}: {rate}" if rate else
+                   f"no rate for {currency.upper()} as of {as_of}")
+
+
+@fx_grp.command("list")
+def fx_list_cmd():
+    s = get_settings()
+    store = FxStore(s.data_dir / "fx")
+    for c in store.currencies():
+        console.print(c)
+
+
+@fx_grp.command("assign")
+@click.argument("trade_id")
+@click.argument("currency")
+def fx_assign(trade_id, currency):
+    """Tag a trade with its native currency."""
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    if not any(t.id == trade_id for t in pstore.trades()):
+        console.print("[red]trade not found[/red]")
+        return
+    cmap = TradeCurrencyMap(s.data_dir / "trade_currency.json")
+    try:
+        cmap.set(trade_id, currency)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        return
+    console.print(f"{trade_id} -> {currency.upper()}")
+
+
+@fx_grp.command("convert")
+def fx_convert():
+    """Show all trades converted to USD using point-in-time FX rates."""
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    cmap = TradeCurrencyMap(s.data_dir / "trade_currency.json")
+    store = FxStore(s.data_dir / "fx")
+    audits = convert_trades(pstore.trades(), cmap, store, base=USD)
+    if not audits:
+        console.print("no trades")
+        return
+    table = Table(title="Trades converted to USD")
+    for c in ["trade_id", "ccy", "native", "rate", "rate_date", "USD", "fallback"]:
+        table.add_column(c)
+    total_base = 0.0
+    total_fb = 0.0
+    for a in audits.values():
+        table.add_row(a.trade_id, a.native_currency, f"{a.native_amount:.2f}",
+                       f"{a.rate:.4f}" if a.rate else "-",
+                       a.rate_date or "-",
+                       f"{a.base_amount:.2f}" if a.base_amount is not None else "-",
+                       "yes" if a.fallback else "")
+        if a.base_amount is not None:
+            total_base += a.base_amount
+        if a.fallback:
+            total_fb += a.native_amount
+    console.print(table)
+    console.print(f"total USD notional: ${total_base:.2f} | "
+                   f"unconverted (fallback): {total_fb:.2f} native units")
 
 
 def main():

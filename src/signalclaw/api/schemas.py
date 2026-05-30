@@ -452,3 +452,45 @@ class ConvictionBucketOut(BaseModel):
 
 class ConvictionStatsOut(BaseModel):
     buckets: List[ConvictionBucketOut]
+
+
+class FxRateOut(BaseModel):
+    currency: str
+    date: str
+    rate: float
+
+
+class FxListOut(BaseModel):
+    currencies: List[str]
+
+
+class FxRateIn(BaseModel):
+    currency: str
+    date: str
+    rate: float
+
+
+class TradeCurrencyIn(BaseModel):
+    trade_id: str
+    currency: str
+
+
+class TradeCurrencyOut(BaseModel):
+    map: dict
+
+
+class ConversionAuditOut(BaseModel):
+    trade_id: str
+    native_currency: str
+    native_amount: float
+    rate: Optional[float] = None
+    base_amount: Optional[float] = None
+    rate_date: Optional[str] = None
+    fallback: bool
+
+
+class ConvertedTradesOut(BaseModel):
+    base: str
+    audits: List[ConversionAuditOut]
+    total_base_cost: float
+    total_fallback_native: float

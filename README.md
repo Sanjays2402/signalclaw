@@ -73,6 +73,7 @@ Seeded from `MEMORY.md`: BTC-USD, SOXX, MSFT, FXAIX, TSLA, SPY.
 - Report history: daily reports auto-archived to data/reports, CLI + REST to list summaries, fetch any past report, and diff against a prior date (new/dropped/upgraded/downgraded picks and top score movers)
 - Drawdown guard: portfolio circuit breaker that tracks peak equity, trips when current drawdown exceeds a configured trigger, holds tripped state via re-arm hysteresis, and demotes new watch picks to hold while tripped (CLI + REST)
 - Trade journal: structured per-trade notes (thesis, conviction 1..5, tags, exit reason), JSON-backed store with filter-by-tag/conviction, realized P&L stats grouped by conviction bucket, CLI + REST
+- FX conversion: parquet-cached USD-per-unit daily rates with point-in-time lookup, per-trade currency assignment side-car, USD conversion of trade notionals with per-trade audit (rate, rate date, fallback flag), CLI + REST
 
 
 ## Enterprise scaffolding

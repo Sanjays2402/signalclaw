@@ -12,7 +12,7 @@ HEAD = {"x-api-key": "test-key"}
 
 @pytest.fixture()
 def isolated_app(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIGNALCLAW_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     from signalclaw.config import get_settings
     get_settings.cache_clear()  # type: ignore[attr-defined]
     from signalclaw.api import create_app

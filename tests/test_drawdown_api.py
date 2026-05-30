@@ -14,7 +14,7 @@ HEAD = {"x-api-key": "test-key"}
 
 @pytest.fixture()
 def isolated_app(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIGNALCLAW_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     # Provide a small synthetic cache for ticker SPY
     cache = tmp_path / "ohlcv"
     cache.mkdir(parents=True, exist_ok=True)

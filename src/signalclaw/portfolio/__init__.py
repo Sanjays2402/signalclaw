@@ -40,6 +40,17 @@ from .journal import (
     ConvictionBucketStat,
     conviction_stats,
 )
+from .fx import (
+    USD,
+    FxRate,
+    FxStore,
+    TradeCurrencyMap,
+    ConversionAudit,
+    convert_trade_amount,
+    convert_trades,
+    refresh_currency,
+    yfinance_fx_fetcher,
+)
 
 __all__ = [
     "Position",
@@ -84,4 +95,13 @@ __all__ = [
     "JournalStore",
     "ConvictionBucketStat",
     "conviction_stats",
+    "USD",
+    "FxRate",
+    "FxStore",
+    "TradeCurrencyMap",
+    "ConversionAudit",
+    "convert_trade_amount",
+    "convert_trades",
+    "refresh_currency",
+    "yfinance_fx_fetcher",
 ]
