@@ -50,6 +50,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
+from ..audit import AuditMiddleware, get_audit_log
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
@@ -90,6 +91,14 @@ def create_app() -> FastAPI:
                   description="NOT FINANCIAL ADVICE.")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(AccessLogMiddleware)
+    # Audit log: persist who/what/when for mutating + auth-failed requests.
+    # Sits inside CORS so it sees the real request status, including 401/403.
+    audit_log = get_audit_log(settings.data_dir / "audit")
+    app.add_middleware(
+        AuditMiddleware,
+        audit_log=audit_log,
+        audit_reads=os.environ.get("SIGNALCLAW_AUDIT_READS", "0") == "1",
+    )
     if os.environ.get("SIGNALCLAW_RATE_LIMIT_ENABLED", "0") == "1":
         app.add_middleware(
             RateLimitMiddleware,
@@ -127,6 +136,23 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health():
         return {"status": "ok", "ts": datetime.utcnow().isoformat()}
+
+    @app.get("/audit", dependencies=[Depends(require_scope("admin"))])
+    def audit_tail(limit: int = 100, day: str | None = None):
+        """Return recent audit events. Admin scope required.
+
+        ``day`` is a UTC ``YYYY-MM-DD`` string; defaults to today. The
+        log itself is append-only on disk under ``<data_dir>/audit/``.
+        """
+        limit = max(1, min(int(limit), 1000))
+        return {
+            "day": day or datetime.utcnow().strftime("%Y-%m-%d"),
+            "events": audit_log.tail(limit=limit, day=day),
+        }
+
+    @app.get("/audit/days", dependencies=[Depends(require_scope("admin"))])
+    def audit_days():
+        return {"days": audit_log.list_days()}
 
     @app.get("/disclaimer")
     def disclaimer():

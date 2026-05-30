@@ -265,6 +265,54 @@ Each slice can be capped at `max_participation` of bar volume; per-share slippag
 
 MIT. See `LICENSE`.
 
+## Operations
+
+Operational notes for running SignalClaw beyond a single laptop.
+
+### Audit log
+
+Every mutating API call (POST, PUT, PATCH, DELETE) and every authentication or
+authorization failure on a protected route is persisted to an append-only JSONL
+file under `<DATA_DIR>/audit/audit-YYYY-MM-DD.jsonl`. Files rotate daily by
+filename so they can be tailed, grepped, or shipped to a SIEM with standard
+tooling.
+
+Each record contains the request id, UTC timestamp, method, path, response
+status, source IP, request duration, and the API key's label plus a stable
+SHA-256 prefix as `actor_key_hash`. The raw key is never written. Request
+bodies and response payloads are never written.
+
+Query recent events over HTTP (admin scope required):
+
+```
+curl -H "x-api-key: $ADMIN_KEY" http://localhost:8000/audit?limit=100
+curl -H "x-api-key: $ADMIN_KEY" http://localhost:8000/audit/days
+curl -H "x-api-key: $ADMIN_KEY" "http://localhost:8000/audit?day=2026-05-30"
+```
+
+Flip on read-side auditing during incident response by setting
+`SIGNALCLAW_AUDIT_READS=1` and restarting the API. Health, docs, and metrics
+endpoints are always exempt.
+
+Clients can supply `x-request-id`; the value is echoed back on the response and
+recorded in the audit row so logs across the stack can be correlated. When the
+header is absent the middleware mints a 16-char id.
+
+Retention is operator-controlled. A simple cron is sufficient:
+
+```
+find "$DATA_DIR/audit" -name 'audit-*.jsonl' -mtime +90 -delete
+```
+
+### Deployment, scaling, backup, on-call
+
+Deployment is described in `infra/helm/signalclaw` (chart with values) and
+`infra/docker/Dockerfile.api`. Scale the API horizontally; rate limits and the
+audit log are both per-process safe and append-only, so there is no shared
+write contention. Back up `DATA_DIR` (parquet, JSON stores, audit/) on the
+same cadence as your other stateful volumes. On-call playbook lives under
+`docs/playbook.md`.
+
 ---
 
 Not investment advice. Paper-trading and research use only. See `FINANCIAL_DISCLAIMER.md`.
