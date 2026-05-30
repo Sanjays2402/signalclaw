@@ -10,13 +10,30 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   }, []);
   if (ok) return <>{children}</>;
   return (
-    <div className="max-w-sm mx-auto mt-20 panel p-6">
-      <h2 className="text-lg font-semibold mb-3">Sign in</h2>
-      <p className="muted text-sm mb-4">Enter SIGNALCLAW_API_KEY from your backend .env</p>
-      <input value={val} onChange={e=>setVal(e.target.value)} type="password" placeholder="api key"
-        className="w-full bg-black/40 border border-[var(--border)] rounded px-3 py-2 mb-3" />
-      <button onClick={()=>{localStorage.setItem("sc_api_key", val); setOk(true);}}
-        className="w-full bg-[var(--accent)] text-black font-medium rounded py-2">Unlock</button>
+    <div className="max-w-sm mx-auto mt-20 panel p-5">
+      <div className="muted text-[10px] uppercase tracking-widest mb-3">Sign in</div>
+      <h2 className="text-base font-semibold mb-3 mono">
+        SIGNAL<span style={{ color: "var(--amber)" }}>CLAW</span> terminal
+      </h2>
+      <p className="muted text-[11px] mb-4">
+        Paste SIGNALCLAW_API_KEY from backend .env.
+      </p>
+      <input
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        type="password"
+        placeholder="api key"
+        className="w-full bg-black/40 border border-[var(--border-strong)] rounded-sm px-2.5 py-1.5 mb-3 text-[12px] mono focus:outline-none focus:border-[var(--amber)]"
+      />
+      <button
+        onClick={() => {
+          localStorage.setItem("sc_api_key", val);
+          setOk(true);
+        }}
+        className="w-full bg-[var(--amber)] text-black font-semibold rounded-sm py-2 text-[11px] uppercase tracking-widest"
+      >
+        Unlock
+      </button>
     </div>
   );
 }
