@@ -6,6 +6,7 @@ from .pnl import (
     compute_position_pnl,
     compute_snapshot,
 )
+from .stops import StopRule, StopKind, StopEvent, StopStore, evaluate_rule, evaluate_rules
 
 __all__ = [
     "Position",
@@ -17,4 +18,10 @@ __all__ = [
     "PortfolioSnapshot",
     "compute_position_pnl",
     "compute_snapshot",
+    "StopRule",
+    "StopKind",
+    "StopEvent",
+    "StopStore",
+    "evaluate_rule",
+    "evaluate_rules",
 ]

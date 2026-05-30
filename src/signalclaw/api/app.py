@@ -15,11 +15,14 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut,
                        SizingOut, SizingRequest,
                        CorrelationMatrixOut, DiversificationOut,
-                       ReportSummaryOut, ReportHistoryOut, ReportDiffOut)
+                       ReportSummaryOut, ReportHistoryOut, ReportDiffOut,
+                       StopRuleIn, StopRuleOut, StopRuleListOut,
+                       StopEventOut, StopCheckOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
-from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
+from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
+                          StopRule, StopKind, StopStore, evaluate_rules)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -39,6 +42,7 @@ def create_app() -> FastAPI:
     store = WatchlistStore(wl_path)
     alert_store = AlertStore(settings.data_dir / "alerts.json")
     portfolio_store = PortfolioStore(settings.data_dir / "portfolio.json")
+    stops_store = StopStore(settings.data_dir / "stops.json")
     archive = ReportArchive(settings.data_dir / "reports")
 
     @app.get("/health")
@@ -255,6 +259,49 @@ def create_app() -> FastAPI:
         if snap is None:
             raise HTTPException(422, "insufficient history")
         return snap.to_dict()
+
+    @app.get("/stops", response_model=StopRuleListOut, dependencies=[Depends(require_api_key)])
+    def stops_list():
+        return StopRuleListOut(rules=[StopRuleOut(**r.to_dict()) for r in stops_store.list()])
+
+    @app.post("/stops", response_model=StopRuleOut, dependencies=[Depends(require_api_key)])
+    def stops_add(body: StopRuleIn):
+        try:
+            kind = StopKind(body.kind)
+        except ValueError:
+            raise HTTPException(400, f"invalid kind: {body.kind}")
+        if kind == StopKind.TRAILING and not (0 < body.value < 1):
+            raise HTTPException(400, "trailing value must be a fraction in (0, 1)")
+        if kind in (StopKind.STOP_LOSS, StopKind.TAKE_PROFIT) and body.value <= 0:
+            raise HTTPException(400, "price level must be positive")
+        rule = StopRule(ticker=body.ticker.upper(), kind=kind,
+                        value=float(body.value), note=body.note)
+        stops_store.add(rule)
+        return StopRuleOut(**rule.to_dict())
+
+    @app.delete("/stops/{rule_id}", dependencies=[Depends(require_api_key)])
+    def stops_remove(rule_id: str):
+        ok = stops_store.remove(rule_id)
+        if not ok:
+            raise HTTPException(404, "rule not found")
+        return {"ok": True}
+
+    @app.post("/stops/check", response_model=StopCheckOut, dependencies=[Depends(require_api_key)])
+    def stops_check():
+        rules = stops_store.list()
+        prices: dict = {}
+        for r in rules:
+            df = load_ohlcv(r.ticker)
+            if not df.empty and "close" in df.columns:
+                prices[r.ticker] = float(df["close"].iloc[-1])
+        events = evaluate_rules(rules, prices)
+        for r in rules:
+            if r.kind == StopKind.TRAILING:
+                stops_store.update(r)
+        return StopCheckOut(
+            checked=len(rules),
+            events=[StopEventOut(**e.to_dict()) for e in events],
+        )
 
     @app.get("/reports/history", response_model=ReportHistoryOut, dependencies=[Depends(require_api_key)])
     def reports_history(limit: int = 30):

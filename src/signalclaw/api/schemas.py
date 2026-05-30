@@ -192,3 +192,39 @@ class ReportDiffOut(BaseModel):
     downgraded: List[dict] = []
     score_changes: List[dict] = []
     unchanged: List[str] = []
+
+
+class StopRuleIn(BaseModel):
+    ticker: str
+    kind: str  # stop_loss | take_profit | trailing
+    value: float
+    note: str = ""
+
+
+class StopRuleOut(BaseModel):
+    id: str
+    ticker: str
+    kind: str
+    value: float
+    high_water: Optional[float] = None
+    armed_at: str
+    note: str = ""
+
+
+class StopRuleListOut(BaseModel):
+    rules: List[StopRuleOut]
+
+
+class StopEventOut(BaseModel):
+    rule_id: str
+    ticker: str
+    kind: str
+    trigger_price: float
+    reference_price: float
+    timestamp: str
+
+
+class StopCheckOut(BaseModel):
+    checked: int
+    events: List[StopEventOut]
+
