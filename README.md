@@ -642,6 +642,39 @@ pip-audit
 pytest -q
 ```
 
+### Production secret validation
+
+`Settings` runs a pydantic `model_validator` at boot that refuses to start the
+API when known-weak sample secrets survive into a production or staging
+rollout. The check is intentionally loud: if it triggers, the process exits
+with a `pydantic.ValidationError` listing every offending variable so the
+operator can see the full picture in one log line rather than chasing one
+failure at a time.
+
+Set the deployment environment with `SIGNALCLAW_ENV`. Accepted values are
+`development`, `test`, `staging`, and `production`. Anything else is
+rejected at parse time. Local boots default to `development` and skip the
+strict checks so workflows like `make api` and the test suite keep working
+without extra env wiring.
+
+When `SIGNALCLAW_ENV` is `staging` or `production`, all of the following
+must hold or the process refuses to boot:
+
+- `SIGNALCLAW_API_KEY` is not one of the sample values shipped in
+  `.env.example` (`change-me-local-dev-only`, `change-me`, `dev-key`, etc.)
+  and is at least 16 characters long.
+- `SIGNALCLAW_DASHBOARD_PASSWORD` is not a sample value and is at least 16
+  characters long.
+- `SENTRY_ENVIRONMENT` is not still `development` when `SENTRY_DSN` is set,
+  so errors are not mistagged.
+- `TELEGRAM_ENABLED=true` is accompanied by a non-empty `TELEGRAM_BOT_TOKEN`,
+  so delivery does not silently no-op.
+
+Generate a fresh API key with `openssl rand -hex 24` and store it in your
+secret manager of choice. Rotating a key is a single environment-variable
+change plus a pod restart; the legacy single-key path stays compatible with
+the RBAC registry described above.
+
 ---
 
 Not investment advice. Paper-trading and research use only. See `FINANCIAL_DISCLAIMER.md`.
