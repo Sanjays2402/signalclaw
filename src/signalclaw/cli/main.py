@@ -348,6 +348,41 @@ def portfolio_sectors_cmd(sector_cap, position_cap):
         console.print(f"[yellow]warn[/yellow] {w}")
 
 
+@portfolio_grp.command("tax")
+@click.option("--method", default="fifo",
+              type=click.Choice(["fifo", "lifo", "hifo", "avgco"]))
+@click.option("--wash-window", default=30, type=int)
+def portfolio_tax_cmd(method, wash_window):
+    """Realized P&L by lot method + wash-sale detection. NOT TAX ADVICE."""
+    from ..portfolio import tax_summary, LotMethod
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    rep = tax_summary(pstore.trades(), method=LotMethod(method),
+                      wash_window=wash_window)
+    table = Table(title=f"Realized events ({rep.method})")
+    for c in ["date", "ticker", "qty", "proceeds", "cost", "P&L", "hold(d)", "LT?"]:
+        table.add_column(c)
+    for ev in rep.events:
+        table.add_row(
+            ev.sell_date, ev.ticker, f"{ev.quantity:g}",
+            f"{ev.proceeds:.2f}", f"{ev.cost_basis:.2f}",
+            f"{ev.realized_pnl:.2f}",
+            str(ev.holding_days) if ev.holding_days is not None else "-",
+            "Y" if ev.long_term else ("N" if ev.long_term is False else "-"),
+        )
+    console.print(table)
+    console.print(f"total ${rep.realized_total:.2f} | "
+                  f"short ${rep.realized_short_term:.2f} | "
+                  f"long ${rep.realized_long_term:.2f}")
+    if rep.wash_sales:
+        console.print("[yellow]wash-sale flags[/yellow]")
+        for w in rep.wash_sales:
+            console.print(f"  {w.ticker} sell {w.sell_date} loss "
+                          f"${w.loss:.2f} <-> buy {w.triggering_buy_date} "
+                          f"({w.days_between}d)")
+    console.print("[dim]NOT TAX ADVICE. Verify with a CPA.[/dim]")
+
+
 @cli.command("size")
 @click.argument("ticker")
 @click.argument("label", type=click.Choice(["watch", "hold", "skip"]))

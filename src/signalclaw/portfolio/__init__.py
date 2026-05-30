@@ -15,6 +15,15 @@ from .sectors import (
     classify,
     sector_exposure,
 )
+from .tax import (
+    LotMethod,
+    RealizedEvent,
+    WashSaleFlag,
+    TaxReport,
+    compute_realized,
+    detect_wash_sales,
+    tax_summary,
+)
 
 __all__ = [
     "Position",
@@ -40,4 +49,11 @@ __all__ = [
     "DEFAULT_SECTOR_MAP",
     "classify",
     "sector_exposure",
+    "LotMethod",
+    "RealizedEvent",
+    "WashSaleFlag",
+    "TaxReport",
+    "compute_realized",
+    "detect_wash_sales",
+    "tax_summary",
 ]

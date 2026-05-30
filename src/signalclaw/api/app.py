@@ -20,13 +20,14 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        StopEventOut, StopCheckOut,
                        AttributionOut, TickerContributionOut,
                        EarningsIn, EarningsOut, EarningsListOut,
-                       ConcentrationOut, SectorExposureOut)
+                       ConcentrationOut, SectorExposureOut,
+                       TaxReportOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
-                          attribution, sector_exposure)
+                          attribution, sector_exposure, tax_summary, LotMethod)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -304,6 +305,16 @@ def create_app() -> FastAPI:
             sector_cap=sector_cap, position_cap=position_cap,
         )
         return ConcentrationOut(**rep.to_dict())
+
+    @app.get("/portfolio/tax", response_model=TaxReportOut, dependencies=[Depends(require_api_key)])
+    def portfolio_tax(method: str = "fifo", wash_window: int = 30):
+        try:
+            m = LotMethod(method.lower())
+        except ValueError:
+            raise HTTPException(400, f"unknown method {method}")
+        trades = portfolio_store.trades()
+        rep = tax_summary(trades, method=m, wash_window=wash_window)
+        return TaxReportOut(**rep.to_dict())
 
     @app.get("/regime", dependencies=[Depends(require_api_key)])
     def regime_endpoint(ticker: str = "SPY"):

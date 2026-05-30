@@ -274,6 +274,38 @@ class ConcentrationOut(BaseModel):
     unknown_tickers: List[str] = []
 
 
+class RealizedEventOut(BaseModel):
+    ticker: str
+    sell_trade_id: str
+    sell_date: str
+    quantity: float
+    proceeds: float
+    cost_basis: float
+    realized_pnl: float
+    lot_acquired: Optional[str] = None
+    holding_days: Optional[int] = None
+    long_term: Optional[bool] = None
+
+
+class WashSaleFlagOut(BaseModel):
+    ticker: str
+    sell_trade_id: str
+    sell_date: str
+    loss: float
+    triggering_buy_id: str
+    triggering_buy_date: str
+    days_between: int
+
+
+class TaxReportOut(BaseModel):
+    method: str
+    realized_total: float
+    realized_short_term: float
+    realized_long_term: float
+    events: List[RealizedEventOut]
+    wash_sales: List[WashSaleFlagOut]
+
+
 class EarningsIn(BaseModel):
     next_report: str
     confirmed: bool = False
