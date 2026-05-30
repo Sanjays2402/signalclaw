@@ -465,6 +465,38 @@ export type DeadLetter = {
 export type DeadLetterList = { items: DeadLetter[] };
 export type DlqReplay = { sent: number; kept: number; skipped: number };
 
+export type TaxEvent = {
+  ticker: string;
+  sell_trade_id: string;
+  sell_date: string;
+  quantity: number;
+  proceeds: number;
+  cost_basis: number;
+  realized_pnl: number;
+  lot_acquired: string | null;
+  holding_days: number | null;
+  long_term: boolean | null;
+};
+
+export type WashSale = {
+  ticker: string;
+  sell_trade_id: string;
+  sell_date: string;
+  loss: number;
+  triggering_buy_id: string;
+  triggering_buy_date: string;
+  days_between: number;
+};
+
+export type TaxReport = {
+  method: string;
+  events: TaxEvent[];
+  realized_total: number;
+  realized_short_term: number;
+  realized_long_term: number;
+  wash_sales: WashSale[];
+};
+
 // Back-compat aliases
 export type Report = DailyReport;
 export type Backtest = {

@@ -1,7 +1,6 @@
 "use client";
 import useSWR from "swr";
 import AuthGate from "@/components/AuthGate";
-import Sparkline from "@/components/Sparkline";
 import { Card, Badge, Loading, ErrorBox, Empty, fmtPct } from "@/components/ui";
 import { swrFetcher, type DailyReport, type Regime, type Pick } from "@/lib/api";
 import { Pulse, ShieldWarning, TrendUp, Eye, Prohibit, Lightning } from "@phosphor-icons/react/dist/ssr";
@@ -115,7 +114,6 @@ function PicksTable({ picks, riskScale }: { picks: Pick[]; riskScale: number }) 
             <th className="text-right pr-3">Score</th>
             <th className="text-right pr-3">Expected 5d</th>
             <th className="text-right pr-3">Regime adj</th>
-            <th className="pr-3">Spark</th>
             <th>Notes</th>
           </tr>
         </thead>
@@ -136,12 +134,6 @@ function PicksTable({ picks, riskScale }: { picks: Pick[]; riskScale: number }) 
               </td>
               <td className="num text-right pr-3 muted">
                 {fmtPct(p.expected_return * riskScale)}
-              </td>
-              <td className="pr-3">
-                <Sparkline
-                  data={Array.from({ length: 24 }, (_, i) => Math.sin(i / 3 + p.score))}
-                  color={p.label === "watch" ? "#00d68f" : p.label === "skip" ? "#ff4d6d" : "#8a8a93"}
-                />
               </td>
               <td className="muted text-xs">
                 {p.rationale}
