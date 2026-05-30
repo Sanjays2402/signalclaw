@@ -198,7 +198,7 @@ function StudyView({ s }: { s: EventStudy }) {
         </thead>
         <tbody>
           {horizons.map((h) => {
-            const k = `h${h}`;
+            const k = String(h);
             const st = s.overall[k];
             if (!st) return null;
             return (
@@ -224,7 +224,7 @@ function StudyView({ s }: { s: EventStudy }) {
           <div className="muted text-xs mb-1 uppercase tracking-wide">By tag</div>
           <ul className="space-y-1">
             {Object.entries(s.by_tag).map(([tg, hs]) => {
-              const first = hs[`h${horizons[0]}`];
+              const first = hs[String(horizons[0])];
               return (
                 <li key={tg} className="flex items-center justify-between text-xs">
                   <Badge tone="info">{tg}</Badge>
