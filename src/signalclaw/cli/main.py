@@ -22,6 +22,7 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           BracketPlan, BracketStore, compute_bracket_stats)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
+from ..rotation import sector_rotation
 from ..history import ReportArchive, diff_reports
 
 console = Console()
@@ -1115,6 +1116,52 @@ def brackets_export(out):
     from pathlib import Path as _P
     _P(out).write_text(text)
     console.print(f"wrote {out}")
+
+
+@cli.command("rotation")
+@click.option("--benchmark", default="SPY")
+@click.option("--lookback-short", default=21, type=int)
+@click.option("--lookback-mid", default=63, type=int)
+@click.option("--lookback-long", default=126, type=int)
+def rotation_cmd(benchmark, lookback_short, lookback_mid, lookback_long):
+    """Sector rotation: composite relative-strength score per sector."""
+    s = get_settings()
+    wl = WatchlistStore(s.data_dir / "watchlist.json").list() or default_watchlist()
+    if benchmark not in wl:
+        wl = list(wl) + [benchmark]
+    closes = {}
+    for t in wl:
+        try:
+            df = load_ohlcv(s.parquet_dir, t)
+            if df is not None and not df.empty:
+                closes[t] = df["close"]
+        except Exception:
+            continue
+    if benchmark not in closes:
+        console.print(f"[red]benchmark {benchmark} not cached; run `signalclaw ingest`[/red]")
+        return
+    try:
+        rep = sector_rotation(
+            closes, benchmark=benchmark,
+            lookbacks=(lookback_short, lookback_mid, lookback_long),
+        )
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        return
+    table = Table(title=f"Sector rotation vs {benchmark} (asof {rep.asof})")
+    for c in ["sector", "n", "1m", "3m", "6m", "slope", "breadth", "score", "call"]:
+        table.add_column(c)
+    for sc in rep.scores:
+        table.add_row(sc.sector, str(sc.n_tickers),
+                       f"{sc.ret_1m * 100:+.2f}%", f"{sc.ret_3m * 100:+.2f}%",
+                       f"{sc.ret_6m * 100:+.2f}%",
+                       f"{sc.rs_slope:+.5f}", f"{sc.breadth:.2f}",
+                       f"{sc.composite:.3f}", sc.call)
+    console.print(table)
+    if rep.skipped_unknown_sector:
+        console.print(f"[yellow]skipped (no sector): {', '.join(rep.skipped_unknown_sector)}[/yellow]")
+    if rep.skipped_short_history:
+        console.print(f"[yellow]skipped (short history): {', '.join(rep.skipped_short_history)}[/yellow]")
 
 
 def main():

@@ -36,7 +36,8 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        DeadLetterOut, DeadLetterListOut, DlqReplayOut,
                        NotifyTestIn,
                        BracketPlanIn, BracketFillIn, BracketCloseIn,
-                       BracketPlanOut, BracketListOut, BracketStatsOut)
+                       BracketPlanOut, BracketListOut, BracketStatsOut,
+                       SectorScoreOut, RotationOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -54,6 +55,7 @@ from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
                          replay_dlq, Notifier)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
+from ..rotation import sector_rotation
 from ..history import ReportArchive, diff_reports
 from ..webhooks import (WebhookStore, WebhookSubscription, diff_picks,
                          deliver_events, EVENT_KINDS)
@@ -301,6 +303,32 @@ def create_app() -> FastAPI:
                                        cluster_threshold=threshold)
         d = rep.to_dict()
         return DiversificationOut(**d)
+
+    @app.get("/rotation", response_model=RotationOut,
+             dependencies=[Depends(require_api_key)])
+    def rotation_endpoint(benchmark: str = "SPY",
+                          lookback_short: int = 21,
+                          lookback_mid: int = 63,
+                          lookback_long: int = 126,
+                          tickers: str | None = None):
+        if tickers:
+            tlist = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+        else:
+            tlist = store.list()
+        if benchmark not in tlist:
+            tlist = list(tlist) + [benchmark]
+        closes = _gather_closes(tlist)
+        if benchmark not in closes:
+            raise HTTPException(404, f"benchmark {benchmark} unavailable")
+        try:
+            rep = sector_rotation(
+                closes, benchmark=benchmark,
+                lookbacks=(lookback_short, lookback_mid, lookback_long),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        d = rep.to_dict()
+        return RotationOut(**d)
 
     @app.get("/portfolio/attribution", response_model=AttributionOut, dependencies=[Depends(require_api_key)])
     def portfolio_attribution(window: int = 60, benchmark: str = "SPY"):

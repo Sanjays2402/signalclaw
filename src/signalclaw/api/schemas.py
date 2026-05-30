@@ -582,3 +582,26 @@ class BracketStatsOut(BaseModel):
     avg_loss_r: float
     total_realized_pnl: float
     by_exit_reason: dict
+
+
+class SectorScoreOut(BaseModel):
+    sector: str
+    n_tickers: int
+    ret_1m: float
+    ret_3m: float
+    ret_6m: float
+    rs_slope: float
+    breadth: float
+    composite: float
+    call: str
+    members: List[str]
+
+
+class RotationOut(BaseModel):
+    benchmark: str
+    asof: str
+    overweight: List[str]
+    underweight: List[str]
+    scores: List[SectorScoreOut]
+    skipped_unknown_sector: List[str]
+    skipped_short_history: List[str]
