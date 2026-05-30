@@ -122,3 +122,32 @@ class PortfolioSnapshotOut(BaseModel):
     total_unrealized: float
     total_realized: float
     weights: dict
+
+
+class SizingOut(BaseModel):
+    ticker: str
+    price: float
+    atr: float
+    stop_loss: float
+    take_profit: float
+    risk_per_share: float
+    shares: int
+    dollar_size: float
+    weight: float
+    risk_amount: float
+    kelly_suggested: float
+    kelly_capped: float
+    cap_reason: str
+
+
+class SizingRequest(BaseModel):
+    ticker: str
+    label: str
+    score: float
+    equity: float = 100_000.0
+    risk_per_trade: float = 0.01
+    max_position_pct: float = 0.20
+    kelly_fraction: float = 0.25
+    kelly_cap: float = 0.10
+    atr_stop_mult: float = 2.0
+    atr_target_mult: float = 3.0

@@ -12,11 +12,13 @@ from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest
 from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut,
                        AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut,
-                       TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut)
+                       TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut,
+                       SizingOut, SizingRequest)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
+from ..risk import RiskConfig, size_pick
 
 
 def create_app() -> FastAPI:
@@ -160,6 +162,27 @@ def create_app() -> FastAPI:
                 last_prices[t] = float(df["close"].iloc[-1])
         snap = compute_snapshot(positions, last_prices, trades=portfolio_store.trades())
         return PortfolioSnapshotOut(**snap.to_dict())
+
+    @app.post("/risk/size", response_model=SizingOut, dependencies=[Depends(require_api_key)])
+    def risk_size(body: SizingRequest):
+        df = load_ohlcv(body.ticker.upper())
+        if df.empty:
+            df = fetch_ohlcv(body.ticker.upper(), period="1y")
+            if not df.empty:
+                save_ohlcv(body.ticker.upper(), df)
+        if df.empty:
+            raise HTTPException(404, "no data for ticker")
+        cfg = RiskConfig(
+            equity=body.equity,
+            risk_per_trade=body.risk_per_trade,
+            max_position_pct=body.max_position_pct,
+            kelly_fraction=body.kelly_fraction,
+            kelly_cap=body.kelly_cap,
+            atr_stop_mult=body.atr_stop_mult,
+            atr_target_mult=body.atr_target_mult,
+        )
+        res = size_pick(body.ticker.upper(), df, body.label, body.score, cfg)
+        return SizingOut(**res.to_dict())
 
     return app
 

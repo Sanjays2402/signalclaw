@@ -12,6 +12,8 @@ from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest
 from ..notifier import TelegramNotifier, DiscordNotifier
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatch_hits
+from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
+from ..risk import RiskConfig, size_pick
 
 console = Console()
 
@@ -277,7 +279,7 @@ def portfolio_show():
     positions = pstore.positions()
     last_prices = {}
     for t in positions:
-        df = _po_load_ohlcv(t)
+        df = load_ohlcv(t)
         if not df.empty and "close" in df.columns:
             last_prices[t] = float(df["close"].iloc[-1])
     snap = compute_snapshot(positions, last_prices, trades=pstore.trades())
@@ -297,6 +299,41 @@ def portfolio_show():
     console.print(f"total cost ${snap.total_cost:.2f} | market value ${snap.total_market_value:.2f}"
                   f" | unrealized ${snap.total_unrealized:.2f}"
                   f" | realized ${snap.total_realized:.2f}")
+
+
+@cli.command("size")
+@click.argument("ticker")
+@click.argument("label", type=click.Choice(["watch", "hold", "skip"]))
+@click.argument("score", type=float)
+@click.option("--equity", default=100_000.0, type=float)
+@click.option("--risk", default=0.01, type=float, help="risk per trade as fraction of equity")
+@click.option("--max-pct", default=0.20, type=float)
+def size_cmd(ticker, label, score, equity, risk, max_pct):
+    """Compute position size, stops, and target for a candidate pick."""
+    df = load_ohlcv(ticker.upper())
+    if df.empty:
+        df = fetch_ohlcv(ticker.upper(), period="1y")
+        if not df.empty:
+            save_ohlcv(ticker.upper(), df)
+    if df.empty:
+        console.print("no data")
+        return
+    cfg = RiskConfig(equity=equity, risk_per_trade=risk, max_position_pct=max_pct)
+    res = size_pick(ticker.upper(), df, label, score, cfg)
+    table = Table(title=f"Position sizing: {ticker.upper()} (NOT FINANCIAL ADVICE)")
+    table.add_column("field"); table.add_column("value")
+    table.add_row("price", f"{res.price:.2f}")
+    table.add_row("ATR(14)", f"{res.atr:.4f}")
+    table.add_row("stop loss", f"{res.stop_loss:.2f}")
+    table.add_row("take profit", f"{res.take_profit:.2f}")
+    table.add_row("shares", str(res.shares))
+    table.add_row("dollar size", f"{res.dollar_size:.2f}")
+    table.add_row("weight", f"{res.weight:.2%}")
+    table.add_row("risk amount", f"{res.risk_amount:.2f}")
+    table.add_row("kelly suggested", f"{res.kelly_suggested:.4f}")
+    table.add_row("kelly capped", f"{res.kelly_capped:.4f}")
+    table.add_row("binding constraint", res.cap_reason)
+    console.print(table)
 
 
 def main():
