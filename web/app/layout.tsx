@@ -30,6 +30,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <NavLink href="/risk">Risk</NavLink>
             <NavLink href="/rotation">Rotation</NavLink>
             <NavLink href="/reports">Reports</NavLink>
+            <NavLink href="/earnings">Earnings</NavLink>
+            <NavLink href="/news">News</NavLink>
+            <NavLink href="/webhooks">Webhooks</NavLink>
             <NavLink href="/about">About</NavLink>
           </nav>
         </header>

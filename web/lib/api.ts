@@ -273,6 +273,87 @@ export type Concentration = {
   unknown_tickers: string[];
 };
 
+export type Earnings = {
+  ticker: string;
+  next_report: string;
+  confirmed: boolean;
+  source: string;
+};
+export type EarningsIn = {
+  next_report: string;
+  confirmed?: boolean;
+  source?: string;
+};
+export type EarningsList = { rows: Earnings[] };
+
+export type NewsEvent = {
+  id: string;
+  ticker: string;
+  headline: string;
+  event_date: string;
+  tags: string[];
+  source: string;
+  url: string;
+  created_at: string;
+};
+export type NewsEventIn = {
+  ticker: string;
+  headline: string;
+  event_date: string;
+  tags?: string[];
+  source?: string;
+  url?: string;
+};
+export type NewsEventList = { events: NewsEvent[] };
+export type EventStats = {
+  n: number;
+  hit_rate: number;
+  mean: number;
+  median: number;
+  stdev: number;
+  min: number;
+  max: number;
+};
+export type EventStudy = {
+  n_events: number;
+  horizons: number[];
+  overall: Record<string, EventStats>;
+  by_tag: Record<string, Record<string, EventStats>>;
+  by_ticker: Record<string, Record<string, EventStats>>;
+};
+
+export type Webhook = {
+  id: string;
+  url: string;
+  events: string[];
+  tickers: string[];
+  secret: string;
+  enabled: boolean;
+  created_at: string;
+  last_status: number | null;
+  last_error: string | null;
+  last_delivered_at: string | null;
+};
+export type WebhookIn = {
+  url: string;
+  events?: string[];
+  tickers?: string[];
+  secret?: string;
+  enabled?: boolean;
+};
+export type WebhookList = { subscriptions: Webhook[] };
+export type WebhookDelivery = {
+  events: {
+    kind: string;
+    ticker: string;
+    as_of: string;
+    new_label?: string | null;
+    prior_label?: string | null;
+    score_delta?: number | null;
+  }[];
+  deliveries: Record<string, unknown>[];
+};
+
 // Back-compat aliases
 export type Report = DailyReport;
 export type Backtest = {
