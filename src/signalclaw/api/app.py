@@ -10,9 +10,10 @@ from ..utils import init_tracing
 from ..data import WatchlistStore, load_ohlcv, fetch_ohlcv, save_ohlcv
 from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest
-from .schemas import DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut
+from .schemas import DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut, AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
+from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 
 
 def create_app() -> FastAPI:
@@ -26,6 +27,7 @@ def create_app() -> FastAPI:
     app.add_middleware(AccessLogMiddleware)
     wl_path = settings.data_dir / "watchlist.json"
     store = WatchlistStore(wl_path)
+    alert_store = AlertStore(settings.data_dir / "alerts.json")
 
     @app.get("/health")
     def health():
@@ -73,6 +75,49 @@ def create_app() -> FastAPI:
             n_trades=bt.n_trades,
             equity_curve=[float(x) for x in bt.equity.tolist()],
             dates=[d.strftime("%Y-%m-%d") for d in bt.equity.index],
+        )
+
+    @app.get("/alerts", response_model=AlertListOut, dependencies=[Depends(require_api_key)])
+    def alerts_list(ticker: str | None = None):
+        rows = alert_store.list(ticker=ticker)
+        return AlertListOut(alerts=[AlertOut(**a.to_dict()) for a in rows])
+
+    @app.post("/alerts", response_model=AlertOut, dependencies=[Depends(require_api_key)])
+    def alerts_add(body: AlertIn):
+        try:
+            cond = AlertCondition(body.condition)
+        except ValueError:
+            raise HTTPException(400, f"unknown condition {body.condition}")
+        a = Alert(ticker=body.ticker.upper(), condition=cond, value=body.value,
+                  note=body.note, cooldown_hours=body.cooldown_hours,
+                  enabled=body.enabled)
+        alert_store.add(a)
+        return AlertOut(**a.to_dict())
+
+    @app.delete("/alerts/{alert_id}", dependencies=[Depends(require_api_key)])
+    def alerts_remove(alert_id: str):
+        ok = alert_store.remove(alert_id)
+        if not ok:
+            raise HTTPException(404, "alert not found")
+        return {"removed": alert_id}
+
+    @app.post("/alerts/check", response_model=AlertCheckOut, dependencies=[Depends(require_api_key)])
+    def alerts_check():
+        rows = alert_store.list()
+        ohlcv: dict = {}
+        for t in {a.ticker for a in rows}:
+            df = load_ohlcv(t)
+            if df.empty:
+                df = fetch_ohlcv(t, period="3mo")
+                if not df.empty:
+                    save_ohlcv(t, df)
+            ohlcv[t] = df
+        hits = evaluate_alerts(rows, ohlcv)
+        for a in rows:
+            alert_store.update(a)
+        return AlertCheckOut(
+            checked=len(rows),
+            hits=[AlertHitOut(**h.to_dict()) for h in hits],
         )
 
     return app

@@ -11,6 +11,7 @@ from ..data import WatchlistStore, fetch_ohlcv, save_ohlcv, load_ohlcv, default_
 from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest
 from ..notifier import TelegramNotifier, DiscordNotifier
+from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatch_hits
 
 console = Console()
 
@@ -121,6 +122,91 @@ def serve(host, port):
     """Run the API server."""
     import uvicorn
     uvicorn.run("signalclaw.api:app", host=host, port=port, log_level="info")
+
+
+@cli.group()
+def alerts():
+    """Manage price/indicator alerts."""
+
+
+@alerts.command("list")
+@click.option("--ticker", default=None)
+def alerts_list(ticker):
+    s = get_settings()
+    store = AlertStore(s.data_dir / "alerts.json")
+    rows = store.list(ticker=ticker)
+    if not rows:
+        console.print("(no alerts)")
+        return
+    table = Table(title="Alerts")
+    for c in ["id", "ticker", "condition", "value", "enabled", "cooldown_h", "last_fired", "note"]:
+        table.add_column(c)
+    for a in rows:
+        table.add_row(a.id, a.ticker, a.condition.value, str(a.value),
+                      str(a.enabled), str(a.cooldown_hours),
+                      a.last_fired_at or "-", a.note or "")
+    console.print(table)
+
+
+@alerts.command("add")
+@click.argument("ticker")
+@click.argument("condition", type=click.Choice([c.value for c in AlertCondition]))
+@click.argument("value")
+@click.option("--note", default="")
+@click.option("--cooldown-hours", default=12, type=int)
+def alerts_add(ticker, condition, value, note, cooldown_hours):
+    s = get_settings()
+    store = AlertStore(s.data_dir / "alerts.json")
+    cond = AlertCondition(condition)
+    val: float | str
+    if cond == AlertCondition.SIGNAL_LABEL:
+        val = str(value)
+    else:
+        val = float(value)
+    a = Alert(ticker=ticker.upper(), condition=cond, value=val,
+              note=note, cooldown_hours=cooldown_hours)
+    store.add(a)
+    console.print(f"added {a.id} {a.ticker} {a.condition.value} {a.value}")
+
+
+@alerts.command("remove")
+@click.argument("alert_id")
+def alerts_remove(alert_id):
+    s = get_settings()
+    store = AlertStore(s.data_dir / "alerts.json")
+    ok = store.remove(alert_id)
+    console.print("removed" if ok else "not found")
+
+
+@alerts.command("check")
+@click.option("--notify/--no-notify", default=False)
+def alerts_check(notify):
+    """Evaluate all alerts against latest cached OHLCV."""
+    s = get_settings()
+    store = AlertStore(s.data_dir / "alerts.json")
+    rows = store.list()
+    if not rows:
+        console.print("(no alerts)")
+        return
+    ohlcv = {}
+    for t in {a.ticker for a in rows}:
+        df = load_ohlcv(t)
+        if df.empty:
+            df = fetch_ohlcv(t, period="3mo")
+            if not df.empty:
+                save_ohlcv(t, df)
+        ohlcv[t] = df
+    hits = evaluate_alerts(rows, ohlcv)
+    for a in rows:
+        store.update(a)
+    if not hits:
+        console.print("no triggers")
+        return
+    for h in hits:
+        console.print(h.format())
+    if notify:
+        sent = dispatch_hits(hits, [TelegramNotifier(), DiscordNotifier()])
+        console.print(f"dispatched={sent}")
 
 
 def main():

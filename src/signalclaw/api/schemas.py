@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List
+from typing import List, Optional, Union
 from pydantic import BaseModel
 
 
@@ -36,3 +36,42 @@ class BacktestOut(BaseModel):
     n_trades: int
     equity_curve: List[float]
     dates: List[str]
+
+
+class AlertIn(BaseModel):
+    ticker: str
+    condition: str
+    value: Union[float, str]
+    note: str = ""
+    cooldown_hours: int = 12
+    enabled: bool = True
+
+
+class AlertOut(BaseModel):
+    id: str
+    ticker: str
+    condition: str
+    value: Union[float, str]
+    note: str = ""
+    cooldown_hours: int = 12
+    enabled: bool = True
+    last_fired_at: Optional[str] = None
+
+
+class AlertListOut(BaseModel):
+    alerts: List[AlertOut]
+
+
+class AlertHitOut(BaseModel):
+    alert_id: str
+    ticker: str
+    condition: str
+    value: Union[float, str]
+    observed: Union[float, str]
+    fired_at: str
+    note: str = ""
+
+
+class AlertCheckOut(BaseModel):
+    checked: int
+    hits: List[AlertHitOut]
