@@ -127,4 +127,14 @@ from .ledger import (
     accrue_daily_interest,
     snapshot as ledger_snapshot,
 )
+from .scaling import (
+    ScaleAction,
+    PlanStatus,
+    ScaleRung,
+    ScalingPlan,
+    ScaleEvent,
+    PriceBar,
+    ScalingPlanStore,
+    evaluate_plan,
+)
 

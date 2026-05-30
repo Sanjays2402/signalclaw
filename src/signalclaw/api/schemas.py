@@ -801,3 +801,60 @@ class AnomalyReportOut(BaseModel):
     n_anomalous: int
     rate: float
     anomalies: List[AnomalyOut]
+
+
+class ScaleRungIn(BaseModel):
+    r_multiple: float
+    action: str                  # add | trim
+    size_fraction: float
+    new_stop_r: Optional[float] = None
+
+
+class ScalingPlanIn(BaseModel):
+    ticker: str
+    entry: float
+    initial_stop: float
+    initial_shares: int
+    rungs: List[ScaleRungIn]
+
+
+class ScalingPlanOut(BaseModel):
+    plan_id: str
+    ticker: str
+    entry: float
+    initial_stop: float
+    initial_shares: int
+    status: str
+    triggered: List[int]
+    rungs: List[ScaleRungIn]
+
+
+class ScalingPlanListOut(BaseModel):
+    plans: List[ScalingPlanOut]
+
+
+class ScaleBarIn(BaseModel):
+    index: int
+    high: float
+    low: float
+
+
+class ScaleEvaluateIn(BaseModel):
+    bars: List[ScaleBarIn]
+
+
+class ScaleEventOut(BaseModel):
+    plan_id: str
+    ticker: str
+    rung_index: int
+    action: str
+    trigger_price: float
+    bar_index: int
+    shares: int
+    new_stop: Optional[float] = None
+    r_multiple: float
+
+
+class ScaleEvaluateOut(BaseModel):
+    plan: ScalingPlanOut
+    events: List[ScaleEventOut]

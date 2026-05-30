@@ -43,7 +43,10 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        ExecSimulateIn, ExecReportOut, ExecFillOut,
                        LedgerEntryIn, LedgerEntryOut, LedgerListOut,
                        MarginConfigIn, MarginConfigOut, AccountSnapshotOut,
-                       AnomalyOut, AnomalyReportOut)
+                       AnomalyOut, AnomalyReportOut,
+                       ScalingPlanIn, ScalingPlanOut, ScalingPlanListOut,
+                       ScaleRungIn, ScaleBarIn, ScaleEvaluateIn,
+                       ScaleEventOut, ScaleEvaluateOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -57,7 +60,9 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           FxStore, TradeCurrencyMap, convert_trades, USD,
                           BracketPlan, BracketStore, compute_bracket_stats,
                           LedgerStore, LedgerEntry, EntryKind, MarginConfig,
-                          ledger_snapshot)
+                          ledger_snapshot,
+                          ScalingPlan, ScaleRung, ScaleAction, PlanStatus,
+                          PriceBar, ScalingPlanStore, evaluate_plan)
 from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
                          DeadLetterQueue, RetryPolicy, send_with_retry,
                          replay_dlq, Notifier)
@@ -107,6 +112,7 @@ def create_app() -> FastAPI:
     ccy_map = TradeCurrencyMap(settings.data_dir / "trade_currency.json")
     dlq = DeadLetterQueue(settings.data_dir / "notifier_dlq.json")
     ledger_store = LedgerStore(settings.data_dir / "ledger.json")
+    scaling_store = ScalingPlanStore(settings.data_dir / "scaling.json")
 
     def _notifier_for(channel: str) -> Notifier | None:
         c = (channel or "").lower()
@@ -510,6 +516,78 @@ def create_app() -> FastAPI:
             n_anomalous=rep.n_anomalous,
             rate=rep.rate,
             anomalies=[AnomalyOut(**a.to_dict()) for a in rep.anomalies],
+        )
+
+    def _plan_to_out(p: ScalingPlan) -> ScalingPlanOut:
+        return ScalingPlanOut(
+            plan_id=p.plan_id, ticker=p.ticker,
+            entry=p.entry, initial_stop=p.initial_stop,
+            initial_shares=p.initial_shares,
+            status=p.status.value, triggered=list(p.triggered),
+            rungs=[ScaleRungIn(
+                r_multiple=r.r_multiple, action=r.action.value,
+                size_fraction=r.size_fraction, new_stop_r=r.new_stop_r,
+            ) for r in p.rungs],
+        )
+
+    @app.get("/scaling/plans", response_model=ScalingPlanListOut,
+             dependencies=[Depends(require_api_key)])
+    def scaling_list():
+        return ScalingPlanListOut(plans=[_plan_to_out(p)
+                                          for p in scaling_store.list()])
+
+    @app.post("/scaling/plans", response_model=ScalingPlanOut,
+              dependencies=[Depends(require_api_key)])
+    def scaling_create(body: ScalingPlanIn):
+        try:
+            rungs = [ScaleRung(
+                r_multiple=r.r_multiple,
+                action=ScaleAction(r.action.lower()),
+                size_fraction=r.size_fraction,
+                new_stop_r=r.new_stop_r,
+            ) for r in body.rungs]
+            plan = ScalingPlan(
+                ticker=body.ticker, entry=body.entry,
+                initial_stop=body.initial_stop,
+                initial_shares=body.initial_shares,
+                rungs=rungs,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        scaling_store.upsert(plan)
+        return _plan_to_out(plan)
+
+    @app.delete("/scaling/plans/{plan_id}",
+                dependencies=[Depends(require_api_key)])
+    def scaling_delete(plan_id: str):
+        if not scaling_store.delete(plan_id):
+            raise HTTPException(404, "plan not found")
+        return {"ok": True}
+
+    @app.post("/scaling/plans/{plan_id}/cancel", response_model=ScalingPlanOut,
+              dependencies=[Depends(require_api_key)])
+    def scaling_cancel(plan_id: str):
+        if not scaling_store.cancel(plan_id):
+            raise HTTPException(404, "plan not found")
+        return _plan_to_out(scaling_store.get(plan_id))
+
+    @app.post("/scaling/plans/{plan_id}/evaluate",
+              response_model=ScaleEvaluateOut,
+              dependencies=[Depends(require_api_key)])
+    def scaling_evaluate(plan_id: str, body: ScaleEvaluateIn):
+        plan = scaling_store.get(plan_id)
+        if plan is None:
+            raise HTTPException(404, "plan not found")
+        try:
+            bars = [PriceBar(index=b.index, high=b.high, low=b.low)
+                    for b in body.bars]
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        events, new_plan = evaluate_plan(plan, bars)
+        scaling_store.upsert(new_plan)
+        return ScaleEvaluateOut(
+            plan=_plan_to_out(new_plan),
+            events=[ScaleEventOut(**e.to_dict()) for e in events],
         )
 
     @app.get("/rotation", response_model=RotationOut,
