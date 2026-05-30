@@ -1,18 +1,194 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:7431";
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const key = typeof window !== "undefined"
-    ? (localStorage.getItem("sc_api_key") || "")
-    : (process.env.SIGNALCLAW_API_KEY || "");
-  const r = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", "x-api-key": key, ...(init.headers || {}) },
-    cache: "no-store",
-  });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  return r.json();
+export class ApiError extends Error {
+  status: number;
+  body: string;
+  constructor(status: number, body: string) {
+    super(`${status} ${body || "request failed"}`);
+    this.status = status;
+    this.body = body;
+  }
 }
 
-export type Pick = { ticker: string; label: string; score: number; expected_return: number; rationale: string; risk_flags: string[]; };
-export type Report = { as_of: string; picks: Pick[]; disclaimer: string; };
-export type Backtest = { ticker: string; sharpe: number; sortino: number; max_drawdown: number; hit_rate: number; cagr: number; n_trades: number; equity_curve: number[]; dates: string[]; };
+function apiKey(): string {
+  if (typeof window !== "undefined") return localStorage.getItem("sc_api_key") || "";
+  return process.env.SIGNALCLAW_API_KEY || "";
+}
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey(),
+      ...(init.headers || {}),
+    },
+    cache: "no-store",
+  });
+  const txt = await r.text();
+  if (!r.ok) throw new ApiError(r.status, txt);
+  return txt ? (JSON.parse(txt) as T) : (undefined as T);
+}
+
+export const swrFetcher = <T,>(path: string) => api<T>(path);
+
+// Types
+export type Pick = {
+  ticker: string;
+  label: string;
+  score: number;
+  expected_return: number;
+  rationale: string;
+  risk_flags: string[];
+};
+export type DailyReport = { as_of: string; picks: Pick[]; disclaimer: string };
+
+export type Regime = {
+  label: string;
+  as_of: string;
+  realized_vol: number;
+  trend_slope: number;
+  drawdown: number;
+  confidence: number;
+  risk_scale: number;
+};
+
+export type Position = {
+  ticker: string;
+  quantity: number;
+  avg_cost: number;
+  last_price: number | null;
+  market_value: number;
+  cost: number;
+  unrealized_pnl: number;
+  unrealized_pct: number;
+  realized_pnl: number;
+};
+export type PortfolioSnapshot = {
+  positions: Position[];
+  total_cost: number;
+  total_market_value: number;
+  total_unrealized: number;
+  total_realized: number;
+  weights: Record<string, number>;
+};
+
+export type Contribution = {
+  ticker: string;
+  weight: number;
+  period_return: number;
+  contribution: number;
+};
+export type Attribution = {
+  benchmark: string;
+  window: number;
+  portfolio_return: number;
+  benchmark_return: number;
+  excess_return: number;
+  alpha_daily: number;
+  alpha_annualized: number;
+  beta: number;
+  tracking_error_annualized: number;
+  information_ratio: number;
+  r_squared: number;
+  contributions: Contribution[];
+};
+
+export type DrawdownState = {
+  as_of: string;
+  equity: number;
+  peak: number;
+  peak_date: string;
+  drawdown: number;
+  tripped: boolean;
+  reason: string;
+};
+export type DrawdownConfig = { trigger: number; rearm: number; min_history_days: number };
+export type DrawdownReport = {
+  state: DrawdownState;
+  config: DrawdownConfig;
+  equity_curve: { date: string; equity: number }[];
+};
+
+export type Alert = {
+  id: string;
+  ticker: string;
+  condition: string;
+  value: number | string;
+  note: string;
+  cooldown_hours: number;
+  enabled: boolean;
+  last_fired_at: string | null;
+};
+export type AlertIn = {
+  ticker: string;
+  condition: string;
+  value: number | string;
+  note?: string;
+  cooldown_hours?: number;
+  enabled?: boolean;
+};
+
+export type Bracket = {
+  id: string;
+  ticker: string;
+  side: string;
+  entry: number;
+  stop: number;
+  target: number;
+  shares: number;
+  status: string;
+  note: string;
+  created_at: string;
+  updated_at: string;
+  actual_entry: number | null;
+  filled_at: string | null;
+  actual_exit: number | null;
+  exit_reason: string | null;
+  closed_at: string | null;
+  risk_per_share: number;
+  reward_per_share: number;
+  planned_r_multiple: number;
+  planned_risk_dollars: number;
+  realized_r: number | null;
+  realized_pnl: number | null;
+};
+export type BracketIn = {
+  ticker: string;
+  side?: string;
+  entry: number;
+  stop: number;
+  target: number;
+  shares: number;
+  note?: string;
+};
+export type BracketStats = {
+  total: number;
+  open: number;
+  filled: number;
+  closed: number;
+  cancelled: number;
+  win_rate: number;
+  avg_r: number;
+  median_r: number;
+  expectancy: number;
+};
+
+export type JournalEntry = {
+  trade_id: string;
+  thesis: string;
+  conviction: number;
+  tags: string[];
+  exit_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+export type JournalEntryIn = {
+  trade_id: string;
+  thesis?: string;
+  conviction?: number;
+  tags?: string[];
+  exit_reason?: string | null;
+};
+
+export type FxRate = { currency: string; date: string; rate: number };

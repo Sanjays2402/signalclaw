@@ -1,5 +1,6 @@
 import "./globals.css";
 import type { ReactNode } from "react";
+import NavLink from "@/components/NavLink";
 
 export const metadata = {
   title: "SignalClaw",
@@ -10,19 +11,23 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-screen">
-        <header className="border-b border-[var(--border)] px-4 py-3 flex items-center justify-between">
+        <header className="border-b border-[var(--border)] px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <span className="font-bold tracking-tight">SignalClaw</span>
-            <span className="muted text-xs">v0.1 dark</span>
+            <span className="muted text-xs">v0.2</span>
           </div>
-          <nav className="flex gap-4 text-sm">
-            <a href="/" className="hover:text-white">Today</a>
-            <a href="/watchlist" className="hover:text-white">Watchlist</a>
-            <a href="/backtest" className="hover:text-white">Backtest</a>
-            <a href="/about" className="hover:text-white">About</a>
+          <nav className="flex flex-wrap gap-1 text-sm">
+            <NavLink href="/">Today</NavLink>
+            <NavLink href="/portfolio">Portfolio</NavLink>
+            <NavLink href="/watchlist">Watchlist</NavLink>
+            <NavLink href="/alerts">Alerts</NavLink>
+            <NavLink href="/brackets">Brackets</NavLink>
+            <NavLink href="/journal">Journal</NavLink>
+            <NavLink href="/backtest">Backtest</NavLink>
+            <NavLink href="/about">About</NavLink>
           </nav>
         </header>
-        <main className="p-4">{children}</main>
+        <main className="p-4 md:p-6">{children}</main>
         <footer className="border-t border-[var(--border)] px-4 py-3 text-xs muted">
           NOT FINANCIAL ADVICE. SignalClaw is a personal research tool. See FINANCIAL_DISCLAIMER.md.
         </footer>

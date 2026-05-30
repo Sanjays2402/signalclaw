@@ -1,6 +1,6 @@
 {
   "name": "signalclaw-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 7430",
@@ -12,7 +12,11 @@
     "next": "15.0.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "lightweight-charts": "4.2.0"
+    "lightweight-charts": "4.2.0",
+    "recharts": "2.13.3",
+    "@phosphor-icons/react": "2.1.7",
+    "swr": "2.2.5",
+    "clsx": "2.1.1"
   },
   "devDependencies": {
     "@types/node": "22",
