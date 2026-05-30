@@ -45,7 +45,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .request_context import RequestContextMiddleware
-from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware
+from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
 from ..privacy import StoreBundle, collect_user_data, erase_user_data
@@ -126,6 +126,21 @@ def create_app() -> FastAPI:
     # want the old permissive behaviour.
     if os.environ.get("SIGNALCLAW_RBAC_ENFORCE", "1") == "1":
         app.add_middleware(ScopeEnforcementMiddleware)
+    # Per-IP DoS guard. Added last so it executes first in the
+    # middleware chain, shedding floods before auth, audit, or
+    # per-key buckets see them. Enabled by default with a generous
+    # cap; tune via SIGNALCLAW_PER_IP_PER_MIN. Set to 0 to disable.
+    _per_ip = int(os.environ.get("SIGNALCLAW_PER_IP_PER_MIN", "600"))
+    if _per_ip > 0:
+        _trust_xff = os.environ.get("SIGNALCLAW_TRUST_FORWARDED", "0") == "1"
+        _trusted_raw = os.environ.get("SIGNALCLAW_TRUSTED_PROXIES", "").strip()
+        _trusted = tuple(p.strip() for p in _trusted_raw.split(",") if p.strip())
+        app.add_middleware(
+            PerIPRateLimitMiddleware,
+            per_minute=_per_ip,
+            trust_forwarded=_trust_xff,
+            trusted_proxies=_trusted,
+        )
     wl_path = settings.data_dir / "watchlist.json"
     store = WatchlistStore(wl_path)
     alert_store = AlertStore(settings.data_dir / "alerts.json")

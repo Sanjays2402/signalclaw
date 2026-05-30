@@ -445,6 +445,45 @@ the event appears in the Sentry project under the configured
 `SENTRY_ENVIRONMENT`. The startup log line `sentry.enabled` confirms
 the SDK initialised inside the pod.
 
+### Per-IP rate limiting (DoS guard)
+
+A separate `PerIPRateLimitMiddleware` sits outside the per-API-key limiter
+so a flood from a single source is shed before auth, audit, or the per-key
+buckets see it. The shared `anon` bucket that the per-key limiter uses for
+unauthenticated traffic would otherwise be a single chokepoint under abuse;
+the per-IP layer keys off the client address so one noisy source cannot
+starve every other anonymous caller.
+
+Tunables (all env, no restart-time discovery):
+
+| Var | Default | Effect |
+| --- | --- | --- |
+| `SIGNALCLAW_PER_IP_PER_MIN` | `600` | Token-bucket capacity and refill in requests per minute per source IP. Set to `0` to disable the layer entirely (not recommended for any public exposure). |
+| `SIGNALCLAW_TRUST_FORWARDED` | `0` | When `1`, parse the leftmost entry of `X-Forwarded-For` (or `X-Real-IP` as a fallback) so the bucket keys off the real client behind a reverse proxy. Off by default so a direct attacker cannot spoof the header. |
+| `SIGNALCLAW_TRUSTED_PROXIES` | empty | Comma-separated allowlist of peer IPs whose forwarded headers will be honoured. When `SIGNALCLAW_TRUST_FORWARDED=1` and this list is empty, any peer is trusted (use only when the API is never reachable except through a known L7 proxy). |
+
+Exceeded buckets return HTTP 429 with `Retry-After`, an `X-RateLimit-Scope:
+per-ip` header, and a JSON body `{"detail":"per-ip rate limit exceeded",
+"scope":"per-ip","retry_after_seconds":N}`. Health, readiness, docs, and
+`/metrics` are exempt so probes and scrapers are never throttled.
+
+Deployment notes:
+
+- Behind nginx or an ingress controller, set `SIGNALCLAW_TRUST_FORWARDED=1`
+  and pin `SIGNALCLAW_TRUSTED_PROXIES` to the proxy pod IPs. Without that,
+  every request looks like it came from the proxy and the whole cluster
+  shares one bucket.
+- The per-IP layer composes with the existing per-key limiter
+  (`SIGNALCLAW_RATE_LIMIT_ENABLED=1`): per-IP fires first, per-key fires
+  after, and a request must clear both. Tune `SIGNALCLAW_PER_IP_PER_MIN`
+  higher than the sum of per-key budgets you expect from a single source.
+- Buckets live in-process. With multiple API replicas, each pod enforces
+  its own bucket, so the effective ceiling is `replicas * per_minute`.
+  That is fine as a DoS guard; for strict global quotas use the per-key
+  budgets backed by your gateway.
+
+Coverage lives in `tests/test_per_ip_rate_limit.py`.
+
 ### Deployment, scaling, backup, on-call
 
 Deployment is described in `infra/helm/signalclaw` (chart with values) and

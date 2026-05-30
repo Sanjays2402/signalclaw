@@ -224,6 +224,112 @@ class TokenBucket:
         return False, max(1.0, wait)
 
 
+def client_ip_from_request(
+    request: Request,
+    trusted_proxies: Iterable[str] = (),
+    trust_forwarded: bool = False,
+) -> str:
+    """Resolve the real client IP for rate limiting.
+
+    By default we use the immediate peer address from ``request.client``
+    so a malicious caller cannot spoof ``X-Forwarded-For`` to dodge
+    per-IP buckets. When ``trust_forwarded`` is true and the peer is in
+    ``trusted_proxies`` (or the list is empty meaning "trust the proxy
+    that already terminated TLS in front of us"), the leftmost entry of
+    ``X-Forwarded-For`` wins, matching the convention used by nginx,
+    Envoy, and most ingress controllers.
+    """
+    peer = request.client.host if request.client else ""
+    if not trust_forwarded:
+        return peer or "unknown"
+    trusted = tuple(trusted_proxies)
+    if trusted and peer not in trusted:
+        return peer or "unknown"
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    real = request.headers.get("x-real-ip", "").strip()
+    if real:
+        return real
+    return peer or "unknown"
+
+
+class PerIPRateLimitMiddleware(BaseHTTPMiddleware):
+    """DoS-style per-source-IP token bucket.
+
+    Sits in front of the per-key limiter so that a flood of anonymous
+    or auth-failing requests from a single source cannot exhaust the
+    shared ``anon`` bucket or burn CPU on auth checks. Buckets are
+    keyed by client IP only (route class is not split) because the
+    intent here is coarse abuse control, not per-route shaping.
+
+    Tunables:
+
+    * ``per_minute`` -- bucket capacity and refill rate (req / min / ip)
+    * ``trust_forwarded`` -- when true, parse ``X-Forwarded-For`` so the
+      bucket keys off the real client behind a reverse proxy. Off by
+      default so a direct attacker cannot spoof the header.
+    * ``trusted_proxies`` -- optional allowlist of peer IPs whose
+      ``X-Forwarded-For`` will be honoured. Empty + ``trust_forwarded``
+      true means "any peer" (use only when the API is never reachable
+      except through a known L7 proxy).
+    """
+
+    def __init__(self, app, per_minute: int = 600,
+                 trust_forwarded: bool = False,
+                 trusted_proxies: Iterable[str] = (),
+                 exempt_paths: Iterable[str] = (
+                     "/health", "/ready", "/metrics", "/disclaimer",
+                     "/docs", "/openapi.json", "/redoc",
+                     "/docs/oauth2-redirect",
+                 )) -> None:
+        super().__init__(app)
+        self.per_minute = max(1, int(per_minute))
+        self.trust_forwarded = bool(trust_forwarded)
+        self.trusted_proxies = tuple(trusted_proxies)
+        self.exempt = tuple(exempt_paths)
+        self._lock = threading.Lock()
+        self._buckets: Dict[str, TokenBucket] = {}
+
+    def _bucket(self, ip: str) -> TokenBucket:
+        with self._lock:
+            b = self._buckets.get(ip)
+            if b is None:
+                b = TokenBucket(
+                    capacity=float(self.per_minute),
+                    refill_per_sec=self.per_minute / 60.0,
+                    tokens=float(self.per_minute),
+                )
+                self._buckets[ip] = b
+            return b
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path == p or path.startswith(p + "/") for p in self.exempt):
+            return await call_next(request)
+        ip = client_ip_from_request(
+            request,
+            trusted_proxies=self.trusted_proxies,
+            trust_forwarded=self.trust_forwarded,
+        )
+        bucket = self._bucket(ip)
+        allowed, retry = bucket.take(1.0)
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                headers={
+                    "Retry-After": str(int(retry)),
+                    "X-RateLimit-Scope": "per-ip",
+                },
+                content={"detail": "per-ip rate limit exceeded",
+                         "retry_after_seconds": int(retry),
+                         "scope": "per-ip"},
+            )
+        return await call_next(request)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Per-key + per-route-class token bucket.
 
