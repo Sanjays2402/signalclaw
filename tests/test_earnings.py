@@ -3,9 +3,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 from typing import List
-import json
 
-import pytest
 
 from signalclaw.earnings import EarningsDate, EarningsStore, apply_blackout
 

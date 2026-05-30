@@ -4,9 +4,8 @@ Lots are recorded individually so realized P&L uses FIFO cost basis.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
-from datetime import date as _date, datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import uuid
 
 

@@ -1,4 +1,5 @@
-import numpy as np, pandas as pd
+import numpy as np
+import pandas as pd
 from hypothesis import given, strategies as st, settings as hsettings
 from signalclaw.features import build_features
 

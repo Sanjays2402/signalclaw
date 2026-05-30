@@ -1,4 +1,3 @@
-from pathlib import Path
 from signalclaw.data.universe import WatchlistStore, default_watchlist
 
 

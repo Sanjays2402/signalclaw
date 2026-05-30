@@ -5,7 +5,7 @@ import io
 import json
 import threading
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 from .position import Trade, TradeSide, Position, apply_trades
 

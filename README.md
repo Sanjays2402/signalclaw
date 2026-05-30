@@ -534,6 +534,37 @@ The shape of the image (multi-stage, non-root, wheel install, healthcheck,
 tini entrypoint) is enforced by `tests/test_docker_api_image.py` so a
 regression in any of those properties breaks CI before it ships.
 
+### Lint and dependency audit
+
+The `ci` workflow gates merges on three Python jobs in addition to the
+web build:
+
+- `lint` runs `ruff check .` against the entire repo using the config
+  in `pyproject.toml` (`[tool.ruff]`). The selected rule set is
+  pyflakes plus a focused slice of pycodestyle (`F`, `E4`, `E7`, `E9`,
+  `W6`) with per-file ignores for `__init__.py` re-exports and tests.
+  Local contributors get the same gate from `pytest`: `tests/test_lint_ruff.py`
+  shells out to `ruff check .` and fails the suite when it finds new
+  violations. The test is skipped, not failed, when `ruff` is missing
+  so a minimal runtime install still passes.
+- `test` depends on `lint` and runs the full `pytest -q` suite, so a
+  lint regression short-circuits the slower test job and saves runner
+  minutes.
+- `security-audit` runs `pip-audit --strict` against the installed
+  dependency tree. It is marked `continue-on-error: true` so newly
+  disclosed advisories surface as a CI warning instead of an outage,
+  with the expectation that on-call triages the advisory the same day
+  and either pins around it or adds it to the ignore list with a
+  link to the upstream fix PR.
+
+Run the same gate locally before pushing:
+
+```
+ruff check .
+pip-audit
+pytest -q
+```
+
 ---
 
 Not investment advice. Paper-trading and research use only. See `FINANCIAL_DISCLAIMER.md`.

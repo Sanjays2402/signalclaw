@@ -1,7 +1,6 @@
 from __future__ import annotations
 import json
 import click
-from datetime import date
 from rich.console import Console
 from rich.table import Table
 
@@ -24,7 +23,7 @@ from ..risk import RiskConfig, size_pick, CostModel, OrderRequest, simulate_orde
 from ..correlation import correlation_matrix, diversification_warnings
 from ..rotation import sector_rotation
 from ..news_events import NewsEvent, NewsEventStore, event_study, events_to_csv
-from ..history import ReportArchive, diff_reports
+from ..history import ReportArchive
 
 console = Console()
 

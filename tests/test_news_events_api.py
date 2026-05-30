@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
-import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -46,7 +45,7 @@ def test_create_list_remove():
     r = c.get("/news-events", headers=HEAD)
     assert any(e["id"] == eid for e in r.json()["events"])
 
-    r = c.get(f"/news-events?ticker=AAPL", headers=HEAD)
+    r = c.get("/news-events?ticker=AAPL", headers=HEAD)
     assert len(r.json()["events"]) == 1
 
     r = c.delete(f"/news-events/{eid}", headers=HEAD)

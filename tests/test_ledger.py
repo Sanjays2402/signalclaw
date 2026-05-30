@@ -1,5 +1,4 @@
 from __future__ import annotations
-import json
 import pytest
 from signalclaw.portfolio.ledger import (
     LedgerEntry, EntryKind, MarginConfig, AccountState, LedgerStore,

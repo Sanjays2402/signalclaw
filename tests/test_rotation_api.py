@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("SIGNALCLAW_API_KEY", "test-key")
 from signalclaw.api import app
-from signalclaw.config import get_settings
 
 HEAD = {"x-api-key": "test-key"}
 

@@ -146,7 +146,6 @@ def size_pick(
     )
     if kelly_dollars <= 0 or label.lower() == "skip":
         shares = 0
-        dollar_size = 0.0
         risk_amount = 0.0
         cap_reason = "no_edge" if label.lower() != "skip" else "skip_label"
     else:
@@ -156,11 +155,8 @@ def size_pick(
             shares = 0
             cap_reason = "below_min"
         else:
-            dollar_size = shares * price
-            risk_amount = shares * risk_per_share
             if shares == shares_by_kelly and shares_by_kelly < shares_from_risk:
                 cap_reason = "kelly_cap"
-        dollar_size = shares * price
         risk_amount = shares * risk_per_share
 
     weight = (shares * price) / cfg.equity if cfg.equity > 0 else 0.0

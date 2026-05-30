@@ -1,8 +1,4 @@
-import json
-import tempfile
-from pathlib import Path
 
-import pytest
 
 from signalclaw.webhooks import (
     diff_picks, PickEvent, WebhookStore, WebhookSubscription,

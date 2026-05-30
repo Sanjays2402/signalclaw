@@ -1,7 +1,6 @@
 from __future__ import annotations
 import os
 from datetime import datetime
-from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -20,16 +19,12 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        ReportSummaryOut, ReportHistoryOut, ReportDiffOut,
                        StopRuleIn, StopRuleOut, StopRuleListOut,
                        StopEventOut, StopCheckOut,
-                       AttributionOut, TickerContributionOut,
-                       EarningsIn, EarningsOut, EarningsListOut,
-                       ConcentrationOut, SectorExposureOut,
-                       TaxReportOut,
-                       OptFoldOut, OptResultOut,
+                       AttributionOut, EarningsIn, EarningsOut, EarningsListOut,
+                       ConcentrationOut, TaxReportOut,
+                       OptResultOut,
                        WebhookIn, WebhookOut, WebhookListOut,
                        PickEventOut, WebhookDeliveryOut,
-                       DrawdownReportOut, DrawdownConfigIn,
-                       DrawdownStateOut, DrawdownConfigOut,
-                       JournalEntryIn, JournalEntryOut, JournalListOut,
+                       DrawdownReportOut, JournalEntryIn, JournalEntryOut, JournalListOut,
                        ConvictionBucketOut, ConvictionStatsOut,
                        FxRateIn, FxRateOut, FxListOut,
                        TradeCurrencyIn, TradeCurrencyOut,
@@ -38,15 +33,14 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        NotifyTestIn,
                        BracketPlanIn, BracketFillIn, BracketCloseIn,
                        BracketPlanOut, BracketListOut, BracketStatsOut,
-                       SectorScoreOut, RotationOut,
+                       RotationOut,
                        NewsEventIn, NewsEventOut, NewsEventListOut, EventStudyOut,
                        CostModelIn, PretradeIn, PretradeOut,
-                       ExecSimulateIn, ExecReportOut, ExecFillOut,
-                       LedgerEntryIn, LedgerEntryOut, LedgerListOut,
+                       ExecSimulateIn, ExecReportOut, LedgerEntryIn, LedgerEntryOut, LedgerListOut,
                        MarginConfigIn, MarginConfigOut, AccountSnapshotOut,
                        AnomalyOut, AnomalyReportOut,
                        ScalingPlanIn, ScalingPlanOut, ScalingPlanListOut,
-                       ScaleRungIn, ScaleBarIn, ScaleEvaluateIn,
+                       ScaleRungIn, ScaleEvaluateIn,
                        ScaleEventOut, ScaleEvaluateOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
@@ -66,8 +60,7 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           BracketPlan, BracketStore, compute_bracket_stats,
                           LedgerStore, LedgerEntry, EntryKind, MarginConfig,
                           ledger_snapshot,
-                          ScalingPlan, ScaleRung, ScaleAction, PlanStatus,
-                          PriceBar, ScalingPlanStore, evaluate_plan)
+                          ScalingPlan, ScaleRung, ScaleAction, PriceBar, ScalingPlanStore, evaluate_plan)
 from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
                          DeadLetterQueue, RetryPolicy, send_with_retry,
                          replay_dlq, Notifier)
@@ -78,7 +71,7 @@ from ..execution import (IntradayBar, ParentOrder, ScheduleKind,
 from ..correlation import correlation_matrix, diversification_warnings
 from ..rotation import sector_rotation
 from ..news_events import NewsEvent, NewsEventStore, event_study
-from ..history import ReportArchive, diff_reports
+from ..history import ReportArchive
 from ..webhooks import (WebhookStore, WebhookSubscription, diff_picks,
                          deliver_events, EVENT_KINDS)
 from ..regime import detect_regime

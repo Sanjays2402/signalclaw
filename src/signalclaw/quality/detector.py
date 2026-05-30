@@ -1,6 +1,6 @@
 """OHLCV anomaly detection."""
 from __future__ import annotations
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import List, Tuple
 import math
 import numpy as np

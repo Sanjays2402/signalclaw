@@ -4,7 +4,7 @@ Captures every attempt to either succeed-and-return, or fall through and
 enqueue the message to a dead-letter queue for later replay.
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional

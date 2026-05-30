@@ -3,14 +3,36 @@ on:
   push: { branches: [main] }
   pull_request: { branches: [main] }
 jobs:
-  test:
+  lint:
     if: ${{ vars.ENABLE_CI == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
+      - run: pip install ruff==0.15.11
+      - run: ruff check .
+  security-audit:
+    if: ${{ vars.ENABLE_CI == 'true' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true  # advisories should warn, not block, until triaged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install pip-audit
       - run: pip install -e .
+      - run: pip-audit --strict --ignore-vuln GHSA-4xh5-x5gv-qwph
+  test:
+    if: ${{ vars.ENABLE_CI == 'true' }}
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e .
+      - run: pip install ruff==0.15.11
       - run: pytest -q
   web:
     if: ${{ vars.ENABLE_CI == 'true' }}

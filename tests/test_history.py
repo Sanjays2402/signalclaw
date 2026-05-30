@@ -1,7 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
 
-import pytest
 
 from signalclaw.engine.daily import DailyReport, DailyPick
 from signalclaw.history import ReportArchive, diff_reports

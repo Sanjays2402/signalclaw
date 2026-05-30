@@ -44,3 +44,23 @@ packages = ["src/signalclaw"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["web", "data", "infra", "docs", "scripts"]
+
+[tool.ruff.lint]
+# Pragmatic baseline: pyflakes + a focused subset of pycodestyle.
+# Bugbear, pyupgrade, etc. are deliberately off for now to keep the
+# gate green on the existing codebase. Tighten over time.
+select = ["F", "E4", "E7", "E9", "W6"]
+ignore = [
+  "E402",  # module-level import not at top of file (tests do conditional skips)
+  "E702",  # multiple statements on one line; tolerated in compact test setup
+  "E741",  # ambiguous variable names (l, I) appear in math-heavy code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # re-export shims
+"tests/*" = ["F401", "F841"]

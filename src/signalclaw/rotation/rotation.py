@@ -22,7 +22,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from ..portfolio.sectors import classify, DEFAULT_SECTOR_MAP
+from ..portfolio.sectors import DEFAULT_SECTOR_MAP
 
 
 DEFAULT_BENCHMARK = "SPY"

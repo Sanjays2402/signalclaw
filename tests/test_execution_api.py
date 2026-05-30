@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 from fastapi.testclient import TestClient
 from signalclaw.api.app import create_app
 

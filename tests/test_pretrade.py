@@ -6,7 +6,6 @@ import pytest
 from signalclaw.risk import (
     CostModel,
     OrderRequest,
-    OrderSimulation,
     simulate_order,
 )
 

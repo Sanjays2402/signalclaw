@@ -11,7 +11,7 @@ constant time without any market-data dependency.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, List
 
 
 VALID_SIDES = ("long", "short")

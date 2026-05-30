@@ -1,8 +1,6 @@
 """API tests for drawdown guard endpoints."""
 from __future__ import annotations
 import os
-import tempfile
-from pathlib import Path
 
 import pandas as pd
 import pytest

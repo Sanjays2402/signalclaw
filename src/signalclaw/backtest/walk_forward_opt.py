@@ -23,14 +23,14 @@ in scoring the chosen params.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from itertools import product
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
-from .metrics import sharpe, max_drawdown, hit_rate, cagr
+from .metrics import sharpe, max_drawdown, hit_rate
 from .costs import TransactionCostModel
 
 

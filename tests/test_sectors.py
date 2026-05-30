@@ -1,4 +1,4 @@
-from signalclaw.portfolio import sector_exposure, classify, DEFAULT_SECTOR_MAP
+from signalclaw.portfolio import sector_exposure, classify
 
 
 def test_classify_known_ticker():

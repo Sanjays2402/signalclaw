@@ -1,6 +1,7 @@
-import numpy as np, pandas as pd
+import numpy as np
+import pandas as pd
 from hypothesis import given, strategies as st, settings as hsettings
-from signalclaw.features.technical import rsi, macd, bollinger_bands, atr, obv, sma, ema
+from signalclaw.features.technical import rsi, macd, bollinger_bands, atr, obv, sma
 
 
 def _series(n=200, seed=0):

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,7 @@ _KEYS_JSON = json.dumps([
 
 from signalclaw.api import create_app  # noqa: E402
 from signalclaw.api.rate_limit import reset_registry, get_registry  # noqa: E402
-from signalclaw.audit import AuditLog, reset_audit_log, get_audit_log  # noqa: E402
+from signalclaw.audit import AuditLog, reset_audit_log  # noqa: E402
 from signalclaw.audit.log import AuditEvent, _hash_key  # noqa: E402
 from signalclaw.config import settings as settings_mod  # noqa: E402
 

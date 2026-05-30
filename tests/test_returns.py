@@ -1,5 +1,6 @@
-import numpy as np, pandas as pd
-from signalclaw.features.returns import log_returns, simple_returns, rolling_volatility, volatility_regime
+import numpy as np
+import pandas as pd
+from signalclaw.features.returns import log_returns, rolling_volatility, volatility_regime
 
 
 def test_log_returns_zero_for_flat():

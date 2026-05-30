@@ -8,7 +8,7 @@ and flags margin calls when equity falls below maintenance requirements.
 Pure functions over a small JSON-backed store. No market data fetched.
 """
 from __future__ import annotations
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional

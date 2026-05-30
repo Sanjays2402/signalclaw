@@ -1,7 +1,7 @@
 from __future__ import annotations
 import pandas as pd
 from .technical import rsi, macd, bollinger_bands, atr, obv, sma, ema
-from .returns import log_returns, simple_returns, rolling_volatility, volatility_regime
+from .returns import simple_returns, rolling_volatility, volatility_regime
 
 FEATURE_COLUMNS = [
     "rsi14", "macd", "macd_signal", "macd_hist",

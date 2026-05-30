@@ -9,16 +9,16 @@ Pure functions: no I/O. The caller supplies trades, price history, and
 config. Persistence of the guard's last decision is handled by GuardStore.
 """
 from __future__ import annotations
-from dataclasses import dataclass, asdict, field
-from datetime import date as _date, datetime, timezone
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Sequence
 import json
 import threading
 
 import pandas as pd
 
-from .position import Trade, TradeSide, apply_trades
+from .position import Trade, TradeSide
 
 
 @dataclass(frozen=True)
