@@ -518,3 +518,67 @@ class DlqReplayOut(BaseModel):
 class NotifyTestIn(BaseModel):
     channel: str  # slack | telegram | discord
     text: str = "SignalClaw test"
+
+
+class BracketPlanIn(BaseModel):
+    ticker: str
+    side: str = "long"
+    entry: float
+    stop: float
+    target: float
+    shares: int
+    note: str = ""
+
+
+class BracketFillIn(BaseModel):
+    actual_entry: float
+
+
+class BracketCloseIn(BaseModel):
+    actual_exit: float
+    reason: str
+
+
+class BracketPlanOut(BaseModel):
+    id: str
+    ticker: str
+    side: str
+    entry: float
+    stop: float
+    target: float
+    shares: int
+    status: str
+    note: str
+    created_at: str
+    updated_at: str
+    actual_entry: Optional[float] = None
+    filled_at: Optional[str] = None
+    actual_exit: Optional[float] = None
+    exit_reason: Optional[str] = None
+    closed_at: Optional[str] = None
+    risk_per_share: float
+    reward_per_share: float
+    planned_r_multiple: float
+    planned_risk_dollars: float
+    realized_r: Optional[float] = None
+    realized_pnl: Optional[float] = None
+
+
+class BracketListOut(BaseModel):
+    plans: List[BracketPlanOut]
+
+
+class BracketStatsOut(BaseModel):
+    total: int
+    open: int
+    filled: int
+    closed: int
+    cancelled: int
+    win_rate: float
+    avg_r: float
+    median_r: float
+    expectancy: float
+    avg_win_r: float
+    avg_loss_r: float
+    total_realized_pnl: float
+    by_exit_reason: dict

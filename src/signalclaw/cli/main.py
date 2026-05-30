@@ -18,7 +18,8 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
                           DrawdownConfig, DrawdownGuardStore, evaluate_guard,
                           JournalEntry, JournalStore, conviction_stats,
-                          FxStore, TradeCurrencyMap, convert_trades, USD)
+                          FxStore, TradeCurrencyMap, convert_trades, USD,
+                          BracketPlan, BracketStore, compute_bracket_stats)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -990,6 +991,130 @@ def notifier_clear_cmd():
     s = get_settings()
     DeadLetterQueue(s.data_dir / "notifier_dlq.json").clear()
     console.print("cleared")
+
+
+@cli.group("brackets")
+def brackets_grp():
+    """Bracket order plans: entry/stop/target with realized R tracking."""
+
+
+@brackets_grp.command("add")
+@click.argument("ticker")
+@click.option("--side", type=click.Choice(["long", "short"]), default="long")
+@click.option("--entry", required=True, type=float)
+@click.option("--stop", required=True, type=float)
+@click.option("--target", required=True, type=float)
+@click.option("--shares", required=True, type=int)
+@click.option("--note", default="")
+def brackets_add(ticker, side, entry, stop, target, shares, note):
+    s = get_settings()
+    store = BracketStore(s.data_dir / "brackets.json")
+    try:
+        plan = BracketPlan(ticker=ticker, side=side, entry=entry, stop=stop,
+                            target=target, shares=shares, note=note)
+    except ValueError as e:
+        console.print(f"[red]invalid:[/red] {e}")
+        return
+    store.add(plan)
+    console.print(f"{plan.id}  {plan.ticker} {plan.side} {plan.shares}@{plan.entry} "
+                   f"stop={plan.stop} target={plan.target} R={plan.planned_r_multiple:.2f}")
+
+
+@brackets_grp.command("list")
+@click.option("--ticker", default=None)
+@click.option("--status", default=None,
+              type=click.Choice(["open", "filled", "closed", "cancelled"]))
+def brackets_list(ticker, status):
+    s = get_settings()
+    store = BracketStore(s.data_dir / "brackets.json")
+    rows = store.list(ticker=ticker, status=status)
+    if not rows:
+        console.print("no plans")
+        return
+    table = Table(title="Bracket plans")
+    for c in ["id", "ticker", "side", "shares", "entry", "stop", "target",
+              "planned R", "status", "realized R", "exit"]:
+        table.add_column(c)
+    for p in rows:
+        rr = p.realized_r()
+        table.add_row(p.id, p.ticker, p.side, str(p.shares),
+                       f"{p.entry:g}", f"{p.stop:g}", f"{p.target:g}",
+                       f"{p.planned_r_multiple:.2f}", p.status,
+                       ("" if rr is None else f"{rr:.2f}"),
+                       (p.exit_reason or ""))
+    console.print(table)
+
+
+@brackets_grp.command("fill")
+@click.argument("plan_id")
+@click.option("--price", required=True, type=float)
+def brackets_fill(plan_id, price):
+    s = get_settings()
+    store = BracketStore(s.data_dir / "brackets.json")
+    try:
+        p = store.fill(plan_id, actual_entry=price)
+    except (KeyError, ValueError) as e:
+        console.print(f"[red]{e}[/red]")
+        return
+    console.print(f"filled {p.id} @ {p.actual_entry}")
+
+
+@brackets_grp.command("close")
+@click.argument("plan_id")
+@click.option("--price", required=True, type=float)
+@click.option("--reason", required=True,
+              type=click.Choice(["stop", "target", "manual", "expiry", "other"]))
+def brackets_close(plan_id, price, reason):
+    s = get_settings()
+    store = BracketStore(s.data_dir / "brackets.json")
+    try:
+        p = store.close(plan_id, actual_exit=price, reason=reason)
+    except (KeyError, ValueError) as e:
+        console.print(f"[red]{e}[/red]")
+        return
+    rr = p.realized_r() or 0.0
+    console.print(f"closed {p.id} @ {p.actual_exit}  realized R={rr:.2f}")
+
+
+@brackets_grp.command("cancel")
+@click.argument("plan_id")
+def brackets_cancel(plan_id):
+    s = get_settings()
+    store = BracketStore(s.data_dir / "brackets.json")
+    try:
+        p = store.cancel(plan_id)
+    except (KeyError, ValueError) as e:
+        console.print(f"[red]{e}[/red]")
+        return
+    console.print(f"cancelled {p.id}")
+
+
+@brackets_grp.command("remove")
+@click.argument("plan_id")
+def brackets_remove(plan_id):
+    s = get_settings()
+    store = BracketStore(s.data_dir / "brackets.json")
+    ok = store.remove(plan_id)
+    console.print("removed" if ok else "not found")
+
+
+@brackets_grp.command("stats")
+def brackets_stats():
+    s = get_settings()
+    store = BracketStore(s.data_dir / "brackets.json")
+    stats = compute_bracket_stats(store.list())
+    console.print(json.dumps(stats.to_dict(), indent=2))
+
+
+@brackets_grp.command("export")
+@click.option("--out", default="brackets.csv")
+def brackets_export(out):
+    s = get_settings()
+    store = BracketStore(s.data_dir / "brackets.json")
+    text = store.export_csv()
+    from pathlib import Path as _P
+    _P(out).write_text(text)
+    console.print(f"wrote {out}")
 
 
 def main():

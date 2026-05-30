@@ -34,7 +34,9 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        TradeCurrencyIn, TradeCurrencyOut,
                        ConversionAuditOut, ConvertedTradesOut,
                        DeadLetterOut, DeadLetterListOut, DlqReplayOut,
-                       NotifyTestIn)
+                       NotifyTestIn,
+                       BracketPlanIn, BracketFillIn, BracketCloseIn,
+                       BracketPlanOut, BracketListOut, BracketStatsOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -45,7 +47,8 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           DrawdownConfig, DrawdownGuardStore, evaluate_guard,
                           filter_picks as drawdown_filter_picks,
                           JournalEntry, JournalStore, conviction_stats,
-                          FxStore, TradeCurrencyMap, convert_trades, USD)
+                          FxStore, TradeCurrencyMap, convert_trades, USD,
+                          BracketPlan, BracketStore, compute_bracket_stats)
 from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
                          DeadLetterQueue, RetryPolicy, send_with_retry,
                          replay_dlq, Notifier)
@@ -84,6 +87,7 @@ def create_app() -> FastAPI:
     drawdown_store = DrawdownGuardStore(settings.data_dir / "drawdown_guard.json")
     journal_store = JournalStore(settings.data_dir / "journal.json")
     fx_store = FxStore(settings.data_dir / "fx")
+    bracket_store = BracketStore(settings.data_dir / "brackets.json")
     ccy_map = TradeCurrencyMap(settings.data_dir / "trade_currency.json")
     dlq = DeadLetterQueue(settings.data_dir / "notifier_dlq.json")
 
@@ -661,6 +665,82 @@ def create_app() -> FastAPI:
         if not journal_store.remove(trade_id):
             raise HTTPException(404, "journal entry not found")
         return {"removed": trade_id}
+
+    @app.get("/brackets", response_model=BracketListOut,
+             dependencies=[Depends(require_api_key)])
+    def brackets_list(ticker: str | None = None, status: str | None = None):
+        try:
+            rows = bracket_store.list(ticker=ticker, status=status)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return BracketListOut(plans=[BracketPlanOut(**p.to_dict()) for p in rows])
+
+    @app.post("/brackets", response_model=BracketPlanOut,
+              dependencies=[Depends(require_api_key)])
+    def brackets_create(body: BracketPlanIn):
+        try:
+            plan = BracketPlan(
+                ticker=body.ticker, side=body.side, entry=body.entry,
+                stop=body.stop, target=body.target, shares=body.shares,
+                note=body.note,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        bracket_store.add(plan)
+        return BracketPlanOut(**plan.to_dict())
+
+    @app.get("/brackets/stats", response_model=BracketStatsOut,
+             dependencies=[Depends(require_api_key)])
+    def brackets_stats_ep():
+        stats = compute_bracket_stats(bracket_store.list())
+        return BracketStatsOut(**stats.to_dict())
+
+    @app.get("/brackets/{plan_id}", response_model=BracketPlanOut,
+             dependencies=[Depends(require_api_key)])
+    def brackets_get(plan_id: str):
+        p = bracket_store.get(plan_id)
+        if p is None:
+            raise HTTPException(404, "bracket plan not found")
+        return BracketPlanOut(**p.to_dict())
+
+    @app.delete("/brackets/{plan_id}", dependencies=[Depends(require_api_key)])
+    def brackets_remove(plan_id: str):
+        if not bracket_store.remove(plan_id):
+            raise HTTPException(404, "bracket plan not found")
+        return {"removed": plan_id}
+
+    @app.post("/brackets/{plan_id}/fill", response_model=BracketPlanOut,
+              dependencies=[Depends(require_api_key)])
+    def brackets_fill_ep(plan_id: str, body: BracketFillIn):
+        try:
+            p = bracket_store.fill(plan_id, actual_entry=body.actual_entry)
+        except KeyError:
+            raise HTTPException(404, "bracket plan not found")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return BracketPlanOut(**p.to_dict())
+
+    @app.post("/brackets/{plan_id}/close", response_model=BracketPlanOut,
+              dependencies=[Depends(require_api_key)])
+    def brackets_close_ep(plan_id: str, body: BracketCloseIn):
+        try:
+            p = bracket_store.close(plan_id, actual_exit=body.actual_exit, reason=body.reason)
+        except KeyError:
+            raise HTTPException(404, "bracket plan not found")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return BracketPlanOut(**p.to_dict())
+
+    @app.post("/brackets/{plan_id}/cancel", response_model=BracketPlanOut,
+              dependencies=[Depends(require_api_key)])
+    def brackets_cancel_ep(plan_id: str):
+        try:
+            p = bracket_store.cancel(plan_id)
+        except KeyError:
+            raise HTTPException(404, "bracket plan not found")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return BracketPlanOut(**p.to_dict())
 
     @app.get("/fx", response_model=FxListOut, dependencies=[Depends(require_api_key)])
     def fx_list():
