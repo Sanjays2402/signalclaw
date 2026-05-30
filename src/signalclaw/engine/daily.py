@@ -11,6 +11,7 @@ from ..features import build_features
 from ..models import WatchHoldSkipClassifier, ReturnRegressor, Ensemble, make_labels
 from ..sentiment import SentimentScorer
 from ..explain import rationale_for, risk_flags
+from ..regime import detect_regime
 
 log = get_logger(__name__)
 
@@ -32,9 +33,14 @@ class DailyPick:
 class DailyReport:
     as_of: str
     picks: List[DailyPick] = field(default_factory=list)
+    regime: dict | None = None
 
     def to_dict(self) -> dict:
-        return {"as_of": self.as_of, "picks": [p.to_dict() for p in self.picks]}
+        return {
+            "as_of": self.as_of,
+            "picks": [p.to_dict() for p in self.picks],
+            "regime": self.regime,
+        }
 
 
 def _prepare_one(ticker: str, refresh: bool, scorer: SentimentScorer) -> tuple[pd.DataFrame, pd.Series]:
@@ -89,4 +95,21 @@ def run_daily(tickers: List[str] | None = None, refresh: bool = True) -> DailyRe
         except Exception as e:  # noqa
             log.warning("daily.ticker.fail", ticker=t, err=str(e))
     picks.sort(key=lambda p: p.score, reverse=True)
-    return DailyReport(as_of=date.today().isoformat(), picks=picks)
+    regime_dict = None
+    for probe in (["SPY"] + list(tickers)):
+        try:
+            pdf = load_ohlcv(probe)
+            if pdf.empty:
+                continue
+            snap = detect_regime(pdf["close"])
+            if snap is not None:
+                regime_dict = snap.to_dict()
+                for p in picks:
+                    if snap.label.value in ("bear", "crash"):
+                        flag = "regime:" + snap.label.value
+                        if flag not in p.risk_flags:
+                            p.risk_flags.append(flag)
+                break
+        except Exception:  # noqa
+            continue
+    return DailyReport(as_of=date.today().isoformat(), picks=picks, regime=regime_dict)

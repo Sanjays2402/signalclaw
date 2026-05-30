@@ -14,13 +14,16 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut,
                        TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut,
                        SizingOut, SizingRequest,
-                       CorrelationMatrixOut, DiversificationOut)
+                       CorrelationMatrixOut, DiversificationOut,
+                       ReportSummaryOut, ReportHistoryOut, ReportDiffOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
+from ..history import ReportArchive, diff_reports
+from ..regime import detect_regime
 
 
 def create_app() -> FastAPI:
@@ -36,6 +39,7 @@ def create_app() -> FastAPI:
     store = WatchlistStore(wl_path)
     alert_store = AlertStore(settings.data_dir / "alerts.json")
     portfolio_store = PortfolioStore(settings.data_dir / "portfolio.json")
+    archive = ReportArchive(settings.data_dir / "reports")
 
     @app.get("/health")
     def health():
@@ -237,6 +241,54 @@ def create_app() -> FastAPI:
                                        cluster_threshold=threshold)
         d = rep.to_dict()
         return DiversificationOut(**d)
+
+    @app.get("/regime", dependencies=[Depends(require_api_key)])
+    def regime_endpoint(ticker: str = "SPY"):
+        df = load_ohlcv(ticker)
+        if df.empty:
+            df = fetch_ohlcv(ticker, period="3y")
+            if not df.empty:
+                save_ohlcv(ticker, df)
+        if df.empty or "close" not in df.columns:
+            raise HTTPException(404, "no data")
+        snap = detect_regime(df["close"])
+        if snap is None:
+            raise HTTPException(422, "insufficient history")
+        return snap.to_dict()
+
+    @app.get("/reports/history", response_model=ReportHistoryOut, dependencies=[Depends(require_api_key)])
+    def reports_history(limit: int = 30):
+        rows = archive.summaries(limit=limit)
+        return ReportHistoryOut(summaries=[ReportSummaryOut(**r.to_dict()) for r in rows])
+
+    @app.get("/reports/diff/latest", response_model=ReportDiffOut, dependencies=[Depends(require_api_key)])
+    def reports_diff_latest():
+        d = archive.diff_latest()
+        if d is None:
+            raise HTTPException(404, "no reports archived")
+        return ReportDiffOut(**d.to_dict())
+
+    @app.get("/reports/diff/{as_of}", response_model=ReportDiffOut, dependencies=[Depends(require_api_key)])
+    def reports_diff_for(as_of: str, vs: str | None = None):
+        d = archive.diff_between(as_of, vs)
+        if d is None:
+            raise HTTPException(404, "report not found")
+        return ReportDiffOut(**d.to_dict())
+
+    @app.post("/reports/archive", response_model=ReportSummaryOut, dependencies=[Depends(require_api_key)])
+    def reports_archive_now():
+        rep = run_daily(store.list(), refresh=False)
+        archive.save(rep)
+        from ..history.archive import _summary
+        return ReportSummaryOut(**_summary(rep).to_dict())
+
+    @app.get("/reports/{as_of}", response_model=DailyReportOut, dependencies=[Depends(require_api_key)])
+    def reports_get(as_of: str):
+        r = archive.load(as_of)
+        if r is None:
+            raise HTTPException(404, "report not found")
+        return DailyReportOut(as_of=r.as_of,
+                              picks=[Pick(**p.to_dict()) for p in r.picks])
 
     return app
 

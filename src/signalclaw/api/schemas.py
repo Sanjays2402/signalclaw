@@ -168,3 +168,27 @@ class DiversificationOut(BaseModel):
     most_correlated_pair: Optional[List[str]] = None
     clusters: List[List[str]]
     warnings: List[str]
+
+
+class ReportSummaryOut(BaseModel):
+    as_of: str
+    n_picks: int
+    n_watch: int
+    n_hold: int
+    n_skip: int
+    top_pick: Optional[str] = None
+
+
+class ReportHistoryOut(BaseModel):
+    summaries: List[ReportSummaryOut]
+
+
+class ReportDiffOut(BaseModel):
+    prior_as_of: Optional[str] = None
+    current_as_of: str
+    new_picks: List[str] = []
+    dropped_picks: List[str] = []
+    upgraded: List[dict] = []
+    downgraded: List[dict] = []
+    score_changes: List[dict] = []
+    unchanged: List[str] = []

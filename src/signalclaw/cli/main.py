@@ -15,6 +15,7 @@ from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatc
 from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
+from ..history import ReportArchive, diff_reports
 
 console = Console()
 
@@ -80,6 +81,10 @@ def run(today_flag, notify, out):
     rep = run_daily()
     md = render_markdown(rep)
     console.print(md)
+    # archive
+    s = get_settings()
+    archive = ReportArchive(s.data_dir / "reports")
+    archive.save(rep)
     if out:
         from pathlib import Path
         Path(out).write_text(md)
@@ -373,6 +378,51 @@ def correlation_cmd(window, threshold):
     if rep.warnings:
         for w in rep.warnings:
             console.print(f"[WARN] {w}")
+
+
+@cli.group("history")
+def history_grp():
+    """Browse past daily reports and diffs."""
+
+
+@history_grp.command("list")
+@click.option("--limit", default=20, type=int)
+def history_list(limit):
+    s = get_settings()
+    archive = ReportArchive(s.data_dir / "reports")
+    rows = archive.summaries(limit=limit)
+    if not rows:
+        console.print("(no archived reports)")
+        return
+    table = Table(title="Report history")
+    for c in ["as_of", "picks", "watch", "hold", "skip", "top"]:
+        table.add_column(c)
+    for r in rows:
+        table.add_row(r.as_of, str(r.n_picks), str(r.n_watch),
+                      str(r.n_hold), str(r.n_skip), r.top_pick or "-")
+    console.print(table)
+
+
+@history_grp.command("diff")
+@click.option("--as-of", default=None, help="Compare this date vs prior; default latest")
+@click.option("--vs", default=None, help="Compare against this specific prior date")
+def history_diff(as_of, vs):
+    s = get_settings()
+    archive = ReportArchive(s.data_dir / "reports")
+    if as_of:
+        d = archive.diff_between(as_of, vs)
+    else:
+        d = archive.diff_latest()
+    if d is None:
+        console.print("(no diff available)")
+        return
+    console.print(f"{d.prior_as_of or 'none'} -> {d.current_as_of}")
+    console.print(f"new:       {d.new_picks}")
+    console.print(f"dropped:   {d.dropped_picks}")
+    console.print(f"upgraded:  {d.upgraded}")
+    console.print(f"downgraded:{d.downgraded}")
+    console.print(f"top movers:{d.score_changes}")
+    console.print(f"unchanged: {d.unchanged}")
 
 
 def main():
