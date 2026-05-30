@@ -22,6 +22,12 @@ const NAV: CmdItem[] = [
   { id: "nav-risk", label: "Risk", group: "Navigate", run: (r) => r.push("/risk") },
   { id: "nav-rotation", label: "Rotation", group: "Navigate", run: (r) => r.push("/rotation") },
   { id: "nav-reports", label: "Reports", group: "Navigate", run: (r) => r.push("/reports") },
+  { id: "nav-earnings", label: "Earnings", group: "Navigate", run: (r) => r.push("/earnings") },
+  { id: "nav-news", label: "News events", group: "Navigate", run: (r) => r.push("/news") },
+  { id: "nav-stops", label: "Stops", hint: "Stop loss, take profit, trailing", group: "Navigate", run: (r) => r.push("/stops") },
+  { id: "nav-correlation", label: "Correlation", hint: "Pairwise + diversification", group: "Navigate", run: (r) => r.push("/correlation") },
+  { id: "nav-ledger", label: "Ledger", hint: "Cash and margin", group: "Navigate", run: (r) => r.push("/ledger") },
+  { id: "nav-webhooks", label: "Webhooks", group: "Navigate", run: (r) => r.push("/webhooks") },
 ];
 
 export default function CommandPalette() {

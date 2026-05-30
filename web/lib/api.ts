@@ -354,6 +354,65 @@ export type WebhookDelivery = {
   deliveries: Record<string, unknown>[];
 };
 
+// Stops
+export type StopRule = {
+  id: string;
+  ticker: string;
+  kind: string; // stop_loss | take_profit | trailing
+  value: number;
+  high_water?: number | null;
+  armed_at: string;
+  note: string;
+};
+export type StopRuleIn = {
+  ticker: string;
+  kind: string;
+  value: number;
+  note?: string;
+};
+export type StopEvent = {
+  rule_id: string;
+  ticker: string;
+  kind: string;
+  trigger_price: number;
+  reference_price: number;
+  timestamp: string;
+};
+export type StopCheck = { checked: number; events: StopEvent[] };
+
+// Correlation / Diversification types are declared above.
+
+// Ledger / Margin
+export type LedgerEntry = {
+  ts: string;
+  kind: string;
+  amount: number;
+  ticker?: string | null;
+  shares: number;
+  price: number;
+  note: string;
+};
+export type LedgerList = { account: string; entries: LedgerEntry[] };
+export type AccountSnapshot = {
+  account: string;
+  cash: number;
+  long_market_value: number;
+  short_market_value: number;
+  equity: number;
+  margin_used: number;
+  initial_requirement: number;
+  maintenance_requirement: number;
+  buying_power: number;
+  excess_liquidity: number;
+  margin_call: boolean;
+  margin_call_amount: number;
+};
+export type MarginConfig = {
+  initial_margin: number;
+  maintenance_margin: number;
+  annual_interest_rate: number;
+};
+
 // Back-compat aliases
 export type Report = DailyReport;
 export type Backtest = {
