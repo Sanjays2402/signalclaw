@@ -51,7 +51,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .request_context import RequestContextMiddleware
-from .rate_limit import RateLimitMiddleware, require_scope
+from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
 from ..privacy import StoreBundle, collect_user_data, erase_user_data
@@ -125,6 +125,14 @@ def create_app() -> FastAPI:
             default_per_minute=int(os.environ.get("SIGNALCLAW_RATE_LIMIT_READ_PER_MIN", "120")),
             write_per_minute=int(os.environ.get("SIGNALCLAW_RATE_LIMIT_WRITE_PER_MIN", "30")),
         )
+    # RBAC scope enforcement: applied globally so mutating endpoints
+    # require a key with the ``trade`` scope and ``/admin/*`` requires
+    # ``admin``, regardless of whether each route declared a per-route
+    # dependency. Enabled by default; opt out with
+    # SIGNALCLAW_RBAC_ENFORCE=0 for legacy single-key deployments that
+    # want the old permissive behaviour.
+    if os.environ.get("SIGNALCLAW_RBAC_ENFORCE", "1") == "1":
+        app.add_middleware(ScopeEnforcementMiddleware)
     wl_path = settings.data_dir / "watchlist.json"
     store = WatchlistStore(wl_path)
     alert_store = AlertStore(settings.data_dir / "alerts.json")

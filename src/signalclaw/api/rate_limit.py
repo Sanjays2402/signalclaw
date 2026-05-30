@@ -140,6 +140,54 @@ def reset_registry() -> None:
     _REGISTRY = None
 
 
+class ScopeEnforcementMiddleware(BaseHTTPMiddleware):
+    """Enforce SCOPE_RULES on every request, not just decorated routes.
+
+    The route decorations only cover a handful of admin endpoints. This
+    middleware walks SCOPE_RULES for every request so that a read-only
+    API key cannot POST/DELETE against mutating routes even when the
+    route author forgot to add a per-route scope dependency.
+
+    Requests without an ``x-api-key`` (or with an unknown key) are left
+    alone here so the existing per-route ``require_api_key`` dependency
+    can return the standard 401. That keeps authentication errors
+    consistent and avoids double-checking inside the middleware stack.
+    Exempt paths (health, docs, metrics) are skipped entirely.
+    """
+
+    def __init__(self, app, exempt_paths: Iterable[str] = (
+        "/health", "/ready", "/metrics", "/disclaimer",
+        "/docs", "/openapi.json", "/redoc", "/docs/oauth2-redirect",
+    )) -> None:
+        super().__init__(app)
+        self.exempt = tuple(exempt_paths)
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path == p or path.startswith(p + "/") for p in self.exempt):
+            return await call_next(request)
+        required = required_scope_for(request.method, path)
+        if required == "read":
+            return await call_next(request)
+        api_key = request.headers.get("x-api-key")
+        rec = get_registry().get(api_key)
+        if rec is None:
+            # Defer to the per-route 401 from require_api_key. For
+            # routes that lack that dependency (admin-only ones), still
+            # fail closed here.
+            return JSONResponse(status_code=401,
+                                content={"detail": "invalid api key"})
+        if not rec.has_scope(required):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": f"missing scope: {required}",
+                         "required_scope": required,
+                         "method": request.method,
+                         "path": path},
+            )
+        return await call_next(request)
+
+
 def require_scope(scope: str) -> Callable:
     """FastAPI dependency factory enforcing a scope on a route."""
     def _dep(x_api_key: str | None = Header(default=None)) -> None:

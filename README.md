@@ -337,6 +337,43 @@ Retention is operator-controlled. A simple cron is sufficient:
 find "$DATA_DIR/audit" -name 'audit-*.jsonl' -mtime +90 -delete
 ```
 
+### RBAC scope enforcement
+
+API keys carry scopes (`read`, `trade`, `admin`). A global middleware
+(`ScopeEnforcementMiddleware`) maps every inbound request to the scope it
+requires using the `SCOPE_RULES` table in `src/signalclaw/api/rate_limit.py`:
+
+- `GET` against any non-exempt path needs `read`.
+- `POST` / `PUT` / `PATCH` / `DELETE` against `/watchlist`, `/alerts`,
+  `/portfolio/trades`, `/stops`, `/earnings`, and `/reports/archive` needs
+  `trade`.
+- Anything under `/admin/` needs `admin`.
+- `admin` implicitly grants `read` and `trade`.
+
+A read-only key calling a mutating route now gets a `403` with a JSON body
+describing the required scope, the method, and the path, instead of being
+let through because the route author forgot a per-route dependency. Health,
+readiness, docs, and `/metrics` are exempt.
+
+Configure multiple keys via `SIGNALCLAW_API_KEYS_JSON`:
+
+```
+export SIGNALCLAW_API_KEYS_JSON='[
+  {"key":"ro-monitor","scopes":["read"],"label":"grafana"},
+  {"key":"bot-trader","scopes":["read","trade"],"label":"discord-bot","rate_per_minute":120},
+  {"key":"admin-sanjay","scopes":["read","trade","admin"],"label":"sanjay"}
+]'
+```
+
+The legacy `SIGNALCLAW_API_KEY` env still works and is granted `read` +
+`trade` for backwards compatibility. Rotate to the JSON form when you need
+an admin key (admin endpoints are deliberately not granted to the legacy
+key).
+
+Enforcement is on by default. Set `SIGNALCLAW_RBAC_ENFORCE=0` to fall back
+to the old permissive behaviour during a migration window. Coverage lives
+in `tests/test_rbac_enforcement.py`.
+
 ### Metrics and probes
 
 The API exposes Prometheus metrics at `GET /metrics` in the standard
