@@ -48,6 +48,7 @@ from .request_context import RequestContextMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
+from ..audit.retention import AuditRetentionPruner, retention_config_from_env
 from ..privacy import StoreBundle, collect_user_data, erase_user_data
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
@@ -107,6 +108,19 @@ def create_app() -> FastAPI:
     # Audit log: persist who/what/when for mutating + auth-failed requests.
     # Sits inside CORS so it sees the real request status, including 401/403.
     audit_log = get_audit_log(settings.data_dir / "audit")
+    # Background retention pruner: enforces a maximum age on JSONL
+    # files under <data_dir>/audit/ so the log volume cannot grow
+    # without bound. Reads SIGNALCLAW_AUDIT_RETENTION_DAYS (default 90)
+    # and SIGNALCLAW_AUDIT_RETENTION_INTERVAL_SECONDS (default 3600).
+    # Disabled when retention days is 0.
+    _ret_days, _ret_interval = retention_config_from_env()
+    audit_pruner = AuditRetentionPruner(
+        audit_log,
+        retention_days=_ret_days,
+        interval_seconds=_ret_interval,
+    )
+    audit_pruner.start()
+    app.state.audit_pruner = audit_pruner
     app.add_middleware(
         AuditMiddleware,
         audit_log=audit_log,

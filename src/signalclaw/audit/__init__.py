@@ -18,11 +18,17 @@ from .log import (
     get_audit_log,
     reset_audit_log,
 )
+from .retention import (
+    AuditRetentionPruner,
+    retention_config_from_env,
+)
 
 __all__ = [
     "AuditEvent",
     "AuditLog",
     "AuditMiddleware",
+    "AuditRetentionPruner",
     "get_audit_log",
     "reset_audit_log",
+    "retention_config_from_env",
 ]

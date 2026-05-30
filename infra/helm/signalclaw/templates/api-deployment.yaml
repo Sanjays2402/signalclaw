@@ -75,6 +75,10 @@ spec:
               value: {{ .Values.api.sentry.profilesSampleRate | quote }}
             - name: SENTRY_SEND_DEFAULT_PII
               value: {{ .Values.api.sentry.sendDefaultPii | quote }}
+            - name: SIGNALCLAW_AUDIT_RETENTION_DAYS
+              value: {{ .Values.api.audit.retentionDays | quote }}
+            - name: SIGNALCLAW_AUDIT_RETENTION_INTERVAL_SECONDS
+              value: {{ .Values.api.audit.retentionIntervalSeconds | quote }}
             {{- with .Values.api.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

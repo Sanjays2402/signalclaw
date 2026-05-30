@@ -33,7 +33,11 @@ from typing import Iterable, List, Optional
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from ..api.rate_limit import get_registry
+# NOTE: ``..api.rate_limit`` is imported lazily inside ``_safe_record``
+# to avoid a circular import: ``api.app`` imports from ``..audit``,
+# and ``audit.log`` is loaded as part of the ``signalclaw.audit``
+# package init. A top-level import here would resolve only when tests
+# happened to import ``signalclaw.api`` first, which is fragile.
 
 
 def _utc_now_iso() -> str:
@@ -120,6 +124,36 @@ class AuditLog:
             stem = p.stem  # audit-YYYY-MM-DD
             days.append(stem.removeprefix("audit-"))
         return days
+
+    def prune(self, max_age_days: int, *, now: Optional[datetime] = None) -> List[str]:
+        """Delete audit JSONL files older than ``max_age_days`` UTC days.
+
+        Returns the list of removed file paths (absolute) so the caller
+        can log a structured event. ``max_age_days <= 0`` is a no-op
+        (retention disabled). The cutoff is inclusive: a file dated
+        exactly ``today - max_age_days`` is kept; anything strictly
+        older is removed.
+        """
+        if max_age_days is None or int(max_age_days) <= 0:
+            return []
+        cutoff_date = (now or datetime.now(timezone.utc)).date()
+        removed: List[str] = []
+        with self._lock:
+            for p in sorted(self.base.glob("audit-*.jsonl")):
+                stem = p.stem.removeprefix("audit-")
+                try:
+                    file_date = datetime.strptime(stem, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                age = (cutoff_date - file_date).days
+                if age > int(max_age_days):
+                    try:
+                        p.unlink()
+                        removed.append(str(p))
+                    except OSError:
+                        # best-effort; surface via return value being short
+                        continue
+        return removed
 
 
 # --- module singleton ---------------------------------------------------
@@ -220,6 +254,8 @@ class AuditMiddleware(BaseHTTPMiddleware):
         return response
 
     def _safe_record(self, request: Request, rid: str, status: int, dur_ms: float) -> None:
+        # Lazy import: see top-of-file note on circular import avoidance.
+        from ..api.rate_limit import get_registry
         api_key = request.headers.get("x-api-key", "")
         rec = get_registry().get(api_key) if api_key else None
         actor_label = rec.label if rec else ("anon" if not api_key else "unknown")

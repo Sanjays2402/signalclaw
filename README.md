@@ -300,6 +300,44 @@ header is absent the middleware mints a 16-char id. See the
 [Request correlation](#request-correlation) section below for the full
 propagation story.
 
+### Audit retention
+
+Audit JSONL files are pruned by a background daemon thread that starts with
+the API process. Files whose date stamp is strictly older than the configured
+threshold are deleted on a fixed sweep interval and on every process start so
+a long-stopped service catches up immediately.
+
+Configuration is environment driven and ships with safe defaults:
+
+- `SIGNALCLAW_AUDIT_RETENTION_DAYS` (default `90`). Maximum age in UTC days.
+  Set to `0` to disable retention entirely, which is only appropriate when an
+  external log shipper has taken ownership of the directory.
+- `SIGNALCLAW_AUDIT_RETENTION_INTERVAL_SECONDS` (default `3600`). How often
+  the sweeper wakes. The minimum effective value is 60 seconds; invalid input
+  falls back to the default rather than crashing boot.
+
+Each sweep that deletes one or more files emits a structured log line:
+
+```
+audit.retention.pruned files_removed=3 retention_days=90
+```
+
+The Helm chart exposes both knobs under `api.audit.retentionDays` and
+`api.audit.retentionIntervalSeconds` in `values.yaml`, and renders them as
+environment variables on the API deployment. To override the retention
+window without disabling the sweeper, set the value at install time:
+
+```
+helm upgrade signalclaw infra/helm/signalclaw \
+  --set api.audit.retentionDays=30
+```
+
+For compliance flows that require a permanent record, ship the audit
+directory to an external write-once store (S3 with object lock, GCS bucket
+lock, etc.) on a schedule shorter than the retention window. The sweeper
+never touches files outside the `audit-YYYY-MM-DD.jsonl` glob, so an
+adjacent staging directory is safe to colocate.
+
 ### Request correlation
 
 Every inbound request is wrapped by `RequestContextMiddleware` (outermost

@@ -32,6 +32,10 @@ api:
     size: 10Gi
     accessMode: ReadWriteOnce
   extraEnv: []
+  audit:
+    # Background pruner for <data_dir>/audit/ JSONL files. 0 disables.
+    retentionDays: 90
+    retentionIntervalSeconds: 3600
   sentry:
     dsnSecret: ""        # name of an existing secret with key `dsn`
     environment: production
