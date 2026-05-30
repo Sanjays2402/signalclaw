@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("./data"), alias="DATA_DIR")
     enable_ci: bool = Field(default=False, alias="ENABLE_CI")
     otel_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
+    earnings_blackout_days: int = Field(default=5, alias="SIGNALCLAW_EARNINGS_BLACKOUT_DAYS")
 
     @property
     def parquet_dir(self) -> Path:

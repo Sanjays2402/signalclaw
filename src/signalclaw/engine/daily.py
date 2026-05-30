@@ -12,6 +12,7 @@ from ..models import WatchHoldSkipClassifier, ReturnRegressor, Ensemble, make_la
 from ..sentiment import SentimentScorer
 from ..explain import rationale_for, risk_flags
 from ..regime import detect_regime
+from ..earnings import EarningsStore, apply_blackout
 
 log = get_logger(__name__)
 
@@ -95,6 +96,12 @@ def run_daily(tickers: List[str] | None = None, refresh: bool = True) -> DailyRe
         except Exception as e:  # noqa
             log.warning("daily.ticker.fail", ticker=t, err=str(e))
     picks.sort(key=lambda p: p.score, reverse=True)
+    # Earnings blackout: demote fresh watches that fall within blackout window
+    try:
+        es = EarningsStore(s.data_dir / "earnings.json")
+        apply_blackout(picks, es, blackout_days=int(getattr(s, "earnings_blackout_days", 5)))
+    except Exception as e:  # noqa
+        log.warning("daily.earnings.fail", err=str(e))
     regime_dict = None
     for probe in (["SPY"] + list(tickers)):
         try:

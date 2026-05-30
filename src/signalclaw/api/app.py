@@ -18,7 +18,8 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        ReportSummaryOut, ReportHistoryOut, ReportDiffOut,
                        StopRuleIn, StopRuleOut, StopRuleListOut,
                        StopEventOut, StopCheckOut,
-                       AttributionOut, TickerContributionOut)
+                       AttributionOut, TickerContributionOut,
+                       EarningsIn, EarningsOut, EarningsListOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
@@ -29,6 +30,7 @@ from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
 from ..regime import detect_regime
+from ..earnings import EarningsStore, EarningsDate
 
 
 def create_app() -> FastAPI:
@@ -45,6 +47,7 @@ def create_app() -> FastAPI:
     alert_store = AlertStore(settings.data_dir / "alerts.json")
     portfolio_store = PortfolioStore(settings.data_dir / "portfolio.json")
     stops_store = StopStore(settings.data_dir / "stops.json")
+    earnings_store = EarningsStore(settings.data_dir / "earnings.json")
     archive = ReportArchive(settings.data_dir / "reports")
 
     @app.get("/health")
@@ -290,6 +293,32 @@ def create_app() -> FastAPI:
         if snap is None:
             raise HTTPException(422, "insufficient history")
         return snap.to_dict()
+
+    @app.get("/earnings", response_model=EarningsListOut, dependencies=[Depends(require_api_key)])
+    def earnings_list(within_days: int | None = None):
+        if within_days is not None:
+            rows = earnings_store.upcoming(within_days=int(within_days))
+        else:
+            rows = earnings_store.list()
+        return EarningsListOut(rows=[EarningsOut(**e.to_dict()) for e in rows])
+
+    @app.put("/earnings/{ticker}", response_model=EarningsOut, dependencies=[Depends(require_api_key)])
+    def earnings_upsert(ticker: str, body: EarningsIn):
+        try:
+            from datetime import datetime as _dt
+            _dt.fromisoformat(body.next_report)
+        except Exception:
+            raise HTTPException(400, "next_report must be ISO date YYYY-MM-DD")
+        e = EarningsDate(ticker=ticker.upper(), next_report=body.next_report,
+                         confirmed=body.confirmed, source=body.source)
+        earnings_store.set(e)
+        return EarningsOut(**e.to_dict())
+
+    @app.delete("/earnings/{ticker}", dependencies=[Depends(require_api_key)])
+    def earnings_remove(ticker: str):
+        if not earnings_store.remove(ticker):
+            raise HTTPException(404, "not found")
+        return {"ok": True}
 
     @app.get("/stops", response_model=StopRuleListOut, dependencies=[Depends(require_api_key)])
     def stops_list():

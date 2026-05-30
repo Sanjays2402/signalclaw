@@ -8,6 +8,13 @@ from .pnl import (
 )
 from .stops import StopRule, StopKind, StopEvent, StopStore, evaluate_rule, evaluate_rules
 from .attribution import AttributionReport, TickerContribution, attribution
+from .sectors import (
+    SectorExposure,
+    ConcentrationReport,
+    DEFAULT_SECTOR_MAP,
+    classify,
+    sector_exposure,
+)
 
 __all__ = [
     "Position",
@@ -28,4 +35,9 @@ __all__ = [
     "AttributionReport",
     "TickerContribution",
     "attribution",
+    "SectorExposure",
+    "ConcentrationReport",
+    "DEFAULT_SECTOR_MAP",
+    "classify",
+    "sector_exposure",
 ]

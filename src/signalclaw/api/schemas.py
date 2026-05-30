@@ -250,3 +250,20 @@ class AttributionOut(BaseModel):
     r_squared: float
     contributions: List[TickerContributionOut]
 
+
+class EarningsIn(BaseModel):
+    next_report: str
+    confirmed: bool = False
+    source: str = "manual"
+
+
+class EarningsOut(BaseModel):
+    ticker: str
+    next_report: str
+    confirmed: bool = False
+    source: str = "manual"
+
+
+class EarningsListOut(BaseModel):
+    rows: List[EarningsOut]
+
