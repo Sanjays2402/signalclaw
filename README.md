@@ -296,7 +296,40 @@ endpoints are always exempt.
 
 Clients can supply `x-request-id`; the value is echoed back on the response and
 recorded in the audit row so logs across the stack can be correlated. When the
-header is absent the middleware mints a 16-char id.
+header is absent the middleware mints a 16-char id. See the
+[Request correlation](#request-correlation) section below for the full
+propagation story.
+
+### Request correlation
+
+Every inbound request is wrapped by `RequestContextMiddleware` (outermost
+middleware on the API). It:
+
+- Honours an inbound `X-Request-Id` header when the value matches
+  `[A-Za-z0-9_-]{1,128}`, otherwise mints a fresh 16-char hex id. Malformed
+  ids are dropped rather than logged, so a hostile caller cannot inject
+  newlines or control characters into the log stream.
+- Honours an optional `X-Correlation-Id` header for cross-system tracing
+  (for example a job id from an upstream scheduler). This header is never
+  minted; it is only propagated when supplied.
+- Binds both ids into `structlog` contextvars so every log line emitted
+  during the request, from any module, automatically carries `request_id`
+  (and `correlation_id` when present) without each handler having to thread
+  them manually.
+- Echoes both ids back on the response and exposes them on
+  `request.state.request_id` / `request.state.correlation_id` for downstream
+  middleware. The audit middleware reads `request.state.request_id` so the
+  audit row and the JSON logs share a single id.
+- Clears the contextvars on the way out so a worker process serving the
+  next request starts clean.
+
+Grep workflow during an incident:
+
+```
+rid=$(curl -sI http://api/health | awk '/x-request-id/ {print $2}' | tr -d '\r')
+jq -c "select(.request_id==\"$rid\")" /var/log/signalclaw/*.json
+grep "\"request_id\":\"$rid\"" "$DATA_DIR"/audit/audit-*.jsonl
+```
 
 Retention is operator-controlled. A simple cron is sufficient:
 

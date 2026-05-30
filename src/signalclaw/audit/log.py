@@ -194,8 +194,15 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         t0 = time.perf_counter()
-        # request id: respect inbound header, else mint one
-        rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:16]
+        # Prefer the id set by RequestContextMiddleware so the audit
+        # row and structured logs share the same request_id. Fall back
+        # to the inbound header or a fresh id if this middleware runs
+        # standalone (for example in narrow unit tests).
+        rid = (
+            getattr(request.state, "request_id", None)
+            or request.headers.get("x-request-id")
+            or uuid.uuid4().hex[:16]
+        )
         # stash it for downstream code / response header
         try:
             response = await call_next(request)

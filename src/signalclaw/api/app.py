@@ -50,6 +50,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        ScaleEventOut, ScaleEvaluateOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
+from .request_context import RequestContextMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
@@ -99,6 +100,12 @@ def create_app() -> FastAPI:
                   description="NOT FINANCIAL ADVICE.")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(AccessLogMiddleware)
+    # Request context: binds request_id (and optional correlation_id)
+    # into structlog contextvars so every downstream log line carries
+    # the id without each handler having to thread it manually. Added
+    # LAST so it wraps everything else and runs FIRST on the inbound
+    # path (Starlette executes middleware in reverse add order).
+    app.add_middleware(RequestContextMiddleware)
     # Prometheus instrumentation. Mounts /metrics and wraps every
     # request with a counter + latency histogram keyed by route
     # template (bounded cardinality). Installed before audit so the
