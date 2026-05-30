@@ -413,6 +413,18 @@ export type MarginConfig = {
   annual_interest_rate: number;
 };
 
+// Notifier DLQ
+export type DeadLetter = {
+  id: string;
+  channel: string;
+  text: string;
+  attempts: number;
+  last_error: string;
+  enqueued_at: string;
+};
+export type DeadLetterList = { items: DeadLetter[] };
+export type DlqReplay = { sent: number; kept: number; skipped: number };
+
 // Back-compat aliases
 export type Report = DailyReport;
 export type Backtest = {
