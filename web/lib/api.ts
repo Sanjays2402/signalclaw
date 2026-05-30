@@ -192,6 +192,46 @@ export type JournalEntryIn = {
 };
 
 export type FxRate = { currency: string; date: string; rate: number };
+export type FxList = { currencies: string[] };
+
+// Scaling plans
+export type ScaleRung = {
+  r_multiple: number;
+  action: string; // add | trim
+  size_fraction: number;
+  new_stop_r?: number | null;
+};
+export type ScalingPlan = {
+  plan_id: string;
+  ticker: string;
+  entry: number;
+  initial_stop: number;
+  initial_shares: number;
+  status: string;
+  triggered: number[];
+  rungs: ScaleRung[];
+};
+export type ScalingPlanList = { plans: ScalingPlan[] };
+export type ScalingPlanIn = {
+  ticker: string;
+  entry: number;
+  initial_stop: number;
+  initial_shares: number;
+  rungs: ScaleRung[];
+};
+export type ScaleBar = { index: number; high: number; low: number };
+export type ScaleEvent = {
+  plan_id: string;
+  ticker: string;
+  rung_index: number;
+  action: string;
+  trigger_price: number;
+  bar_index: number;
+  shares: number;
+  new_stop?: number | null;
+  r_multiple: number;
+};
+export type ScaleEvaluate = { plan: ScalingPlan; events: ScaleEvent[] };
 
 export type ReportSummary = {
   as_of: string;

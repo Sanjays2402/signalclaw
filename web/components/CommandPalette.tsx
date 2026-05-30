@@ -27,6 +27,8 @@ const NAV: CmdItem[] = [
   { id: "nav-stops", label: "Stops", hint: "Stop loss, take profit, trailing", group: "Navigate", run: (r) => r.push("/stops") },
   { id: "nav-correlation", label: "Correlation", hint: "Pairwise + diversification", group: "Navigate", run: (r) => r.push("/correlation") },
   { id: "nav-ledger", label: "Ledger", hint: "Cash and margin", group: "Navigate", run: (r) => r.push("/ledger") },
+  { id: "nav-scaling", label: "Scaling", hint: "R-multiple add/trim plans", group: "Navigate", run: (r) => r.push("/scaling") },
+  { id: "nav-fx", label: "FX rates", hint: "Currency conversion", group: "Navigate", run: (r) => r.push("/fx") },
   { id: "nav-notifier", label: "Notifier", hint: "Dead letter queue", group: "Navigate", run: (r) => r.push("/notifier") },
   { id: "nav-webhooks", label: "Webhooks", group: "Navigate", run: (r) => r.push("/webhooks") },
 ];
