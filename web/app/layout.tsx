@@ -27,6 +27,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <NavLink href="/brackets">Brackets</NavLink>
             <NavLink href="/journal">Journal</NavLink>
             <NavLink href="/backtest">Backtest</NavLink>
+            <NavLink href="/optimize">Optimize</NavLink>
             <NavLink href="/risk">Risk</NavLink>
             <NavLink href="/rotation">Rotation</NavLink>
             <NavLink href="/reports">Reports</NavLink>

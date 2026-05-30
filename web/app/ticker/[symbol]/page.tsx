@@ -44,6 +44,12 @@ function Detail({ symbol }: { symbol: string }) {
         </div>
         <div className="flex gap-2">
           <AddToWatchlist symbol={symbol} />
+          <Link
+            href={`/optimize/${symbol}`}
+            className="text-sm px-3 py-1.5 rounded border border-[var(--border)] hover:bg-white/5 inline-flex items-center gap-1.5"
+          >
+            Optimize
+          </Link>
           <Button
             variant="ghost"
             onClick={() => {

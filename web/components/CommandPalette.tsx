@@ -19,6 +19,7 @@ const NAV: CmdItem[] = [
   { id: "nav-brackets", label: "Brackets", group: "Navigate", run: (r) => r.push("/brackets") },
   { id: "nav-journal", label: "Journal", group: "Navigate", run: (r) => r.push("/journal") },
   { id: "nav-backtest", label: "Backtest", group: "Navigate", run: (r) => r.push("/backtest") },
+  { id: "nav-optimize", label: "Optimize", hint: "Walk-forward parameter search", group: "Navigate", run: (r) => r.push("/optimize") },
   { id: "nav-risk", label: "Risk", group: "Navigate", run: (r) => r.push("/risk") },
   { id: "nav-rotation", label: "Rotation", group: "Navigate", run: (r) => r.push("/rotation") },
   { id: "nav-reports", label: "Reports", group: "Navigate", run: (r) => r.push("/reports") },
