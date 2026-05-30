@@ -605,3 +605,45 @@ class RotationOut(BaseModel):
     scores: List[SectorScoreOut]
     skipped_unknown_sector: List[str]
     skipped_short_history: List[str]
+
+
+class NewsEventIn(BaseModel):
+    ticker: str
+    headline: str
+    event_date: str
+    tags: List[str] = []
+    source: str = ""
+    url: str = ""
+
+
+class NewsEventOut(BaseModel):
+    id: str
+    ticker: str
+    headline: str
+    event_date: str
+    tags: List[str]
+    source: str
+    url: str
+    created_at: str
+
+
+class NewsEventListOut(BaseModel):
+    events: List[NewsEventOut]
+
+
+class EventStatsOut(BaseModel):
+    n: int
+    hit_rate: float
+    mean: float
+    median: float
+    stdev: float
+    min: float
+    max: float
+
+
+class EventStudyOut(BaseModel):
+    n_events: int
+    horizons: List[int]
+    overall: dict
+    by_tag: dict
+    by_ticker: dict

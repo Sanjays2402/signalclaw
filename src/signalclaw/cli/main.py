@@ -23,6 +23,7 @@ from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..rotation import sector_rotation
+from ..news_events import NewsEvent, NewsEventStore, event_study, events_to_csv
 from ..history import ReportArchive, diff_reports
 
 console = Console()
@@ -1162,6 +1163,100 @@ def rotation_cmd(benchmark, lookback_short, lookback_mid, lookback_long):
         console.print(f"[yellow]skipped (no sector): {', '.join(rep.skipped_unknown_sector)}[/yellow]")
     if rep.skipped_short_history:
         console.print(f"[yellow]skipped (short history): {', '.join(rep.skipped_short_history)}[/yellow]")
+
+
+@cli.group("news-events")
+def news_events_grp():
+    """News event tracker with forward-return event study."""
+
+
+@news_events_grp.command("add")
+@click.argument("ticker")
+@click.option("--headline", required=True)
+@click.option("--date", "event_date", required=True, help="YYYY-MM-DD")
+@click.option("--tag", "tags", multiple=True)
+@click.option("--source", default="")
+@click.option("--url", default="")
+def news_events_add(ticker, headline, event_date, tags, source, url):
+    s = get_settings()
+    store = NewsEventStore(s.data_dir / "news_events.json")
+    try:
+        ev = NewsEvent(ticker=ticker, headline=headline, event_date=event_date,
+                        tags=list(tags), source=source, url=url)
+    except ValueError as e:
+        console.print(f"[red]invalid:[/red] {e}")
+        return
+    store.add(ev)
+    console.print(f"{ev.id}  {ev.ticker}  {ev.event_date}  tags={','.join(ev.tags) or '-'}")
+
+
+@news_events_grp.command("list")
+@click.option("--ticker", default=None)
+@click.option("--tag", default=None)
+@click.option("--date-from", "date_from", default=None)
+@click.option("--date-to", "date_to", default=None)
+def news_events_list(ticker, tag, date_from, date_to):
+    s = get_settings()
+    store = NewsEventStore(s.data_dir / "news_events.json")
+    rows = store.list(ticker=ticker, tag=tag, date_from=date_from, date_to=date_to)
+    if not rows:
+        console.print("no events")
+        return
+    table = Table(title="News events")
+    for c in ["id", "ticker", "date", "tags", "headline"]:
+        table.add_column(c)
+    for e in rows:
+        h = e.headline
+        if len(h) > 60:
+            h = h[:57] + "..."
+        table.add_row(e.id, e.ticker, e.event_date, ",".join(e.tags), h)
+    console.print(table)
+
+
+@news_events_grp.command("remove")
+@click.argument("event_id")
+def news_events_remove(event_id):
+    s = get_settings()
+    store = NewsEventStore(s.data_dir / "news_events.json")
+    ok = store.remove(event_id)
+    console.print("removed" if ok else "not found")
+
+
+@news_events_grp.command("study")
+@click.option("--tag", default=None, help="filter to events with this tag")
+@click.option("--horizons", default="1,5,20", help="comma-separated trading-day horizons")
+def news_events_study(tag, horizons):
+    s = get_settings()
+    store = NewsEventStore(s.data_dir / "news_events.json")
+    events = store.list(tag=tag)
+    if not events:
+        console.print("no events to study")
+        return
+    try:
+        hz = tuple(int(x) for x in horizons.split(",") if x.strip())
+    except ValueError:
+        console.print("[red]horizons must be integers[/red]")
+        return
+    closes = {}
+    for t in {e.ticker for e in events}:
+        try:
+            df = load_ohlcv(s.parquet_dir, t)
+            if df is not None and not df.empty:
+                closes[t] = df["close"]
+        except Exception:
+            continue
+    rep = event_study(events, closes, horizons=hz)
+    console.print(json.dumps(rep.to_dict(), indent=2))
+
+
+@news_events_grp.command("export")
+@click.option("--out", default="news_events.csv")
+def news_events_export(out):
+    s = get_settings()
+    store = NewsEventStore(s.data_dir / "news_events.json")
+    from pathlib import Path as _P
+    _P(out).write_text(events_to_csv(store.list()))
+    console.print(f"wrote {out}")
 
 
 def main():

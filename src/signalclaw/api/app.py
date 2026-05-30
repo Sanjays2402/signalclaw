@@ -37,7 +37,8 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        NotifyTestIn,
                        BracketPlanIn, BracketFillIn, BracketCloseIn,
                        BracketPlanOut, BracketListOut, BracketStatsOut,
-                       SectorScoreOut, RotationOut)
+                       SectorScoreOut, RotationOut,
+                       NewsEventIn, NewsEventOut, NewsEventListOut, EventStudyOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -56,6 +57,7 @@ from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..rotation import sector_rotation
+from ..news_events import NewsEvent, NewsEventStore, event_study
 from ..history import ReportArchive, diff_reports
 from ..webhooks import (WebhookStore, WebhookSubscription, diff_picks,
                          deliver_events, EVENT_KINDS)
@@ -90,6 +92,7 @@ def create_app() -> FastAPI:
     journal_store = JournalStore(settings.data_dir / "journal.json")
     fx_store = FxStore(settings.data_dir / "fx")
     bracket_store = BracketStore(settings.data_dir / "brackets.json")
+    news_event_store = NewsEventStore(settings.data_dir / "news_events.json")
     ccy_map = TradeCurrencyMap(settings.data_dir / "trade_currency.json")
     dlq = DeadLetterQueue(settings.data_dir / "notifier_dlq.json")
 
@@ -303,6 +306,54 @@ def create_app() -> FastAPI:
                                        cluster_threshold=threshold)
         d = rep.to_dict()
         return DiversificationOut(**d)
+
+    @app.get("/news-events", response_model=NewsEventListOut,
+             dependencies=[Depends(require_api_key)])
+    def news_events_list_ep(ticker: str | None = None, tag: str | None = None,
+                             date_from: str | None = None, date_to: str | None = None):
+        rows = news_event_store.list(ticker=ticker, tag=tag,
+                                        date_from=date_from, date_to=date_to)
+        return NewsEventListOut(events=[NewsEventOut(**e.to_dict()) for e in rows])
+
+    @app.post("/news-events", response_model=NewsEventOut,
+              dependencies=[Depends(require_api_key)])
+    def news_events_create_ep(body: NewsEventIn):
+        try:
+            ev = NewsEvent(
+                ticker=body.ticker, headline=body.headline,
+                event_date=body.event_date, tags=list(body.tags),
+                source=body.source, url=body.url,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        news_event_store.add(ev)
+        return NewsEventOut(**ev.to_dict())
+
+    @app.delete("/news-events/{event_id}",
+                dependencies=[Depends(require_api_key)])
+    def news_events_remove_ep(event_id: str):
+        if not news_event_store.remove(event_id):
+            raise HTTPException(404, "event not found")
+        return {"removed": event_id}
+
+    @app.get("/news-events/study", response_model=EventStudyOut,
+             dependencies=[Depends(require_api_key)])
+    def news_events_study_ep(tag: str | None = None,
+                              horizons: str = "1,5,20"):
+        try:
+            hz = tuple(int(x) for x in horizons.split(",") if x.strip())
+        except ValueError:
+            raise HTTPException(400, "horizons must be comma-separated integers")
+        if not hz:
+            raise HTTPException(400, "horizons required")
+        events = news_event_store.list(tag=tag)
+        tickers = sorted({e.ticker for e in events})
+        closes = _gather_closes(tickers) if tickers else {}
+        try:
+            rep = event_study(events, closes, horizons=hz)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return EventStudyOut(**rep.to_dict())
 
     @app.get("/rotation", response_model=RotationOut,
              dependencies=[Depends(require_api_key)])
