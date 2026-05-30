@@ -7,6 +7,7 @@ from .pnl import (
     compute_snapshot,
 )
 from .stops import StopRule, StopKind, StopEvent, StopStore, evaluate_rule, evaluate_rules
+from .attribution import AttributionReport, TickerContribution, attribution
 
 __all__ = [
     "Position",
@@ -24,4 +25,7 @@ __all__ = [
     "StopStore",
     "evaluate_rule",
     "evaluate_rules",
+    "AttributionReport",
+    "TickerContribution",
+    "attribution",
 ]

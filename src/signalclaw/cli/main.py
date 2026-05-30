@@ -12,7 +12,8 @@ from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest
 from ..notifier import TelegramNotifier, DiscordNotifier
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts, dispatch_hits
-from ..portfolio import PortfolioStore, Trade, TradeSide, compute_snapshot
+from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
+                          StopRule, StopKind, StopStore, evaluate_rules)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -423,6 +424,85 @@ def history_diff(as_of, vs):
     console.print(f"downgraded:{d.downgraded}")
     console.print(f"top movers:{d.score_changes}")
     console.print(f"unchanged: {d.unchanged}")
+
+
+@cli.group("stops")
+def stops_grp():
+    """Manage stop-loss, take-profit, and trailing-stop rules."""
+
+
+@stops_grp.command("list")
+def stops_list_cmd():
+    s = get_settings()
+    store_ = StopStore(s.data_dir / "stops.json")
+    rows = store_.list()
+    if not rows:
+        console.print("(no stop rules)")
+        return
+    table = Table(title="Stop rules")
+    for c in ["id", "ticker", "kind", "value", "high_water", "note"]:
+        table.add_column(c)
+    for r in rows:
+        table.add_row(r.id, r.ticker, r.kind.value, f"{r.value:g}",
+                      f"{r.high_water:.2f}" if r.high_water else "-", r.note)
+    console.print(table)
+
+
+@stops_grp.command("add")
+@click.argument("ticker")
+@click.argument("kind", type=click.Choice(["stop_loss", "take_profit", "trailing"]))
+@click.argument("value", type=float)
+@click.option("--note", default="")
+def stops_add_cmd(ticker, kind, value, note):
+    s = get_settings()
+    store_ = StopStore(s.data_dir / "stops.json")
+    k = StopKind(kind)
+    if k == StopKind.TRAILING and not (0 < value < 1):
+        console.print("trailing value must be a fraction in (0, 1)")
+        return
+    if k in (StopKind.STOP_LOSS, StopKind.TAKE_PROFIT) and value <= 0:
+        console.print("price must be positive")
+        return
+    r = StopRule(ticker=ticker.upper(), kind=k, value=value, note=note)
+    store_.add(r)
+    console.print(f"added {r.id} {r.ticker} {r.kind.value} {r.value}")
+
+
+@stops_grp.command("remove")
+@click.argument("rule_id")
+def stops_remove_cmd(rule_id):
+    s = get_settings()
+    store_ = StopStore(s.data_dir / "stops.json")
+    console.print("removed" if store_.remove(rule_id) else "not found")
+
+
+@stops_grp.command("check")
+def stops_check_cmd():
+    s = get_settings()
+    store_ = StopStore(s.data_dir / "stops.json")
+    rules = store_.list()
+    if not rules:
+        console.print("(no rules)")
+        return
+    prices = {}
+    for r in rules:
+        df = load_ohlcv(r.ticker)
+        if df.empty:
+            df = fetch_ohlcv(r.ticker, period="3mo")
+            if not df.empty:
+                save_ohlcv(r.ticker, df)
+        if not df.empty and "close" in df.columns:
+            prices[r.ticker] = float(df["close"].iloc[-1])
+    events = evaluate_rules(rules, prices)
+    for r in rules:
+        if r.kind == StopKind.TRAILING:
+            store_.update(r)
+    if not events:
+        console.print("no triggers")
+        return
+    for e in events:
+        console.print(f"[STOP] {e.ticker} {e.kind} price={e.trigger_price:.2f}"
+                      f" ref={e.reference_price:.2f}")
 
 
 def main():
