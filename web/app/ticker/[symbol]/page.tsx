@@ -93,10 +93,10 @@ function RegimeStat({ reg, loading, err }: { reg?: Regime; loading: boolean; err
   if (loading || !reg) {
     return (
       <>
-        <Stat label="vol" value="—" />
-        <Stat label="trend" value="—" />
-        <Stat label="drawdown" value="—" />
-        <Stat label="risk scale" value="—" />
+        <Stat label="vol" value="…" />
+        <Stat label="trend" value="…" />
+        <Stat label="drawdown" value="…" />
+        <Stat label="risk scale" value="…" />
       </>
     );
   }
@@ -169,7 +169,7 @@ function AnomaliesTable({ rep }: { rep: AnomalyReport }) {
                     {a.severity}
                   </Badge>
                 </td>
-                <td className="num text-right pr-3">{a.z?.toFixed?.(2) ?? "—"}</td>
+                <td className="num text-right pr-3">{a.z?.toFixed?.(2) ?? "n/a"}</td>
                 <td className="muted text-xs">{a.reason}</td>
               </tr>
             ))}
