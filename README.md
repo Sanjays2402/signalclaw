@@ -338,6 +338,43 @@ The deployment template adds standard `prometheus.io/scrape`
 annotations so a default kube-prometheus install picks the API up
 automatically.
 
+### Error tracking (Sentry)
+
+The API ships with an optional [Sentry](https://sentry.io) integration. It
+stays inert until you set `SENTRY_DSN`, so local dev and CI never need a real
+project or network access.
+
+Enable it by setting these environment variables (see `.env.example`):
+
+```
+SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
+SENTRY_ENVIRONMENT=production         # or staging / development
+SENTRY_RELEASE=0.1.0                  # usually the git SHA in CI
+SENTRY_TRACES_SAMPLE_RATE=0.05        # 0.0 disables performance traces
+SENTRY_PROFILES_SAMPLE_RATE=0.0       # 0.0 disables profiling
+SENTRY_SEND_DEFAULT_PII=false         # leave false unless you really need it
+```
+
+What it captures:
+
+- Unhandled exceptions from any FastAPI route, including the route
+  template as the transaction name so issues group cleanly.
+- `logging` records at `ERROR` or above are sent as events; `WARNING`
+  and above become breadcrumbs on whatever event ships next.
+- Optional performance traces and profiles, gated by the sample rate
+  envs. Keep these low in production to control quota.
+
+Before any event leaves the process the SDK runs a local scrubber that
+redacts the `Authorization`, `Cookie`, and `X-Api-Key` headers and
+strips any captured request body. PII is off by default. Combined with
+the existing audit log (which never sees request bodies either), no
+secrets or user payloads should reach the Sentry project.
+
+Smoke test after rollout: trigger any handler that raises and confirm
+the event appears in the Sentry project under the configured
+`SENTRY_ENVIRONMENT`. The startup log line `sentry.enabled` confirms
+the SDK initialised inside the pod.
+
 ### Deployment, scaling, backup, on-call
 
 Deployment is described in `infra/helm/signalclaw` (chart with values) and

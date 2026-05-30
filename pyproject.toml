@@ -25,6 +25,7 @@ dependencies = [
   "opentelemetry-api>=1.27",
   "opentelemetry-sdk>=1.27",
   "prometheus-client>=0.20",
+  "sentry-sdk[fastapi]>=2.14",
   "hypothesis>=6.112",
   "pytest>=8.3",
   "pytest-asyncio>=0.24",

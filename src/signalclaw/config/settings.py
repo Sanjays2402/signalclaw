@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("./data"), alias="DATA_DIR")
     enable_ci: bool = Field(default=False, alias="ENABLE_CI")
     otel_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
+    sentry_dsn: str = Field(default="", alias="SENTRY_DSN")
+    sentry_environment: str = Field(default="development", alias="SENTRY_ENVIRONMENT")
+    sentry_traces_sample_rate: float = Field(default=0.0, alias="SENTRY_TRACES_SAMPLE_RATE")
     earnings_blackout_days: int = Field(default=5, alias="SIGNALCLAW_EARNINGS_BLACKOUT_DAYS")
 
     @property
