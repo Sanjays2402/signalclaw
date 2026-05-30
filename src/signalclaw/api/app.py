@@ -39,7 +39,8 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        BracketPlanOut, BracketListOut, BracketStatsOut,
                        SectorScoreOut, RotationOut,
                        NewsEventIn, NewsEventOut, NewsEventListOut, EventStudyOut,
-                       CostModelIn, PretradeIn, PretradeOut)
+                       CostModelIn, PretradeIn, PretradeOut,
+                       ExecSimulateIn, ExecReportOut, ExecFillOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope
@@ -57,6 +58,8 @@ from ..notifier import (TelegramNotifier, DiscordNotifier, SlackNotifier,
                          replay_dlq, Notifier)
 from ..risk import RiskConfig, size_pick
 from ..risk.pretrade import CostModel, OrderRequest, simulate_order
+from ..execution import (IntradayBar, ParentOrder, ScheduleKind,
+                          simulate_execution as exec_simulate)
 from ..correlation import correlation_matrix, diversification_warnings
 from ..rotation import sector_rotation
 from ..news_events import NewsEvent, NewsEventStore, event_study
@@ -383,6 +386,37 @@ def create_app() -> FastAPI:
             raise HTTPException(400, str(e))
         sim = simulate_order(req)
         return PretradeOut(**sim.to_dict())
+
+    @app.post("/execution/simulate", response_model=ExecReportOut,
+              dependencies=[Depends(require_api_key)])
+    def execution_simulate_endpoint(body: ExecSimulateIn):
+        try:
+            schedule = ScheduleKind(body.order.schedule.lower())
+        except ValueError:
+            raise HTTPException(400, "schedule must be twap, vwap, or pov")
+        try:
+            order = ParentOrder(
+                ticker=body.order.ticker, side=body.order.side,
+                shares=body.order.shares,
+                arrival_price=body.order.arrival_price,
+                schedule=schedule,
+                expected_curve=(tuple(body.order.expected_curve)
+                                if body.order.expected_curve else None),
+                participation_rate=body.order.participation_rate,
+                max_participation=body.order.max_participation,
+                base_slippage_bps=body.order.base_slippage_bps,
+                slippage_bps_per_pct_adv=body.order.slippage_bps_per_pct_adv,
+                commission_per_share=body.order.commission_per_share,
+            )
+            bars = [IntradayBar(index=b.index, price=b.price, volume=b.volume)
+                    for b in body.bars]
+            if not bars:
+                raise ValueError("bars must be non-empty")
+            rep = exec_simulate(order, bars)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        d = rep.to_dict()
+        return ExecReportOut(**d)
 
     @app.get("/rotation", response_model=RotationOut,
              dependencies=[Depends(require_api_key)])

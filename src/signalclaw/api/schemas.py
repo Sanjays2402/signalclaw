@@ -689,3 +689,54 @@ class PretradeOut(BaseModel):
     cap_reason: str
     accepted: bool
     warnings: List[str]
+
+
+class ExecBarIn(BaseModel):
+    index: int
+    price: float
+    volume: int
+
+
+class ExecOrderIn(BaseModel):
+    ticker: str
+    side: str
+    shares: int
+    arrival_price: float
+    schedule: str = "vwap"
+    expected_curve: Optional[List[float]] = None
+    participation_rate: float = 0.10
+    max_participation: float = 0.20
+    base_slippage_bps: float = 1.0
+    slippage_bps_per_pct_adv: float = 5.0
+    commission_per_share: float = 0.0
+
+
+class ExecFillOut(BaseModel):
+    bar_index: int
+    shares: int
+    fill_price: float
+    market_price: float
+    participation: float
+    slippage_bps: float
+    commission: float
+
+
+class ExecReportOut(BaseModel):
+    ticker: str
+    side: str
+    requested_shares: int
+    filled_shares: int
+    unfilled_shares: int
+    arrival_price: float
+    avg_fill_price: float
+    interval_vwap: float
+    notional: float
+    commission_total: float
+    slippage_vs_arrival_bps: float
+    slippage_vs_vwap_bps: float
+    fills: List[ExecFillOut]
+
+
+class ExecSimulateIn(BaseModel):
+    order: ExecOrderIn
+    bars: List[ExecBarIn]
