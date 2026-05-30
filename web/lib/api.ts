@@ -193,6 +193,42 @@ export type JournalEntryIn = {
 
 export type FxRate = { currency: string; date: string; rate: number };
 
+export type ReportSummary = {
+  as_of: string;
+  n_picks: number;
+  n_watch: number;
+  n_hold: number;
+  n_skip: number;
+  top_pick: string | null;
+};
+export type ReportHistory = { summaries: ReportSummary[] };
+export type ReportDiff = {
+  prior_as_of: string | null;
+  current_as_of: string;
+  new_picks: string[];
+  dropped_picks: string[];
+  upgraded: { ticker: string; from: string; to: string }[];
+  downgraded: { ticker: string; from: string; to: string }[];
+  score_changes: { ticker: string; delta: number; from?: number; to?: number }[];
+  unchanged: string[];
+};
+
+export type CorrelationMatrix = {
+  tickers: string[];
+  matrix: number[][];
+  window: number;
+};
+export type Diversification = {
+  window: number;
+  threshold: number;
+  n_tickers: number;
+  avg_pairwise_corr: number;
+  max_pairwise_corr: number;
+  most_correlated_pair: string[] | null;
+  clusters: string[][];
+  warnings: string[];
+};
+
 // Back-compat aliases
 export type Report = DailyReport;
 export type Backtest = {
