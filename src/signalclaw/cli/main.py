@@ -308,6 +308,46 @@ def portfolio_show():
                   f" | realized ${snap.total_realized:.2f}")
 
 
+@portfolio_grp.command("sectors")
+@click.option("--sector-cap", default=0.35, type=float)
+@click.option("--position-cap", default=0.25, type=float)
+def portfolio_sectors_cmd(sector_cap, position_cap):
+    """Show sector exposure, HHI concentration, and breaches."""
+    from ..portfolio import sector_exposure
+    s = get_settings()
+    pstore = PortfolioStore(s.data_dir / "portfolio.json")
+    positions = pstore.positions()
+    if not positions:
+        console.print("no positions")
+        return
+    last_prices = {}
+    for t in positions:
+        df = load_ohlcv(t)
+        if not df.empty and "close" in df.columns:
+            last_prices[t] = float(df["close"].iloc[-1])
+    snap = compute_snapshot(positions, last_prices, trades=pstore.trades())
+    if not snap.weights:
+        console.print("weights unavailable (no last prices)")
+        return
+    mv = {p.ticker: p.market_value for p in snap.positions}
+    rep = sector_exposure(snap.weights, market_values=mv,
+                          sector_cap=sector_cap, position_cap=position_cap)
+    table = Table(title="Sector exposure")
+    for c in ["sector", "weight", "market_value", "tickers"]:
+        table.add_column(c)
+    for sx in rep.sectors:
+        table.add_row(sx.sector, f"{sx.weight:.2%}", f"${sx.market_value:.2f}",
+                      ", ".join(sx.tickers))
+    console.print(table)
+    console.print(f"HHI {rep.hhi:.3f} | effective sectors {rep.effective_n_sectors:.2f} | "
+                  f"max sector {rep.max_sector} {rep.max_sector_weight:.2%} | "
+                  f"max position {rep.max_position} {rep.max_position_weight:.2%}")
+    for b in rep.breaches:
+        console.print(f"[red]BREACH[/red] {b}")
+    for w in rep.warnings:
+        console.print(f"[yellow]warn[/yellow] {w}")
+
+
 @cli.command("size")
 @click.argument("ticker")
 @click.argument("label", type=click.Choice(["watch", "hold", "skip"]))

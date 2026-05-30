@@ -19,13 +19,14 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        StopRuleIn, StopRuleOut, StopRuleListOut,
                        StopEventOut, StopCheckOut,
                        AttributionOut, TickerContributionOut,
-                       EarningsIn, EarningsOut, EarningsListOut)
+                       EarningsIn, EarningsOut, EarningsListOut,
+                       ConcentrationOut, SectorExposureOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
-                          attribution)
+                          attribution, sector_exposure)
 from ..risk import RiskConfig, size_pick
 from ..correlation import correlation_matrix, diversification_warnings
 from ..history import ReportArchive, diff_reports
@@ -279,6 +280,30 @@ def create_app() -> FastAPI:
         d = rep.to_dict()
         d["benchmark"] = benchmark.upper()
         return AttributionOut(**d)
+
+    @app.get("/portfolio/sectors", response_model=ConcentrationOut, dependencies=[Depends(require_api_key)])
+    def portfolio_sectors(sector_cap: float = 0.35, position_cap: float = 0.25):
+        positions = portfolio_store.positions()
+        if not positions:
+            raise HTTPException(404, "no positions")
+        last_prices: dict = {}
+        for t in positions:
+            df = load_ohlcv(t)
+            if df.empty:
+                df = fetch_ohlcv(t, period="3mo")
+                if not df.empty:
+                    save_ohlcv(t, df)
+            if not df.empty and "close" in df.columns:
+                last_prices[t] = float(df["close"].iloc[-1])
+        snap = compute_snapshot(positions, last_prices, trades=portfolio_store.trades())
+        if not snap.weights:
+            raise HTTPException(422, "weights unavailable (need last prices)")
+        mv = {p.ticker: p.market_value for p in snap.positions}
+        rep = sector_exposure(
+            snap.weights, market_values=mv,
+            sector_cap=sector_cap, position_cap=position_cap,
+        )
+        return ConcentrationOut(**rep.to_dict())
 
     @app.get("/regime", dependencies=[Depends(require_api_key)])
     def regime_endpoint(ticker: str = "SPY"):

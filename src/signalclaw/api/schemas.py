@@ -251,6 +251,29 @@ class AttributionOut(BaseModel):
     contributions: List[TickerContributionOut]
 
 
+class SectorExposureOut(BaseModel):
+    sector: str
+    market_value: float
+    weight: float
+    tickers: List[str]
+
+
+class ConcentrationOut(BaseModel):
+    total_market_value: float
+    sectors: List[SectorExposureOut]
+    hhi: float
+    effective_n_sectors: float
+    max_sector: Optional[str] = None
+    max_sector_weight: float
+    max_position: Optional[str] = None
+    max_position_weight: float
+    sector_cap: float
+    position_cap: float
+    breaches: List[str] = []
+    warnings: List[str] = []
+    unknown_tickers: List[str] = []
+
+
 class EarningsIn(BaseModel):
     next_report: str
     confirmed: bool = False
