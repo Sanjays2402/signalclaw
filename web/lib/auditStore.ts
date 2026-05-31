@@ -37,6 +37,7 @@ export type AuditEvent = {
   user_agent: string | null;
   reason: string | null; // e.g. "forbidden:trade-required"
   details: Record<string, unknown> | null;
+  request_id: string | null; // X-Request-Id propagated from the edge
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
@@ -129,6 +130,8 @@ export async function recordAuditEvent(input: RecordInput): Promise<AuditEvent> 
     user_agent: input.req?.headers.get("user-agent")?.slice(0, 200) ?? null,
     reason: input.reason ?? null,
     details: safeDetails(input.details),
+    request_id:
+      (input.req?.headers.get("x-request-id") || "").slice(0, 128) || null,
   };
   const line = JSON.stringify(ev) + "\n";
   // Serialize appends so concurrent handlers don't interleave.

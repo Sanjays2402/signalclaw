@@ -19,6 +19,12 @@ import { NextResponse } from "next/server";
 import type { StoredKey } from "./keyStore";
 import { consume, applyRateHeaders, WINDOW_SECONDS } from "./rateLimitStore";
 import { recordAuditEvent } from "./auditStore";
+import {
+  classifyRoute,
+  observeRequest,
+  incInFlight,
+  decInFlight,
+} from "./metricsStore";
 
 export async function enforceRateLimit(
   req: Request,
@@ -26,31 +32,49 @@ export async function enforceRateLimit(
   route: string,
   handler: () => Promise<NextResponse> | NextResponse,
 ): Promise<NextResponse> {
-  const decision = await consume(key);
-  if (!decision.allowed) {
-    const res = NextResponse.json(
-      {
-        error: {
-          code: "rate_limited",
-          message: `rate limit exceeded: ${decision.limit} requests per ${WINDOW_SECONDS}s. retry after ${decision.retry_after}s`,
-          limit: decision.limit,
-          retry_after: decision.retry_after,
+  const t0 = Date.now();
+  incInFlight();
+  const method = (req as any).method ?? "GET";
+  const route_class = classifyRoute(route);
+  const requestId = req.headers.get("x-request-id") || undefined;
+  try {
+    const decision = await consume(key);
+    if (!decision.allowed) {
+      const res = NextResponse.json(
+        {
+          error: {
+            code: "rate_limited",
+            message: `rate limit exceeded: ${decision.limit} requests per ${WINDOW_SECONDS}s. retry after ${decision.retry_after}s`,
+            limit: decision.limit,
+            retry_after: decision.retry_after,
+          },
         },
-      },
-      { status: 429 },
-    );
+        { status: 429 },
+      );
+      applyRateHeaders(res.headers, decision);
+      if (requestId) res.headers.set("x-request-id", requestId);
+      await recordAuditEvent({
+        req,
+        route,
+        method,
+        status: 429,
+        key,
+        reason: "rate_limited",
+      }).catch(() => {});
+      observeRequest({ method, status: 429, route_class, durationMs: Date.now() - t0 });
+      return res;
+    }
+    const res = await handler();
     applyRateHeaders(res.headers, decision);
-    await recordAuditEvent({
-      req,
-      route,
-      method: (req as any).method ?? "GET",
-      status: 429,
-      key,
-      reason: "rate_limited",
-    }).catch(() => {});
+    if (requestId && !res.headers.get("x-request-id")) {
+      res.headers.set("x-request-id", requestId);
+    }
+    observeRequest({ method, status: res.status, route_class, durationMs: Date.now() - t0 });
     return res;
+  } catch (e) {
+    observeRequest({ method, status: 500, route_class, durationMs: Date.now() - t0 });
+    throw e;
+  } finally {
+    decInFlight();
   }
-  const res = await handler();
-  applyRateHeaders(res.headers, decision);
-  return res;
 }

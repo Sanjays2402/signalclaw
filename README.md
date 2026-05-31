@@ -23,6 +23,22 @@ A local-first time-series signal terminal that classifies market regime (bull / 
   ```
 
   Try it locally: `make api` then open `http://localhost:3000/settings/keys` and create a key with the new "Expires" selector.
+- **Prometheus metrics, k8s probes, and request-id tracing on the dashboard**. The Next.js control plane now ships first-class observability so an SRE team can wire it into their stack without writing glue. Three new endpoints are exposed: `GET /healthz` is a liveness probe that returns 200 plus version and process uptime without touching any dependency, `GET /readyz` runs real readiness checks (currently `.data` writability, since the audit log and key store live there) and returns 503 with the failing check name when something is wrong, and `GET /metrics` renders Prometheus text exposition (process resident memory and heap, in-flight requests gauge, per-route request counter, and a duration histogram with 11 standard buckets). Label cardinality is bounded by design: `method` x `status_class` (`2xx`/`3xx`/`4xx`/`5xx`) x `route_class` (`api_v1`/`api_admin`/`api_other`/`page`/`asset`/`health`/`metrics`), so the series count cannot blow up from user-generated ids in URLs. An edge middleware mints `X-Request-Id` on every inbound request (or echoes an incoming one that looks safe), propagates it into the route handler, and sets it on the response. The same id is now recorded on every audit log entry, so an operator can grep the audit log by request id and stitch dashboard traffic to upstream traces end to end.
+
+  ```bash
+  # Liveness, readiness, and a Prometheus scrape
+  curl -s http://localhost:7430/healthz | jq .
+  curl -s http://localhost:7430/readyz  | jq .
+  curl -s http://localhost:7430/metrics | head -20
+
+  # Propagate your own request id, then find it in the audit log
+  curl -s -H "x-request-id: req_demo_42" \
+       -H "authorization: Bearer $SIGNALCLAW_KEY" \
+       http://localhost:7430/api/v1/whoami -D -
+  grep req_demo_42 web/.data/audit.jsonl
+  ```
+
+  Covered by `web/tests/observability.test.mjs` (route classifier bounds, status-class bucketing, in-flight gauge, histogram cumulation including `+Inf`, audit `request_id` capture and absence). The Python ingest service already exposes the same `/healthz`, `/readyz`, and `/metrics` shape, so a single Prometheus scrape config covers both planes.
 
 - **API key rotation with grace window**. Rotate any user-managed API key in place without downtime. The new endpoint mints a fresh secret on the same key id (scopes, label, rate limit, and IP allowlist all preserved) and optionally keeps the previous secret valid for a bounded overlap so live integrations can roll over before the old credential stops working. The plaintext secret is returned exactly once and never logged; the predecessor hash is stored only for the grace window and dropped on the next index reload after it expires. Grace is clamped to 7 days so a forgotten rotation cannot turn into a long-lived dual credential. Surfaced in the dashboard at `/settings/keys` (the existing "Rotate" button now prompts for grace seconds) and via the admin API. The previous hash is never returned by `GET /admin/keys`, so an admin compromise cannot exfiltrate the still-valid old secret.
 
