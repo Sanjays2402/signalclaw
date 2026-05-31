@@ -171,6 +171,16 @@ curl -s -X POST http://localhost:7430/api/watchlist \
 # 3. List everything
 curl -s http://localhost:7430/api/watchlist | jq .
 
+# 3a. Set price targets
+curl -s -X PATCH http://localhost:7430/api/watchlist/AAPL \
+  -H 'content-type: application/json' \
+  -d '{"target_high": 250, "target_low": 180}'
+
+# 3b. Check tickers against the latest run close. Fires a one-shot activity
+#     event the first time a target is crossed, then stays quiet until the
+#     side flips or the targets change.
+curl -s http://localhost:7430/api/watchlist/check | jq .
+
 # 4. Export as CSV
 curl -s 'http://localhost:7430/api/watchlist?format=csv' -o watchlist.csv
 

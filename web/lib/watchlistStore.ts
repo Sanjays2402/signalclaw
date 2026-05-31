@@ -14,7 +14,22 @@ export type WatchlistEntry = {
   ticker: string;
   added_at: string;
   note: string | null;
+  target_high: number | null;
+  target_low: number | null;
+  last_cross: {
+    side: "above_high" | "below_low";
+    price: number;
+    at: string;
+  } | null;
 };
+
+export function normalizePrice(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const n = typeof raw === "number" ? raw : Number.parseFloat(String(raw));
+  if (!Number.isFinite(n)) return null;
+  if (n <= 0 || n > 1_000_000) return null;
+  return Math.round(n * 1e6) / 1e6;
+}
 
 type Store = { entries: WatchlistEntry[] };
 
@@ -42,6 +57,7 @@ async function readStore(): Promise<Store> {
     const raw = await fs.readFile(DATA_FILE, "utf8");
     const data = JSON.parse(raw) as Store;
     if (!data || !Array.isArray(data.entries)) return { entries: [] };
+    data.entries = data.entries.map(migrate);
     return data;
   } catch (e: any) {
     if (e && e.code === "ENOENT") return { entries: [] };
@@ -56,9 +72,55 @@ async function writeStore(store: Store): Promise<void> {
   await fs.rename(tmp, DATA_FILE);
 }
 
+function migrate(entry: any): WatchlistEntry {
+  return {
+    ticker: entry.ticker,
+    added_at: entry.added_at,
+    note: entry.note ?? null,
+    target_high: typeof entry.target_high === "number" ? entry.target_high : null,
+    target_low: typeof entry.target_low === "number" ? entry.target_low : null,
+    last_cross: entry.last_cross ?? null,
+  };
+}
+
 export async function listWatchlist(): Promise<WatchlistEntry[]> {
   const { entries } = await readStore();
-  return entries.slice();
+  return entries.map(migrate);
+}
+
+export async function setTargets(
+  ticker: string,
+  target_high: number | null,
+  target_low: number | null,
+): Promise<WatchlistEntry | null> {
+  const t = normalizeTicker(ticker);
+  if (!t) return null;
+  const store = await readStore();
+  const entry = store.entries.find((e) => e.ticker === t);
+  if (!entry) return null;
+  if (target_high !== null && target_low !== null && target_low >= target_high) {
+    throw new Error("low_above_high");
+  }
+  entry.target_high = target_high;
+  entry.target_low = target_low;
+  // Clear previous cross when bounds change so a fresh check fires.
+  entry.last_cross = null;
+  await writeStore(store);
+  return migrate(entry);
+}
+
+export async function recordCross(
+  ticker: string,
+  cross: WatchlistEntry["last_cross"],
+): Promise<WatchlistEntry | null> {
+  const t = normalizeTicker(ticker);
+  if (!t) return null;
+  const store = await readStore();
+  const entry = store.entries.find((e) => e.ticker === t);
+  if (!entry) return null;
+  entry.last_cross = cross;
+  await writeStore(store);
+  return migrate(entry);
 }
 
 export async function addTicker(ticker: string, note: string | null = null): Promise<WatchlistEntry> {
@@ -78,6 +140,9 @@ export async function addTicker(ticker: string, note: string | null = null): Pro
     ticker: t,
     added_at: new Date().toISOString(),
     note,
+    target_high: null,
+    target_low: null,
+    last_cross: null,
   };
   // Newest first
   store.entries.unshift(entry);
@@ -108,10 +173,12 @@ export async function updateNote(ticker: string, note: string | null): Promise<W
 }
 
 export function entriesToCSV(entries: WatchlistEntry[]): string {
-  const header = "ticker,added_at,note";
+  const header = "ticker,added_at,note,target_low,target_high";
   const lines = entries.map((e) => {
     const note = (e.note ?? "").replace(/"/g, '""');
-    return `${e.ticker},${e.added_at},"${note}"`;
+    const lo = e.target_low ?? "";
+    const hi = e.target_high ?? "";
+    return `${e.ticker},${e.added_at},"${note}",${lo},${hi}`;
   });
   return [header, ...lines].join("\n") + "\n";
 }
