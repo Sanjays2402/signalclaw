@@ -20,6 +20,7 @@ export type ActivityKind =
   | "batch.completed"
   | "key.created"
   | "key.revoked"
+  | "key.rotated"
   | "alert.fired"
   | "system";
 
@@ -43,6 +44,7 @@ const VALID_KINDS: ReadonlySet<ActivityKind> = new Set([
   "batch.completed",
   "key.created",
   "key.revoked",
+  "key.rotated",
   "alert.fired",
   "system",
 ]);

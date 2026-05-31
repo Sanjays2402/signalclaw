@@ -302,7 +302,9 @@ curl -OJ 'http://localhost:7430/api/runs/export?q=spy&format=json'
 
 ## Try it: mint a scoped API key and call the v1 API
 
-User-managed keys are served by the Next app itself (file-backed, atomic writes, SHA-256 hashed at rest). The dashboard at `/settings/keys` lists, mints, and revokes them; secrets are revealed exactly once at creation. Scopes `read` and `trade` can be granted from the UI; `admin` is server-config only (set `SIGNALCLAW_ADMIN_KEY` in the env) to prevent privilege escalation.
+User-managed keys are served by the Next app itself (file-backed, atomic writes, SHA-256 hashed at rest). The dashboard at `/settings/keys` lists, mints, rotates, and revokes them; secrets are revealed exactly once at creation or rotation. Scopes `read` and `trade` can be granted from the UI; `admin` is server-config only (set `SIGNALCLAW_ADMIN_KEY` in the env) to prevent privilege escalation.
+
+Rotation keeps the key's id, label, and scopes intact (so dashboards, activity entries, and bookmarks keep working) while invalidating the old secret immediately and resetting `last_used_at`. Use it when a key is suspected leaked but you don't want to tear down whatever it's attached to.
 
 Web: <http://localhost:7430/settings/keys>
 
@@ -324,7 +326,11 @@ curl 'http://localhost:7430/v1/runs?regime=bull&limit=10' \
 # fetch one run with its full payload
 curl http://localhost:7430/v1/runs/<id> -H "Authorization: Bearer $SC_KEY"
 
-# revoke a key when compromised
+# rotate a key in place: same id and scopes, brand new secret, old one stops working now
+curl -X POST http://localhost:7430/admin/keys/<id>/rotate
+# response includes the new "secret": "sc_live_..." once; copy it now
+
+# revoke a key when compromised beyond rotation
 curl -X DELETE http://localhost:7430/admin/keys/<id>
 ```
 

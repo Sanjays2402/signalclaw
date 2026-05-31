@@ -13,6 +13,7 @@ import {
   Eye,
   EyeSlash,
   Terminal,
+  ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 
 type StoredKey = {
@@ -43,6 +44,7 @@ export default function ApiKeysPage() {
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [rotating, setRotating] = useState<string | null>(null);
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -81,6 +83,27 @@ export default function ApiKeysPage() {
       window.alert(err instanceof Error ? err.message : String(err));
     } finally {
       setRevoking(null);
+    }
+  }
+
+  async function onRotate(id: string, displayLabel: string) {
+    if (
+      !window.confirm(
+        `Rotate "${displayLabel}"? The current secret stops working immediately and a new one is shown once.`,
+      )
+    )
+      return;
+    setRotating(id);
+    try {
+      const out = await api<Created>(`/admin/keys/${id}/rotate`, {
+        method: "POST",
+      });
+      setCreated(out);
+      mutate();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRotating(null);
     }
   }
 
@@ -215,15 +238,31 @@ export default function ApiKeysPage() {
                     {k.last_used_at ? ` · last used ${fmtDate(k.last_used_at)}` : " · never used"}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onRevoke(k.id, k.label || k.prefix)}
-                  disabled={revoking === k.id}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-red-500/30 text-red-300 hover:bg-red-500/10 rounded-sm disabled:opacity-50"
-                >
-                  <Trash size={12} weight="duotone" />
-                  {revoking === k.id ? "Revoking..." : "Revoke"}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onRotate(k.id, k.label || k.prefix)}
+                    disabled={rotating === k.id || revoking === k.id}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm disabled:opacity-50"
+                    title="Mint a new secret, invalidate the old one"
+                  >
+                    <ArrowsClockwise
+                      size={12}
+                      weight="duotone"
+                      className={rotating === k.id ? "animate-spin" : ""}
+                    />
+                    {rotating === k.id ? "Rotating..." : "Rotate"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRevoke(k.id, k.label || k.prefix)}
+                    disabled={revoking === k.id || rotating === k.id}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-red-500/30 text-red-300 hover:bg-red-500/10 rounded-sm disabled:opacity-50"
+                  >
+                    <Trash size={12} weight="duotone" />
+                    {revoking === k.id ? "Revoking..." : "Revoke"}
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

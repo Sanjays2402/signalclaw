@@ -116,6 +116,27 @@ export async function revokeKey(id: string): Promise<boolean> {
   return true;
 }
 
+// Rotates a key in place: mints a new plaintext secret, replaces the hash
+// and prefix, resets last_used_at, and refreshes created_at. The id, label,
+// and scopes are preserved so existing references in the UI keep working.
+// The old secret stops authenticating immediately. Revoked keys cannot be
+// rotated (revive by creating a new key instead).
+export async function rotateKey(
+  id: string,
+): Promise<{ key: StoredKey; secret: string } | null> {
+  const store = await readStore();
+  const k = store.keys.find((x) => x.id === id);
+  if (!k) return null;
+  if (k.revoked) return null;
+  const secret = genSecret();
+  k.prefix = secret.slice(0, 10);
+  k.hash = sha256(secret);
+  k.last_used_at = null;
+  k.created_at = new Date().toISOString();
+  await writeStore(store);
+  return { key: k, secret };
+}
+
 // Used by /v1/* routes: returns the matching, non-revoked key and bumps
 // last_used_at. Returns null if nothing matches.
 export async function authenticate(
