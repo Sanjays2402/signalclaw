@@ -6,6 +6,7 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Alerts, end to end** at `/alerts`: arm price-above / price-below / percent-change rules with cooldown windows, run `POST /api/alerts/check` to evaluate them against live or supplied prices, and browse the paginated fire history filtered by ticker. Records land in `web/.data/alerts.json` with atomic writes, and every fire posts to the activity feed.
 - **Activity digest** at `/digest`: rolling summary of saved runs, webhook deliveries, batches, and alerts over a selectable window (1 / 3 / 7 / 14 / 30 / 90 days). Renders text + HTML previews of what the email digest will contain. Backed by `GET /api/digest/preview?days=N&format=json|text|html`.
 - **Compare runs** at `/compare`: pick any two saved regime runs and overlay their normalized price series, regime mix, and window return. Backed by `GET /api/runs/compare?a=ID&b=ID`.
 
@@ -20,6 +21,15 @@ curl -s 'http://localhost:7430/api/digest/preview?days=7' | jq '.headline, .stat
 
 # 3. Or grab a renderable HTML email body
 curl -s 'http://localhost:7430/api/digest/preview?days=7&format=html' > digest.html
+
+# 4. Arm an alert and fire a check against a supplied price
+curl -s -XPOST http://localhost:7430/api/alerts \
+  -H 'content-type: application/json' \
+  -d '{"ticker":"NVDA","condition":"price_above","value":100,"cooldown_hours":1}'
+curl -s -XPOST http://localhost:7430/api/alerts/check \
+  -H 'content-type: application/json' \
+  -d '{"prices":{"NVDA":150}}' | jq '.hits'
+curl -s 'http://localhost:7430/api/alerts/history?limit=10' | jq '.events'
 ```
 
 

@@ -34,7 +34,7 @@ export default function AlertsPage() {
 }
 
 function Alerts() {
-  const { data, error, isLoading } = useSWR<{ alerts: Alert[] }>("/alerts", swrFetcher);
+  const { data, error, isLoading } = useSWR<{ alerts: Alert[] }>("/api/alerts", swrFetcher);
   const [busy, setBusy] = useState<string | null>(null);
   const [formErr, setFormErr] = useState<string | null>(null);
 
@@ -42,8 +42,8 @@ function Alerts() {
     setFormErr(null);
     setBusy("create");
     try {
-      await api("/alerts", { method: "POST", body: JSON.stringify(input) });
-      await mutate("/alerts");
+      await api("/api/alerts", { method: "POST", body: JSON.stringify(input) });
+      await mutate("/api/alerts");
     } catch (e: any) {
       setFormErr(e?.message ?? String(e));
     } finally {
@@ -55,8 +55,8 @@ function Alerts() {
     if (!confirm("Delete this alert?")) return;
     setBusy(id);
     try {
-      await api(`/alerts/${id}`, { method: "DELETE" });
-      await mutate("/alerts");
+      await api(`/api/alerts/${id}`, { method: "DELETE" });
+      await mutate("/api/alerts");
     } finally {
       setBusy(null);
     }
@@ -65,9 +65,9 @@ function Alerts() {
   async function onCheck() {
     setBusy("check");
     try {
-      const r = await api<{ hits: any[] }>("/alerts/check", { method: "POST", body: "{}" });
+      const r = await api<{ hits: any[] }>("/api/alerts/check", { method: "POST", body: "{}" });
       alert(`${r.hits.length} alert(s) firing now`);
-      await mutate("/alerts");
+      await mutate("/api/alerts");
     } catch (e: any) {
       alert(`Check failed: ${e?.message ?? e}`);
     } finally {
@@ -247,7 +247,7 @@ function AlertHistoryCard({ refreshKey }: { refreshKey: number }) {
   qs.set("limit", String(limit));
   qs.set("offset", String(offset));
   if (ticker.trim()) qs.set("ticker", ticker.trim().toUpperCase());
-  const key = `/alerts/history?${qs.toString()}&_=${refreshKey}`;
+  const key = `/api/alerts/history?${qs.toString()}&_=${refreshKey}`;
   const { data, error, isLoading } = useSWR<AlertHistory>(key, swrFetcher);
   const [busy, setBusy] = useState(false);
 
@@ -255,7 +255,7 @@ function AlertHistoryCard({ refreshKey }: { refreshKey: number }) {
     if (!confirm("Clear all fire history? Active alerts are not affected.")) return;
     setBusy(true);
     try {
-      await api("/alerts/history/clear", { method: "DELETE" });
+      await api("/api/alerts/history/clear", { method: "DELETE" });
       await mutate(key);
     } finally {
       setBusy(false);
