@@ -6,6 +6,25 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Configurable request body size limit (DoS guard).** Enterprise security reviews routinely flag APIs that accept unbounded request bodies, since an attacker can ship a multi-gigabyte payload and pin the process before any auth check runs. A new ASGI-level middleware caps every mutating request in two layers: it rejects on the declared `Content-Length` header before reading a byte, and it streams-guards clients that omit the header (chunked or broken) by tallying bytes as they arrive. Both paths return `413` with a structured `{error, message, limit_bytes, declared_bytes}` JSON envelope and an `X-Body-Limit-Bytes` response header. Rejections are written to the audit log as `body.limit.exceeded` with the observed bytes, the active cap, and which layer fired. The cap is admin-managed at runtime via `GET/PUT /admin/body-limit` (admin scope plus MFA gate), persisted to `<data_dir>/body_limit.json`, clamped to 1 KiB - 1 GiB, and seedable on boot with `SIGNALCLAW_BODY_LIMIT_BYTES`. GET/HEAD/OPTIONS are exempt. Covered by `tests/test_body_limit.py`: default cap, lowering the cap rejects oversized payloads, GET is exempt, non-admin keys cannot mutate the cap, invalid inputs return 400, and rejections land in the audit log.
+
+  Try it locally:
+  ```bash
+  uvicorn signalclaw.api:app --port 7431 &
+  # Read current cap
+  curl -s -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" http://127.0.0.1:7431/admin/body-limit
+  # Lower the cap to 2 KiB
+  curl -s -X PUT http://127.0.0.1:7431/admin/body-limit \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"max_bytes": 2048}'
+  # Send a 4 KiB body and watch it reject with 413
+  curl -s -o /dev/stderr -w '%{http_code}\n' -X POST http://127.0.0.1:7431/watchlist \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H 'content-type: application/json' \
+    --data "$(printf '{\"ticker\":\"AAA\",\"blob\":\"%4000s\"}' x)"
+  ```
+
 - **Strict workspace CORS allowlist, replacing `allow_origins=["*"]`.** Procurement reviews flag any FastAPI service that ships a wildcard CORS default; combined with an exposed dashboard it lets any web page in the world drive the API from a victim browser. The signalclaw API now defaults to CORS **off** (no `Access-Control-Allow-*` headers, same-origin only) and exposes an audited admin surface for adding explicit origins. Origins are strictly validated (`https://host[:port]`, with `http://` only for loopback), wildcards and `null` are refused, and turning the policy on with an empty allowlist is rejected so an operator cannot accidentally regress to a permissive default. The store is JSON-backed under `<data_dir>/cors_policy.json`, threadsafe, and seeded from `SIGNALCLAW_CORS_ORIGINS` on first boot. Preflights from unlisted origins return 403 with no ACAO header, and the middleware reflects only request headers from a tight safe-list. Covered by `tests/test_cors_policy.py`: wildcard rejection, zero-headers on fresh deploys, evil-origin denial, allowed-origin round trip with `Vary: Origin`, and header filtering.
 
   Try it locally:

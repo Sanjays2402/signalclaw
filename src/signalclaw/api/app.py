@@ -61,6 +61,13 @@ from .dry_run import DryRunMiddleware
 from .request_context import RequestContextMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware, GlobalIPAllowlistMiddleware
 from .security_headers import SecurityHeadersMiddleware, build_header_policy
+from .body_limit import (
+    BodyLimitMiddleware,
+    BodyLimitStore,
+    MIN_LIMIT_BYTES,
+    MAX_LIMIT_BYTES,
+    DEFAULT_LIMIT_BYTES,
+)
 from ..network_policy import get_store as get_network_policy_store, normalise_cidr, MAX_CIDRS
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
@@ -309,6 +316,23 @@ def create_app() -> FastAPI:
         SessionTrackingMiddleware,
         store=session_store,
         revocations=revocation_store,
+    )
+    # Request body size guard. ASGI-level so it rejects oversized
+    # payloads BEFORE Starlette buffers the body. Added here (after
+    # session tracking, before security headers) so that on the
+    # inbound chain it runs early: a 413 short-circuits before the
+    # handler, before scope checks even touch the body. Security
+    # headers still wrap the response on the outbound path.
+    body_limit_store = BodyLimitStore(settings.data_dir / "body_limit.json")
+    app.state.body_limit_store = body_limit_store
+    _initial_body_cap = int(os.environ.get(
+        "SIGNALCLAW_BODY_LIMIT_BYTES", "0") or "0")
+    if _initial_body_cap > 0:
+        body_limit_store.set_max_bytes(_initial_body_cap)
+    app.add_middleware(
+        BodyLimitMiddleware,
+        store=body_limit_store,
+        audit_log=audit_log,
     )
     # Static HTTP security headers (HSTS, X-Content-Type-Options,
     # X-Frame-Options, Referrer-Policy, Permissions-Policy, CSP,
@@ -1016,6 +1040,46 @@ def create_app() -> FastAPI:
                  enabled=p.enabled, origin_count=len(p.origins),
                  allow_credentials=p.allow_credentials)
         return p.to_public()
+
+    # --- Request body size limit -------------------------------------
+    # Admin-managed cap enforced by BodyLimitMiddleware. PUT writes
+    # are audited automatically by AuditMiddleware because the path
+    # matches /admin/*.
+    @app.get("/admin/body-limit",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_body_limit_get():
+        cfg = body_limit_store.get()
+        return {
+            "max_bytes": cfg.max_bytes,
+            "min_bytes": MIN_LIMIT_BYTES,
+            "max_allowed_bytes": MAX_LIMIT_BYTES,
+            "default_bytes": DEFAULT_LIMIT_BYTES,
+        }
+
+    @app.put("/admin/body-limit",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_body_limit_put(body: dict):
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        if "max_bytes" not in body:
+            raise HTTPException(400, "max_bytes is required")
+        try:
+            requested = int(body["max_bytes"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "max_bytes must be an integer")
+        if requested < MIN_LIMIT_BYTES or requested > MAX_LIMIT_BYTES:
+            raise HTTPException(
+                400,
+                f"max_bytes must be between {MIN_LIMIT_BYTES} and {MAX_LIMIT_BYTES}",
+            )
+        cfg = body_limit_store.set_max_bytes(requested)
+        log.info("body_limit.updated", max_bytes=cfg.max_bytes)
+        return {
+            "max_bytes": cfg.max_bytes,
+            "min_bytes": MIN_LIMIT_BYTES,
+            "max_allowed_bytes": MAX_LIMIT_BYTES,
+            "default_bytes": DEFAULT_LIMIT_BYTES,
+        }
 
     @app.get("/disclaimer")
     def disclaimer():
