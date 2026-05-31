@@ -206,26 +206,32 @@ curl -OJ 'http://localhost:7430/api/runs/export?regime=bull&format=csv'
 curl -OJ 'http://localhost:7430/api/runs/export?q=spy&format=json'
 ```
 
-## Try it: mint a scoped API key
+## Try it: mint a scoped API key and call the v1 API
 
-User-managed keys live alongside the env-based registry. The dashboard at `/settings/keys` lists, mints, and revokes them. Secrets are SHA-256 hashed at rest and revealed exactly once at creation. Scopes `read` and `trade` can be granted from the UI; `admin` is server-config only to prevent privilege escalation.
+User-managed keys are served by the Next app itself (file-backed, atomic writes, SHA-256 hashed at rest). The dashboard at `/settings/keys` lists, mints, and revokes them; secrets are revealed exactly once at creation. Scopes `read` and `trade` can be granted from the UI; `admin` is server-config only (set `SIGNALCLAW_ADMIN_KEY` in the env) to prevent privilege escalation.
 
-Web: http://localhost:7430/settings/keys
+Web: <http://localhost:7430/settings/keys>
 
-API (requires an admin-scoped key, e.g. the dev fallback `dev-key`):
+The minted key unlocks the public `/v1/*` endpoints over bearer auth. Today that covers `GET /v1/runs` (with search, regime filter, ticker filter, limit, offset) and `GET /v1/runs/:id` (full payload plus a `share_url`).
 
 ```bash
-# create
-curl -X POST http://localhost:7431/admin/keys \
-  -H "x-api-key: dev-key" -H "content-type: application/json" \
-  -d '{"label":"my laptop","scopes":["read","trade"]}'
-# response includes "secret": "sck_..." once; copy it now
+# mint a key (single-user mode; set SIGNALCLAW_ADMIN_KEY to require auth here)
+curl -X POST http://localhost:7430/admin/keys \
+  -H 'content-type: application/json' \
+  -d '{"label":"my laptop","scopes":["read"]}'
+# response includes "secret": "sc_live_..." once; copy it now
 
-# use the new key
-curl http://localhost:7431/picks -H "x-api-key: sck_..."
+export SC_KEY=sc_live_paste_here
 
-# revoke
-curl -X DELETE http://localhost:7431/admin/keys/<id> -H "x-api-key: dev-key"
+# list saved regime runs (paginated, filterable)
+curl 'http://localhost:7430/v1/runs?regime=bull&limit=10' \
+  -H "Authorization: Bearer $SC_KEY"
+
+# fetch one run with its full payload
+curl http://localhost:7430/v1/runs/<id> -H "Authorization: Bearer $SC_KEY"
+
+# revoke a key when compromised
+curl -X DELETE http://localhost:7430/admin/keys/<id>
 ```
 
 ## Try it: regime classifier

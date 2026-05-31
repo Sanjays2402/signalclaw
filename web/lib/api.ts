@@ -1,4 +1,6 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:7431";
+// Empty default = same-origin (Next API routes via rewrites in next.config.ts).
+// Set NEXT_PUBLIC_API_URL to point at an external FastAPI backend.
+const BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 export class ApiError extends Error {
   status: number;

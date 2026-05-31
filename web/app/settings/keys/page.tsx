@@ -348,10 +348,10 @@ function RevealedSecret({
 function CurlExample() {
   const base =
     typeof window !== "undefined"
-      ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:7431"
-      : "http://localhost:7431";
-  const snippet = `curl ${base}/picks \\
-  -H 'x-api-key: sck_your_key_here'`;
+      ? process.env.NEXT_PUBLIC_API_URL || window.location.origin
+      : "";
+  const snippet = `curl ${base}/v1/runs \\
+  -H 'Authorization: Bearer sc_live_your_key_here'`;
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -385,9 +385,9 @@ function CurlExample() {
         {snippet}
       </pre>
       <p className="text-[11px] muted mt-2">
-        Replace the key with the value shown above. Read scope works for /picks,
-        /portfolio/snapshot, /regime. Trade scope unlocks POST to /watchlist and
-        /alerts.
+        Replace the key with the value shown above. The read scope unlocks
+        GET /v1/runs and GET /v1/runs/:id. Pass q, ticker, regime, limit, and
+        offset as query params to filter and paginate.
       </p>
     </Card>
   );
