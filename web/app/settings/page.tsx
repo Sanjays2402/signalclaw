@@ -92,6 +92,12 @@ function Settings() {
             <Key size={14} weight="duotone" /> API keys
           </Link>
           <Link
+            href="/settings/security"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <ShieldWarning size={14} weight="duotone" /> Security
+          </Link>
+          <Link
             href="/usage"
             className="text-[11px] muted hover:text-white"
           >

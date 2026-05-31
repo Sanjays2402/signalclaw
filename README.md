@@ -6,6 +6,26 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **TOTP MFA gate on every admin endpoint**. SignalClaw API keys can now enroll a second factor so that admin actions (audit log access, key minting / rotation / revocation, GDPR export, GDPR delete, MFA disable itself) require both the key and a fresh 6-digit code. Enrollment is per key, scoped by SHA-256 of the secret so the secret itself is never written to disk, and the code window enforces RFC 6238 with a one-step skew and explicit replay protection (the most recently accepted step is recorded and re-presenting the same code returns 401). An enterprise deployment can set `SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN=1` to block any unenrolled key from admin routes at all. The dashboard at `/settings/security` runs the enroll flow (QR code plus copyable base32 secret plus 6-digit confirm) and stores the active code in tab-local sessionStorage so existing pages (`/settings/audit`, `/settings/keys`) keep working without per-page changes. Covered by `tests/test_mfa.py` (admin works before enrollment, admin requires `x-mfa-code` after enrollment, replayed code rejected, fresh code accepted).
+
+  ```bash
+  # 1) enroll the calling key
+  curl -X POST http://localhost:7431/mfa/enroll \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H "content-type: application/json" -d '{"label":"laptop"}'
+
+  # 2) confirm with the first 6-digit code from your authenticator
+  curl -X POST http://localhost:7431/mfa/confirm \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H "content-type: application/json" -d '{"code":"123456"}'
+
+  # 3) every admin call now needs a fresh code
+  curl http://localhost:7431/audit \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H "x-mfa-code: 654321"
+  ```
+
+  Try it locally: `make api` then open `http://localhost:3000/settings/security`.
 - **API key hard expiry (SOC2-style credential lifetime cap)**. Every user-managed API key can now carry an optional `expires_at` deadline so credentials cannot live forever. The dashboard create form at `/settings/keys` defaults new keys to 90 days (7 / 30 / 90 / 180 / 365 day presets, plus an explicit "Never" with a warning), and existing keys can have their expiry set or cleared via `PUT /admin/keys/{id}/expiry`. Expired keys are rejected at auth time with a 401 even if their scopes are still valid; the in-memory index drops the dead hash on the next request so a stale cache cannot keep a credential alive past its deadline. Hard-cap is one year so a forgotten dashboard value cannot mint a multi-decade key, and the helper fails closed on garbled timestamps so a corrupted JSON file cannot extend a credential by accident. Covered by `tests/test_api_keys_expiry.py` (creation with TTL, force-expire on disk + 401 on reuse, bounds validation, fail-closed helper).
 
   ```bash

@@ -17,12 +17,22 @@ function apiKey(): string {
   return process.env.SIGNALCLAW_API_KEY || "";
 }
 
+function mfaCode(): string {
+  // Short-lived per-tab MFA code. The Security page writes it here just
+  // before an admin action; we send it on every request because admin
+  // routes are infrequent and the server rejects replays anyway.
+  if (typeof window === "undefined") return "";
+  return sessionStorage.getItem("sc_mfa_code") || "";
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const code = mfaCode();
   const r = await fetch(`${BASE}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
       "x-api-key": apiKey(),
+      ...(code ? { "x-mfa-code": code } : {}),
       ...(init.headers || {}),
     },
     cache: "no-store",

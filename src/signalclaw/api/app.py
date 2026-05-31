@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import get_settings
@@ -61,6 +61,7 @@ from ..privacy import StoreBundle, collect_user_data, erase_user_data
 from ..alerts import (Alert, AlertCondition, AlertStore, AlertEventStore,
                        evaluate_alerts)
 from ..api_keys import ApiKeyStore
+from ..mfa import MfaStore, provisioning_uri
 from .rate_limit import set_user_key_store
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
@@ -212,6 +213,52 @@ def create_app() -> FastAPI:
     api_key_store = ApiKeyStore(settings.data_dir / "api_keys.json")
     app.state.api_key_store = api_key_store
     set_user_key_store(api_key_store)
+    # MFA (TOTP) for admin actions. Enrolled keys must present a fresh
+    # ``x-mfa-code`` on every admin call. When SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN=1
+    # even unenrolled keys are blocked on admin routes (procurement mode).
+    mfa_store = MfaStore(settings.data_dir / "mfa" / "enrollments.json")
+    app.state.mfa_store = mfa_store
+    _mfa_required = os.environ.get("SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN", "0") == "1"
+
+    from fastapi import Header
+
+    def require_mfa_for_admin(
+        x_api_key: str | None = Header(default=None),
+        x_mfa_code: str | None = Header(default=None),
+    ) -> None:
+        """Second-factor gate for admin-scoped endpoints.
+
+        Behaviour:
+
+        * Caller has no enrollment and MFA is not required globally:
+          allowed (lets a brand-new operator enroll without being
+          locked out).
+        * Caller has an enrollment: must present a valid ``x-mfa-code``.
+        * MFA required globally and caller is not enrolled: rejected
+          with a clear message pointing at ``POST /mfa/enroll``.
+        """
+        if not x_api_key:
+            return  # require_scope already returned 401 upstream
+        enrolled = mfa_store.is_enrolled(x_api_key)
+        if not enrolled:
+            if _mfa_required:
+                raise HTTPException(
+                    status_code=401,
+                    detail="MFA required for admin actions; enroll via POST /mfa/enroll",
+                )
+            return
+        if not x_mfa_code:
+            raise HTTPException(
+                status_code=401,
+                detail="missing x-mfa-code header (TOTP required for admin actions)",
+            )
+        if not mfa_store.verify(x_api_key, x_mfa_code.strip()):
+            raise HTTPException(
+                status_code=401,
+                detail="invalid or replayed TOTP code",
+            )
+
+    app.state.require_mfa_for_admin = require_mfa_for_admin
 
     def _notifier_for(channel: str) -> Notifier | None:
         c = (channel or "").lower()
@@ -245,7 +292,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=503, detail=body)
         return body
 
-    @app.get("/audit", dependencies=[Depends(require_scope("admin"))])
+    @app.get("/audit", dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def audit_tail(limit: int = 100, day: str | None = None):
         """Return recent audit events. Admin scope required.
 
@@ -258,7 +305,7 @@ def create_app() -> FastAPI:
             "events": audit_log.tail(limit=limit, day=day),
         }
 
-    @app.get("/audit/days", dependencies=[Depends(require_scope("admin"))])
+    @app.get("/audit/days", dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def audit_days():
         return {"days": audit_log.list_days()}
 
@@ -266,11 +313,11 @@ def create_app() -> FastAPI:
     # These require the ``admin`` scope so a read-only key cannot mint a
     # trade-scoped key for itself. The dev fallback key has admin; in
     # production set SIGNALCLAW_API_KEYS_JSON with an admin-scoped key.
-    @app.get("/admin/keys", dependencies=[Depends(require_scope("admin"))])
+    @app.get("/admin/keys", dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_list():
         return {"keys": [k.to_public() for k in api_key_store.list()]}
 
-    @app.post("/admin/keys", dependencies=[Depends(require_scope("admin"))])
+    @app.post("/admin/keys", dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_create(body: dict):
         label = str(body.get("label") or "").strip()
         scopes_in = body.get("scopes") or ["read"]
@@ -310,7 +357,7 @@ def create_app() -> FastAPI:
         return out
 
     @app.put("/admin/keys/{key_id}/ip-allowlist",
-             dependencies=[Depends(require_scope("admin"))])
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_set_allowlist(key_id: str, body: dict):
         cidrs = body.get("ip_allowlist")
         if cidrs is None:
@@ -326,7 +373,7 @@ def create_app() -> FastAPI:
         return updated.to_public()
 
     @app.put("/admin/keys/{key_id}/expiry",
-             dependencies=[Depends(require_scope("admin"))])
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_set_expiry(key_id: str, body: dict):
         """Set or clear a key's hard expiry.
 
@@ -350,7 +397,7 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "key not found")
         return updated.to_public()
 
-    @app.delete("/admin/keys/{key_id}", dependencies=[Depends(require_scope("admin"))])
+    @app.delete("/admin/keys/{key_id}", dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_revoke(key_id: str):
         ok = api_key_store.revoke(key_id)
         if not ok:
@@ -358,7 +405,7 @@ def create_app() -> FastAPI:
         return {"revoked": key_id}
 
     @app.post("/admin/keys/{key_id}/rotate",
-              dependencies=[Depends(require_scope("admin"))])
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_rotate(key_id: str, body: dict | None = None):
         """Mint a new secret for an existing key.
 
@@ -386,6 +433,78 @@ def create_app() -> FastAPI:
     @app.get("/disclaimer")
     def disclaimer():
         return {"text": "SignalClaw is NOT financial advice. See FINANCIAL_DISCLAIMER.md."}
+
+    # --- MFA (TOTP) for admin actions ------------------------------------
+    # Anyone with a valid API key can enroll their own key. Disabling
+    # requires the admin scope (so an admin can recover from a lost
+    # device by issuing a new key + disabling MFA on the compromised
+    # one). All four endpoints are audit-logged via the existing
+    # AuditMiddleware because they mutate auth state.
+    @app.get("/mfa/status", dependencies=[Depends(require_api_key)])
+    def mfa_status(x_api_key: str | None = Header(default=None)):
+        rec = mfa_store.get(x_api_key or "")
+        return {
+            "enrolled": bool(rec and rec.confirmed),
+            "pending": bool(rec and not rec.confirmed),
+            "required_for_admin": _mfa_required,
+        }
+
+    @app.post("/mfa/enroll", dependencies=[Depends(require_api_key)])
+    def mfa_enroll(body: dict | None = None,
+                   x_api_key: str | None = Header(default=None)):
+        """Begin TOTP enrollment for the calling key.
+
+        Returns the base32 secret and an ``otpauth://`` provisioning
+        URI exactly once. The UI should render the URI as a QR code
+        and then call ``POST /mfa/confirm`` with the first 6-digit
+        code from the authenticator app.
+        """
+        if not x_api_key:
+            raise HTTPException(401, "missing x-api-key")
+        label = ""
+        if body and isinstance(body, dict):
+            label = str(body.get("label") or "").strip()[:64]
+        enr = mfa_store.begin_enroll(x_api_key, label=label)
+        if enr.confirmed:
+            raise HTTPException(
+                409,
+                "MFA already enrolled for this key; call POST /mfa/disable first",
+            )
+        uri = provisioning_uri(
+            enr.secret_b32,
+            label=enr.label or "signalclaw-key",
+        )
+        return {
+            "secret": enr.secret_b32,
+            "otpauth_uri": uri,
+            "algorithm": "SHA1",
+            "digits": 6,
+            "period_seconds": 30,
+        }
+
+    @app.post("/mfa/confirm", dependencies=[Depends(require_api_key)])
+    def mfa_confirm(body: dict,
+                    x_api_key: str | None = Header(default=None)):
+        code = str((body or {}).get("code") or "").strip()
+        if not code:
+            raise HTTPException(400, "code is required")
+        if not mfa_store.confirm(x_api_key or "", code):
+            raise HTTPException(400, "invalid TOTP code or no pending enrollment")
+        return {"enrolled": True}
+
+    @app.post("/mfa/disable",
+              dependencies=[Depends(require_scope("admin")),
+                            Depends(require_mfa_for_admin)])
+    def mfa_disable(body: dict | None = None,
+                    x_api_key: str | None = Header(default=None)):
+        """Remove the calling key's MFA enrollment.
+
+        Itself MFA-gated so a stolen API key alone cannot turn off MFA.
+        Recovery path for a lost device: issue a new admin key on the
+        server (env config), then call this endpoint with the new key.
+        """
+        ok = mfa_store.disable(x_api_key or "")
+        return {"disabled": ok}
 
     # Public, unauthenticated demo of the regime classifier. Locked to a
     # small allowlist of well-known liquid tickers so a first-time visitor
@@ -1762,7 +1881,7 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/privacy/export",
-             dependencies=[Depends(require_scope("admin"))])
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def privacy_export():
         """Return every user-state record as a single JSON blob (GDPR Article 20).
 
@@ -1775,7 +1894,7 @@ def create_app() -> FastAPI:
         return collect_user_data(_store_bundle())
 
     @app.post("/privacy/delete",
-              dependencies=[Depends(require_scope("admin"))])
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def privacy_delete(confirm: str = "",
                        wipe_audit: bool = False,
                        wipe_reports: bool = False,
