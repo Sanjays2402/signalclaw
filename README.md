@@ -6,6 +6,31 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Per-key rate limits with standard 429 headers**. Every `/api/v1/*` call is now metered against a sliding 60-second window per API key. Allowed requests carry `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `X-RateLimit-Window`. Over-cap requests get an HTTP 429 with `Retry-After` and a structured body (`code: "rate_limited"`, `limit`, `retry_after`), and the throttle is itself written to the audit log so operators can see who tripped it. The default cap is 60 req/min, configurable via `SIGNALCLAW_RATE_LIMIT_PER_MIN`. Each key can also be raised or lowered individually from the dashboard at `/settings/keys` (the new "Rate limit" button on each row), or via the admin API:
+
+  ```bash
+  # UI
+  open http://localhost:7430/settings/keys
+
+  # Inspect the current cap for a key
+  curl -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    http://localhost:7430/api/admin/keys/<key_id>/rate-limit
+
+  # Override to 600 req/min for one key
+  curl -X PUT -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"limit": 600}' \
+    http://localhost:7430/api/admin/keys/<key_id>/rate-limit
+
+  # Clear the override (back to the global default)
+  curl -X PUT -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"limit": null}' \
+    http://localhost:7430/api/admin/keys/<key_id>/rate-limit
+  ```
+
+  Counters live in `web/.data/ratelimits.json` (atomic JSON writes). Wired through `lib/rateLimitStore.ts` + `lib/v1Guard.ts` so every public route shares the same enforcement path. Unit-tested for window roll-over, override isolation across keys, and header shape.
+
 - **Per-key IP allowlist**. Restrict any user-managed API key to a fixed set of source IPs or CIDR blocks. Mint or update an allowlist in the dashboard at `/settings/keys`, or via the API. Requests from outside the list are rejected with HTTP 403 and a structured payload (`detail`, `client_ip`, `key_id`, `allowlist`) so SIEM rules can pivot on key id without parsing prose. IPv4 and IPv6 both supported; bare IPs become host networks (`/32` or `/128`); up to 64 entries per key; fail-closed when the client IP is missing or unparseable; honours `SIGNALCLAW_TRUST_FORWARDED` + `SIGNALCLAW_TRUSTED_PROXIES` so the same proxy-trust knobs that gate the rate limiter gate this check too. Keys with an empty allowlist are unaffected, so existing deployments keep working unchanged.
 
   ```bash
