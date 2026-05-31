@@ -15,8 +15,8 @@ import {
   Field,
   fmtUsd,
 } from "@/components/ui";
-import { api, swrFetcher, type Alert, type AlertIn } from "@/lib/api";
-import { BellRinging, Trash, Plus } from "@phosphor-icons/react/dist/ssr";
+import { api, swrFetcher, type Alert, type AlertIn, type AlertHistory } from "@/lib/api";
+import { BellRinging, Trash, Plus, ClockCounterClockwise } from "@phosphor-icons/react/dist/ssr";
 
 const CONDITIONS = [
   { v: "price_above", l: "price >" },
@@ -93,6 +93,8 @@ function Alerts() {
       </header>
 
       <CreateAlertForm onSubmit={onCreate} busy={busy === "create"} err={formErr} />
+
+      <AlertHistoryCard refreshKey={busy === "check" ? 0 : 1} />
 
       <Card title="Active alerts">
         {error ? (
@@ -233,6 +235,137 @@ function CreateAlertForm({
         </Button>
         {err && <div className="md:col-span-6 text-[11px] down mono">{err}</div>}
       </form>
+    </Card>
+  );
+}
+
+function AlertHistoryCard({ refreshKey }: { refreshKey: number }) {
+  const [ticker, setTicker] = useState("");
+  const [offset, setOffset] = useState(0);
+  const limit = 25;
+  const qs = new URLSearchParams();
+  qs.set("limit", String(limit));
+  qs.set("offset", String(offset));
+  if (ticker.trim()) qs.set("ticker", ticker.trim().toUpperCase());
+  const key = `/alerts/history?${qs.toString()}&_=${refreshKey}`;
+  const { data, error, isLoading } = useSWR<AlertHistory>(key, swrFetcher);
+  const [busy, setBusy] = useState(false);
+
+  async function onClear() {
+    if (!confirm("Clear all fire history? Active alerts are not affected.")) return;
+    setBusy(true);
+    try {
+      await api("/alerts/history/clear", { method: "DELETE" });
+      await mutate(key);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function fmtTs(s: string) {
+    try {
+      const d = new Date(s);
+      if (Number.isNaN(d.getTime())) return s;
+      return d.toLocaleString(undefined, { hour12: false });
+    } catch {
+      return s;
+    }
+  }
+  function fmtVal(v: number | string, cond: string) {
+    if (typeof v !== "number") return String(v);
+    if (cond.includes("pct")) return `${(v * 100).toFixed(2)}%`;
+    return fmtUsd(v);
+  }
+
+  return (
+    <Card
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          <ClockCounterClockwise weight="duotone" size={12} />
+          Fire history
+        </span>
+      }
+    >
+      <div className="flex flex-wrap items-end gap-3 mb-3">
+        <Field label="Filter ticker">
+          <Input
+            value={ticker}
+            onChange={(e) => {
+              setOffset(0);
+              setTicker(e.target.value);
+            }}
+            placeholder="all"
+            className="w-28"
+          />
+        </Field>
+        <div className="muted text-[11px] mono">
+          {data ? `${data.total} total` : ""}
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="ghost"
+            disabled={offset === 0}
+            onClick={() => setOffset(Math.max(0, offset - limit))}
+            className="text-[10px]"
+          >
+            Prev
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={!data || offset + limit >= data.total}
+            onClick={() => setOffset(offset + limit)}
+            className="text-[10px]"
+          >
+            Next
+          </Button>
+          <Button variant="danger" onClick={onClear} disabled={busy} className="text-[10px]">
+            <Trash weight="duotone" size={11} className="inline mr-1" />
+            Clear
+          </Button>
+        </div>
+      </div>
+
+      {error ? (
+        <ErrorBox err={error} />
+      ) : isLoading || !data ? (
+        <Loading />
+      ) : data.events.length === 0 ? (
+        <Empty
+          title="No fires yet"
+          hint="Run check on the alerts above. Hits land here with a timestamp."
+        />
+      ) : (
+        <div className="overflow-x-auto -mx-3">
+          <table className="trade">
+            <thead>
+              <tr>
+                <th>Fired at</th>
+                <th>Ticker</th>
+                <th>Rule</th>
+                <th className="r">Target</th>
+                <th className="r">Observed</th>
+                <th>Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.events.map((e, i) => (
+                <tr key={`${e.alert_id}-${e.fired_at}-${i}`}>
+                  <td className="mono muted" style={{ fontSize: 11 }}>{fmtTs(e.fired_at)}</td>
+                  <td className="mono font-semibold">{e.ticker}</td>
+                  <td className="mono muted" style={{ fontSize: 11 }}>
+                    {CONDITIONS.find((c) => c.v === e.condition)?.l ?? e.condition}
+                  </td>
+                  <td className="r mono">{fmtVal(e.value, e.condition)}</td>
+                  <td className="r mono">{fmtVal(e.observed, e.condition)}</td>
+                  <td className="muted" style={{ fontSize: 11, maxWidth: 240, whiteSpace: "normal" }}>
+                    {e.note || ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Card>
   );
 }

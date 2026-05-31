@@ -17,6 +17,7 @@ from ..explain import rationale_for, risk_flags as compute_risk_flags
 from ..backtest import WalkForwardBacktest, walk_forward_optimize
 from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut, BacktestTrade,
                        AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut,
+                       AlertEventOut, AlertHistoryOut,
                        TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut,
                        SizingOut, SizingRequest,
                        CorrelationMatrixOut, DiversificationOut,
@@ -55,7 +56,8 @@ from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
 from ..audit.retention import AuditRetentionPruner, retention_config_from_env
 from ..privacy import StoreBundle, collect_user_data, erase_user_data
-from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
+from ..alerts import (Alert, AlertCondition, AlertStore, AlertEventStore,
+                       evaluate_alerts)
 from ..api_keys import ApiKeyStore
 from .rate_limit import set_user_key_store
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
@@ -174,6 +176,7 @@ def create_app() -> FastAPI:
     wl_path = settings.data_dir / "watchlist.json"
     store = WatchlistStore(wl_path)
     alert_store = AlertStore(settings.data_dir / "alerts.json")
+    alert_event_store = AlertEventStore(settings.data_dir / "alert_events.json")
     portfolio_store = PortfolioStore(settings.data_dir / "portfolio.json")
     stops_store = StopStore(settings.data_dir / "stops.json")
     earnings_store = EarningsStore(settings.data_dir / "earnings.json")
@@ -481,12 +484,33 @@ def create_app() -> FastAPI:
                     save_ohlcv(t, df)
             ohlcv[t] = df
         hits = evaluate_alerts(rows, ohlcv)
+        if hits:
+            alert_event_store.record(hits)
         for a in rows:
             alert_store.update(a)
         return AlertCheckOut(
             checked=len(rows),
             hits=[AlertHitOut(**h.to_dict()) for h in hits],
         )
+
+    @app.get("/alerts/history", response_model=AlertHistoryOut,
+             dependencies=[Depends(require_api_key)])
+    def alerts_history(ticker: str | None = None,
+                       limit: int = 100, offset: int = 0):
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        events = alert_event_store.list(ticker=ticker, limit=limit, offset=offset)
+        return AlertHistoryOut(
+            total=alert_event_store.count(ticker=ticker),
+            limit=limit,
+            offset=offset,
+            events=[AlertEventOut(**e.to_dict()) for e in events],
+        )
+
+    @app.delete("/alerts/history/clear", dependencies=[Depends(require_api_key)])
+    def alerts_history_clear():
+        alert_event_store.clear()
+        return {"cleared": True}
 
     @app.get("/portfolio/trades", response_model=TradeListOut, dependencies=[Depends(require_api_key)])
     def portfolio_trades_list():

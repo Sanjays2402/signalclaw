@@ -417,6 +417,9 @@ Correlation + diversification + rotation + regime
 Alerts + stops + brackets + scaling
 
 - `GET/POST/DELETE /alerts[/{alert_id}]`, `POST /alerts/check`
+- `GET /alerts/history?ticker=&limit=&offset=` and `DELETE /alerts/history/clear`
+  return a rolling, paginated log of every alert fire with target vs. observed values.
+  Also surfaced as a Fire history card on `/alerts` in the web UI.
 - `GET/POST/DELETE /stops[/{rule_id}]`, `POST /stops/check`
 - `GET/POST/DELETE /brackets[/{plan_id}]`, `GET /brackets/stats`
 - `POST /brackets/{plan_id}/fill|close|cancel`

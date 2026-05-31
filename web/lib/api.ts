@@ -140,6 +140,22 @@ export type AlertIn = {
   enabled?: boolean;
 };
 
+export type AlertEvent = {
+  alert_id: string;
+  ticker: string;
+  condition: string;
+  value: number | string;
+  observed: number | string;
+  fired_at: string;
+  note: string;
+};
+export type AlertHistory = {
+  total: number;
+  limit: number;
+  offset: number;
+  events: AlertEvent[];
+};
+
 export type Bracket = {
   id: string;
   ticker: string;

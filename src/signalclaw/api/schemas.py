@@ -92,6 +92,23 @@ class AlertCheckOut(BaseModel):
     hits: List[AlertHitOut]
 
 
+class AlertEventOut(BaseModel):
+    alert_id: str
+    ticker: str
+    condition: str
+    value: Union[float, str]
+    observed: Union[float, str]
+    fired_at: str
+    note: str = ""
+
+
+class AlertHistoryOut(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    events: List[AlertEventOut]
+
+
 class TradeIn(BaseModel):
     ticker: str
     side: str
