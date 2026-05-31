@@ -122,6 +122,12 @@ function Settings() {
             <Globe size={14} weight="duotone" /> Network
           </Link>
           <Link
+            href="/settings/siem"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <FileLock size={14} weight="duotone" /> SIEM
+          </Link>
+          <Link
             href="/settings/cors"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >

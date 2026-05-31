@@ -234,6 +234,28 @@ export async function recordAuditEvent(input: RecordInput): Promise<AuditEvent> 
   });
   await writeQueue;
   maybeRotate().catch(() => {});
+  // Fan out to the optional SIEM sink. Fire-and-forget; never blocks the
+  // caller, never throws. Lazy import keeps any future cycle harmless.
+  try {
+    const mod = await import("@/lib/siemSinkStore");
+    mod.dispatchInBackground({
+      id: ev.id,
+      ts: ev.ts,
+      route: ev.route,
+      method: ev.method,
+      status: ev.status,
+      ok: ev.ok,
+      key_id: ev.key_id,
+      key_label: ev.key_label,
+      scopes: ev.scopes,
+      reason: ev.reason,
+      request_id: ev.request_id,
+      ip_hash: ev.ip_hash,
+      hash: ev.hash,
+    });
+  } catch {
+    /* never break audit on sink errors */
+  }
   return ev;
 }
 

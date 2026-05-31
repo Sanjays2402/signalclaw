@@ -2,7 +2,35 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: TOTP MFA on every mutating admin route
+## New: SIEM audit log forwarder
+
+Procurement reality: SOC2 CC7.2 and ISO 27001 A.12.4 both require security-relevant events to leave the system in near real time so the customer's SOC can correlate SignalClaw activity with the rest of their estate (Splunk, Datadog, Elastic, Panther). The internal append-only tamper-evident audit chain at `lib/auditStore.ts` is the source of truth. The SIEM forwarder is the optional outbound mirror: every audit event is signed with HMAC-SHA256 and POSTed fire-and-forget to a configured collector URL. A failing or slow SIEM never blocks an end-user request.
+
+Every POST carries `X-SignalClaw-Signature: sha256=<hex>` over the raw JSON body, plus `X-SignalClaw-Event-Id` and `X-SignalClaw-Timestamp` so the receiver can defend against replay. The sink supports an optional extra header (for collectors that demand a tenant token), a bounded per-request timeout (100..10000ms, default 2s), and a rolling in-memory delivery log so an operator can confirm the integration is healthy without round-tripping through the SIEM itself. A built-in test endpoint dispatches a synthetic event so you can verify your collector wired the HMAC correctly before flipping `enabled: true` in production.
+
+Try it locally: `cd web && npm run dev`, then open http://localhost:7430/settings/siem, paste a collector URL and HMAC secret, save, and click "Send test event". Or drive it from the API:
+
+```bash
+# Configure the sink (admin scope + MFA required in production posture)
+curl -s -X PUT -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://collector.example.com/in","secret":"supersecret-very-long-1234567890","enabled":true}' \
+  http://localhost:7430/api/admin/siem | jq .
+
+# Dispatch a synthetic event to prove the receiver works
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  http://localhost:7430/api/admin/siem/test | jq .
+
+# Inspect recent dispatch attempts
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/siem/deliveries | jq .
+```
+
+Correctness is enforced at the store: `web/tests/siemSinkStore.test.mjs` proves the HMAC matches the raw body byte-for-byte, the sink cannot be enabled without a URL and secret, disabled sinks are silent no-ops (no fetch), failed deliveries are recorded without throwing, and the public view never leaks the plaintext secret or extra header value.
+
+## Previously: TOTP MFA on every mutating admin route
 
 Procurement reality: a single static admin bearer token is the artifact most security reviews refuse to accept. Once the token leaks, every workspace setting from key minting to data residency to the kill switch is one curl call away. SignalClaw now requires a second factor on every mutating admin endpoint. Each admin API key can enroll a TOTP secret (RFC 6238, SHA1, 30 second step, 6 digits, Google Authenticator / 1Password / Authy compatible). Once enrolled, every `POST`, `PUT`, `PATCH`, and `DELETE` under `/api/admin/*` requires a fresh `X-MFA-Code` header. Wrong, missing, malformed, or replayed codes are rejected with `401 mfa_required` or `401 mfa_invalid` and written to the tamper-evident audit chain. Read-only `GET` calls stay un-gated so the dashboard does not nag on every render, and local single-user mode (no `SIGNALCLAW_ADMIN_KEY`) bypasses MFA so a fresh install can bootstrap.
 
