@@ -158,6 +158,26 @@ A local-first time-series signal terminal that classifies market regime (bull / 
   # => 400 {"detail":"refusing webhook to non-public ip 169.254.169.254"}
   ```
 
+- **Force-logout enforcement (revoked sessions actually stay revoked)**. Until now the admin "Revoke session" button only cleared the ledger row, so the same client recreated the entry on its next request. SignalClaw now keeps a separate `RevocationStore` and consults it inside `SessionTrackingMiddleware` BEFORE the request reaches a route. `DELETE /admin/sessions/{id}` places a session-scope block on the matching `(key_id, source_ip, user_agent)` fingerprint, and the next request from that exact client is rejected with `HTTP 401 {"detail":"session revoked"}` plus an `x-session-revoked: 1` header. `POST /admin/sessions/revoke-key/{key_id}` upgrades the block to key scope so every UA / IP using that key is rejected, including ones the operator has never seen before. `POST /admin/sessions/revoke-all` places key-scope blocks on every key currently in the ledger EXCEPT the caller's own key, so an operator running an incident response cannot lock themselves out mid-revoke. `POST /admin/sessions/{id}/restore` and `POST /admin/sessions/restore-key/{key_id}` lift a previously placed block. Revocations auto-expire after `SIGNALCLAW_REVOCATION_TTL_SECONDS` (default 30 days) so the file stays bounded and a long-lived block never outlives the underlying key rotation. The `/admin/sessions/*` recovery routes are exempt from the revocation gate so an operator who accidentally revokes their own session can still reach the restore endpoint. Covered by `tests/test_session_revocation.py` (revoke blocks the same client and a different UA on the same key is unaffected, revoke-key blocks every UA including unseen ones, revoke-all exempts the caller and blocks everyone else, the admin recovery surface is reachable after self-revoke, restore lifts the block).
+
+  Try it locally: `make api` then
+  ```bash
+  # 1. Probe with a reader key to register a session row.
+  curl http://localhost:7431/watchlist -H "x-api-key: $READER_KEY"
+  # 2. Find the session id.
+  SID=$(curl -s http://localhost:7431/admin/sessions \
+        -H "x-api-key: $ADMIN_KEY" -H "x-mfa-code: 123456" \
+        | jq -r '.sessions[0].id')
+  # 3. Force-logout that session.
+  curl -X DELETE http://localhost:7431/admin/sessions/$SID \
+       -H "x-api-key: $ADMIN_KEY" -H "x-mfa-code: 123456"
+  # 4. Same reader key is now blocked.
+  curl -i http://localhost:7431/watchlist -H "x-api-key: $READER_KEY"
+  # HTTP/1.1 401 Unauthorized
+  # x-session-revoked: 1
+  # {"detail":"session revoked","reason":"admin_revoke","scope":"session",...}
+  ```
+
 - **Active sessions admin console (visibility + force-revoke)**. SignalClaw now records every authenticated request as a session row keyed by `(api_key, source_ip, user_agent)` and exposes the live list at `GET /admin/sessions`. An operator can see which keys are in use, from which IPs, with which clients, when each session was first seen, when it was last seen, and how many requests it has served. Suspicious row? `DELETE /admin/sessions/{id}` drops just that row. Suspected compromise of one key? `POST /admin/sessions/revoke-key/{key_id}` clears every row tied to it. Suspected platform-wide compromise? `POST /admin/sessions/revoke-all` resets the entire ledger. The session store auto-prunes rows older than `SIGNALCLAW_SESSION_TTL_SECONDS` (default 14 days) so it stays bounded without operator intervention. All four endpoints require the `admin` scope plus MFA and are written to the tamper-evident audit log. Covered by `tests/test_sessions_admin.py` (tracking creates rows, non-admin gets 403, revoke removes one row, revoke-all clears the ledger without invalidating the underlying credential, missing session returns 404).
 
   Try it locally: `make api` then

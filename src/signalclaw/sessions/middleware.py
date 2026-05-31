@@ -11,8 +11,10 @@ from typing import Iterable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from . import SessionStore
+from . import SessionStore, _fingerprint
+from .revocation import RevocationStore
 
 
 class SessionTrackingMiddleware(BaseHTTPMiddleware):
@@ -34,10 +36,12 @@ class SessionTrackingMiddleware(BaseHTTPMiddleware):
         self,
         app,
         store: SessionStore,
+        revocations: RevocationStore | None = None,
         exempt_paths: Iterable[str] = DEFAULT_EXEMPT,
     ) -> None:
         super().__init__(app)
         self._store = store
+        self._revocations = revocations
         self._exempt = tuple(exempt_paths)
 
     async def dispatch(self, request: Request, call_next):
@@ -45,14 +49,9 @@ class SessionTrackingMiddleware(BaseHTTPMiddleware):
         if any(path == p or path.startswith(p + "/") for p in self._exempt):
             return await call_next(request)
 
-        response = await call_next(request)
-
-        # Only record successful or auth-rejected calls that carried an
-        # API key. 401 with no key is anonymous noise; 200 with no key
-        # is a public endpoint and not worth tracking per-session.
         api_key = request.headers.get("x-api-key", "")
         if not api_key:
-            return response
+            return await call_next(request)
 
         # Resolve the key to get its id + label. Lazy import avoids a
         # circular dependency with ``api.rate_limit``.
@@ -60,11 +59,11 @@ class SessionTrackingMiddleware(BaseHTTPMiddleware):
             from ..api.rate_limit import _resolve_key  # type: ignore
             from ..api_keys import _hash as _hash_key  # type: ignore
         except Exception:
-            return response
+            return await call_next(request)
 
         rec = _resolve_key(api_key)
         if rec is None:
-            return response
+            return await call_next(request)
 
         # Prefer the user-managed key id when available, else fall back
         # to a stable hash of the secret so legacy env-keys still get a
@@ -82,6 +81,36 @@ class SessionTrackingMiddleware(BaseHTTPMiddleware):
         ip = request.headers.get(
             "x-forwarded-for", client).split(",")[0].strip() or client
         ua = request.headers.get("user-agent", "")[:256]
+        session_id = _fingerprint(key_id, ip, ua or "")
+
+        # Enforce force-logout. A revoked (session_id, key_id) tuple
+        # is rejected with 401 BEFORE the request reaches the route.
+        # Without this check, the admin "Revoke session" button only
+        # cleared the ledger row; the same client recreated the row on
+        # its next request. Admin endpoints under /admin/sessions and
+        # /admin/keys are exempt so an operator who accidentally
+        # revokes themselves can still reverse the action.
+        if (self._revocations is not None
+                and not path.startswith("/admin/sessions")
+                and not path.startswith("/admin/keys")):
+            try:
+                hit = self._revocations.is_revoked(
+                    session_id=session_id, key_id=key_id)
+            except OSError:
+                hit = None
+            if hit is not None:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "detail": "session revoked",
+                        "reason": hit.reason,
+                        "scope": hit.scope,
+                        "expires_at": hit.expires_at,
+                    },
+                    headers={"x-session-revoked": "1"},
+                )
+
+        response = await call_next(request)
 
         try:
             self._store.touch(

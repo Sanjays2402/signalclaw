@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+from dataclasses import asdict
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Header
@@ -70,6 +71,7 @@ from ..mfa import MfaStore, provisioning_uri
 from .rate_limit import set_user_key_store, get_registry
 from ..sessions import SessionStore
 from ..sessions.middleware import SessionTrackingMiddleware
+from ..sessions.revocation import RevocationStore
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
                           attribution, sector_exposure, tax_summary, LotMethod,
@@ -272,11 +274,27 @@ def create_app() -> FastAPI:
     session_store = SessionStore(
         settings.data_dir / "sessions.json", ttl_seconds=session_ttl)
     app.state.session_store = session_store
+    # Force-logout enforcement. Revocations placed here block matching
+    # (session_id, key_id) tuples in SessionTrackingMiddleware before
+    # the request reaches a route. Without this layer the admin
+    # "Revoke session" button only cleared the ledger row; the same
+    # client recreated it on its next request.
+    revocation_ttl = int(os.environ.get(
+        "SIGNALCLAW_REVOCATION_TTL_SECONDS",
+        str(RevocationStore.DEFAULT_TTL)))
+    revocation_store = RevocationStore(
+        settings.data_dir / "session_revocations.json",
+        ttl_seconds=revocation_ttl)
+    app.state.revocation_store = revocation_store
     # Register the session-tracking middleware now that the store
     # exists. Added here so it sits between AuditMiddleware (which
     # records request status) and the handler, picking up the
     # resolved api key without re-implementing auth.
-    app.add_middleware(SessionTrackingMiddleware, store=session_store)
+    app.add_middleware(
+        SessionTrackingMiddleware,
+        store=session_store,
+        revocations=revocation_store,
+    )
     _mfa_required = os.environ.get("SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN", "0") == "1"
 
     from fastapi import Header
@@ -645,6 +663,27 @@ def create_app() -> FastAPI:
         }
 
     # --- Active sessions ------------------------------------------------
+    # Resolve the calling key into a short, audit-friendly label so a
+    # revocation row records WHO placed the block. Falls back to the
+    # first chars of the secret hash for legacy env-only keys so the
+    # actor field is never blank.
+    def _actor_label(x_api_key: str | None) -> str:
+        if not x_api_key:
+            return "unknown"
+        try:
+            store_ = getattr(app.state, "api_key_store", None)
+            if store_ is not None:
+                stored = store_.lookup(x_api_key)
+                if stored is not None:
+                    return f"{stored.id}:{getattr(stored, 'label', '') or ''}".strip(":")
+        except Exception:
+            pass
+        try:
+            from ..api_keys import _hash as _hk
+            return "env:" + _hk(x_api_key)[:12]
+        except Exception:
+            return "unknown"
+
     # An enterprise admin needs to see, in one place, which API keys are
     # currently active, from which IPs, with which clients, and when
     # they were last used. They also need a one-click way to kill a
@@ -652,38 +691,135 @@ def create_app() -> FastAPI:
     @app.get("/admin/sessions",
              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_sessions_list():
-        return {"sessions": [s.to_public() for s in session_store.list()]}
+        live = [s.to_public() for s in session_store.list()]
+        active_rev = {r.session_id for r in revocation_store.list()
+                      if r.scope == "session"}
+        for row in live:
+            row["revoked"] = row["id"] in active_rev
+        return {
+            "sessions": live,
+            "revocations": [asdict(r) for r in revocation_store.list()],
+            "revocation_stats": revocation_store.stats(),
+        }
 
     @app.delete("/admin/sessions/{session_id}",
                 dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
-    def admin_sessions_revoke(session_id: str):
-        ok = session_store.revoke(session_id)
-        if not ok:
+    def admin_sessions_revoke(
+        session_id: str,
+        x_api_key: str | None = Header(default=None),
+    ):
+        # Locate the live row so we know which key_id to bind the
+        # revocation to. If the row is missing (TTL pruned or never
+        # seen) we still record the block keyed by session_id alone.
+        target = next(
+            (s for s in session_store.list() if s.id == session_id), None)
+        if target is None:
             raise HTTPException(404, "session not found")
-        return {"revoked": session_id}
+        actor = _actor_label(x_api_key)
+        revocation_store.revoke_session(
+            session_id=session_id,
+            key_id=target.key_id,
+            reason="admin_revoke",
+            revoked_by=actor,
+        )
+        session_store.revoke(session_id)
+        return {
+            "revoked": session_id,
+            "key_id": target.key_id,
+            "enforced": True,
+        }
+
+    @app.post("/admin/sessions/{session_id}/restore",
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_sessions_restore(session_id: str):
+        """Lift a previously placed session-scope revocation. The
+        underlying ledger row is recreated by the next request from
+        that client; the operator just needs to clear the block.
+        """
+        cleared = revocation_store.clear_session(session_id)
+        if not cleared:
+            raise HTTPException(404, "no active revocation")
+        return {"restored": session_id}
 
     @app.post("/admin/sessions/revoke-key/{key_id}",
               dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
-    def admin_sessions_revoke_key(key_id: str):
-        """Drop every active session row tied to a single key.
-
-        Does not revoke the key itself, by design: an operator may want
-        to clear the visibility entries (for example after rotating an
-        IP allowlist) without invalidating the credential. To revoke
-        the credential, call ``DELETE /admin/keys/{key_id}``.
+    def admin_sessions_revoke_key(
+        key_id: str,
+        x_api_key: str | None = Header(default=None),
+    ):
+        """Force-logout every active session for a key AND block any
+        future session from that key for the configured revocation
+        TTL. Does not delete the underlying credential, by design: an
+        operator can lift the block via ``/restore-key`` once the
+        incident is resolved, or call ``DELETE /admin/keys/{key_id}``
+        to invalidate the credential permanently.
         """
+        actor = _actor_label(x_api_key)
+        revocation_store.revoke_key(
+            key_id=key_id,
+            reason="admin_revoke_key",
+            revoked_by=actor,
+        )
         n = session_store.revoke_for_key(key_id)
-        return {"revoked_key": key_id, "sessions_removed": int(n)}
+        return {
+            "revoked_key": key_id,
+            "sessions_removed": int(n),
+            "enforced": True,
+        }
+
+    @app.post("/admin/sessions/restore-key/{key_id}",
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_sessions_restore_key(key_id: str):
+        cleared = revocation_store.clear_key(key_id)
+        if not cleared:
+            raise HTTPException(404, "no active revocation")
+        return {"restored_key": key_id}
 
     @app.post("/admin/sessions/revoke-all",
               dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
-    def admin_sessions_revoke_all():
-        """Force-logout every tracked session. Use after a suspected
-        compromise. The underlying keys remain valid; revoke them
-        separately via ``DELETE /admin/keys/{key_id}`` if needed.
+    def admin_sessions_revoke_all(
+        x_api_key: str | None = Header(default=None),
+    ):
+        """Force-logout every tracked session and place a key-scope
+        revocation on each underlying key so the next request from
+        any of them is rejected with HTTP 401. Use after a suspected
+        compromise. The underlying keys remain valid (revoke them
+        separately via ``DELETE /admin/keys/{key_id}`` if needed).
+
+        The caller's own key is exempted from the block so the operator
+        cannot lock themselves out mid-incident.
         """
+        actor = _actor_label(x_api_key)
+        # Resolve the caller's own key_id so we can skip it.
+        self_key_id = ""
+        try:
+            store_ = getattr(app.state, "api_key_store", None)
+            if store_ is not None and x_api_key:
+                stored = store_.lookup(x_api_key)
+                if stored is not None:
+                    self_key_id = stored.id
+            if not self_key_id and x_api_key:
+                from ..api_keys import _hash as _hk
+                self_key_id = "env:" + _hk(x_api_key)[:12]
+        except Exception:
+            self_key_id = ""
+        affected_keys: set[str] = set()
+        for s in session_store.list():
+            if s.key_id and s.key_id != self_key_id:
+                affected_keys.add(s.key_id)
+        for key_id in affected_keys:
+            revocation_store.revoke_key(
+                key_id=key_id,
+                reason="admin_revoke_all",
+                revoked_by=actor,
+            )
         n = session_store.revoke_all()
-        return {"sessions_removed": int(n)}
+        return {
+            "sessions_removed": int(n),
+            "keys_blocked": len(affected_keys),
+            "caller_exempted": self_key_id,
+            "enforced": True,
+        }
 
     # --- Workspace network policy (global IP allowlist) -----------------
     # Surfaced under /admin/network-policy so the admin console can
