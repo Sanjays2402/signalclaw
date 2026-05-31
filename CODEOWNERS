@@ -1,0 +1,15 @@
+# Default reviewers for any change to the repository.
+# Every PR requires review from a CODEOWNER before merge.
+
+*       @Sanjays2402
+
+# Security-sensitive surfaces require explicit owner review.
+/src/signalclaw/api/           @Sanjays2402
+/src/signalclaw/api_keys/      @Sanjays2402
+/src/signalclaw/audit/         @Sanjays2402
+/src/signalclaw/mfa/           @Sanjays2402
+/src/signalclaw/webhooks/      @Sanjays2402
+/src/signalclaw/privacy/       @Sanjays2402
+SECURITY.md                    @Sanjays2402
+/docs/threat-model.md          @Sanjays2402
+/.github/                      @Sanjays2402

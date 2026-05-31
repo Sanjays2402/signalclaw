@@ -64,6 +64,8 @@ from ..alerts import (Alert, AlertCondition, AlertStore, AlertEventStore,
 from ..api_keys import ApiKeyStore
 from ..mfa import MfaStore, provisioning_uri
 from .rate_limit import set_user_key_store
+from ..sessions import SessionStore
+from ..sessions.middleware import SessionTrackingMiddleware
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
                           attribution, sector_exposure, tax_summary, LotMethod,
@@ -232,6 +234,21 @@ def create_app() -> FastAPI:
     # even unenrolled keys are blocked on admin routes (procurement mode).
     mfa_store = MfaStore(settings.data_dir / "mfa" / "enrollments.json")
     app.state.mfa_store = mfa_store
+    # Active-session ledger. One row per (key_id, source_ip, user_agent)
+    # seen in the TTL window. The middleware writes here on every
+    # authenticated request; ``/admin/sessions`` reads it back so an
+    # operator can spot a key in use from an unexpected IP and revoke
+    # the active session (or the key behind it) in one place.
+    session_ttl = int(os.environ.get(
+        "SIGNALCLAW_SESSION_TTL_SECONDS", str(60 * 60 * 24 * 14)))
+    session_store = SessionStore(
+        settings.data_dir / "sessions.json", ttl_seconds=session_ttl)
+    app.state.session_store = session_store
+    # Register the session-tracking middleware now that the store
+    # exists. Added here so it sits between AuditMiddleware (which
+    # records request status) and the handler, picking up the
+    # resolved api key without re-implementing auth.
+    app.add_middleware(SessionTrackingMiddleware, store=session_store)
     _mfa_required = os.environ.get("SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN", "0") == "1"
 
     from fastapi import Header
@@ -443,6 +460,47 @@ def create_app() -> FastAPI:
         out["secret"] = secret  # one-time reveal
         out["grace_seconds"] = grace
         return out
+
+    # --- Active sessions ------------------------------------------------
+    # An enterprise admin needs to see, in one place, which API keys are
+    # currently active, from which IPs, with which clients, and when
+    # they were last used. They also need a one-click way to kill a
+    # session that looks wrong without nuking the underlying key.
+    @app.get("/admin/sessions",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_sessions_list():
+        return {"sessions": [s.to_public() for s in session_store.list()]}
+
+    @app.delete("/admin/sessions/{session_id}",
+                dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_sessions_revoke(session_id: str):
+        ok = session_store.revoke(session_id)
+        if not ok:
+            raise HTTPException(404, "session not found")
+        return {"revoked": session_id}
+
+    @app.post("/admin/sessions/revoke-key/{key_id}",
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_sessions_revoke_key(key_id: str):
+        """Drop every active session row tied to a single key.
+
+        Does not revoke the key itself, by design: an operator may want
+        to clear the visibility entries (for example after rotating an
+        IP allowlist) without invalidating the credential. To revoke
+        the credential, call ``DELETE /admin/keys/{key_id}``.
+        """
+        n = session_store.revoke_for_key(key_id)
+        return {"revoked_key": key_id, "sessions_removed": int(n)}
+
+    @app.post("/admin/sessions/revoke-all",
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_sessions_revoke_all():
+        """Force-logout every tracked session. Use after a suspected
+        compromise. The underlying keys remain valid; revoke them
+        separately via ``DELETE /admin/keys/{key_id}`` if needed.
+        """
+        n = session_store.revoke_all()
+        return {"sessions_removed": int(n)}
 
     @app.get("/disclaimer")
     def disclaimer():

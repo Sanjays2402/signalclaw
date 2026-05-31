@@ -6,6 +6,17 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Active sessions admin console (visibility + force-revoke)**. SignalClaw now records every authenticated request as a session row keyed by `(api_key, source_ip, user_agent)` and exposes the live list at `GET /admin/sessions`. An operator can see which keys are in use, from which IPs, with which clients, when each session was first seen, when it was last seen, and how many requests it has served. Suspicious row? `DELETE /admin/sessions/{id}` drops just that row. Suspected compromise of one key? `POST /admin/sessions/revoke-key/{key_id}` clears every row tied to it. Suspected platform-wide compromise? `POST /admin/sessions/revoke-all` resets the entire ledger. The session store auto-prunes rows older than `SIGNALCLAW_SESSION_TTL_SECONDS` (default 14 days) so it stays bounded without operator intervention. All four endpoints require the `admin` scope plus MFA and are written to the tamper-evident audit log. Covered by `tests/test_sessions_admin.py` (tracking creates rows, non-admin gets 403, revoke removes one row, revoke-all clears the ledger without invalidating the underlying credential, missing session returns 404).
+
+  Try it locally: `make api` then
+  ```bash
+  curl http://localhost:7431/admin/sessions \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H "x-mfa-code: 123456"
+  ```
+
+- **Enterprise hygiene paper trail**. Added `SECURITY.md` (reporting policy, response SLAs, scope), `CODEOWNERS` (security-sensitive paths require explicit owner review), `.github/dependabot.yml` (weekly pip + npm + actions updates, grouped minor/patch), and `docs/threat-model.md` (STRIDE analysis covering audit-log tampering, key spoofing, DoS shedding, and privilege escalation paths).
+
 - **Sandbox / dry-run mode on every mutating endpoint**. Any POST, PUT, PATCH, or DELETE against the SignalClaw API accepts `?dry_run=true` (or an `X-Dry-Run: 1` header) and short-circuits with HTTP 202 plus a structured envelope describing what *would* have happened. No stores are written, no webhooks fire, no notifier traffic is queued. The probe still has to clear scope, MFA, rate-limit, and IP-allowlist checks (those middlewares run outside the dry-run guard), so a buyer can validate end-to-end that their key has the right permission to delete a record without deleting one. Every dry-run call is persisted to the audit log with `action="dry_run"` and `extra.dry_run=true` so SOC2 reviewers can tell probe traffic apart from real mutations. Covered by `tests/test_dry_run.py` (short-circuit on POST and DELETE, header parity with query param, audit row recorded, scope still enforced, GET unaffected).
 
   ```bash
