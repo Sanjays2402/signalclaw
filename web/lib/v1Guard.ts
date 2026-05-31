@@ -32,6 +32,7 @@ import {
   type ParsedCidr,
 } from "./ipMatch";
 import { decideKeyIpAllowed } from "./keyIpPolicy";
+import { isRouteAllowed } from "./routeAllowlist";
 import { reserve as reserveQuota, applyQuotaHeaders } from "./monthlyQuotaStore";
 import {
   getRotationPolicy,
@@ -48,6 +49,7 @@ import {
   getPolicy as getNetworkPolicy,
   decideAllowed as decideNetworkAllowed,
 } from "./networkPolicyStore";
+import { getFreezeState } from "./freezeStore";
 
 function applyRotationHeaders(headers: Headers, ev: RotationEvaluation): void {
   headers.set("x-key-age-days", String(ev.age_days));
@@ -227,6 +229,38 @@ export async function enforceRateLimit(
   const route_class = classifyRoute(route);
   const requestId = req.headers.get("x-request-id") || undefined;
   try {
+    // Break-glass workspace freeze runs first: if an admin has flipped
+    // the kill switch, every authenticated v1 call returns 503 immediately
+    // and we never touch rate limits, quotas, residency, or handlers.
+    const freeze = await getFreezeState();
+    if (freeze.frozen) {
+      const res = NextResponse.json(
+        {
+          error: {
+            code: "workspace_frozen",
+            message:
+              "workspace is under an emergency freeze; contact your administrator",
+            frozen_at: freeze.frozen_at,
+            reason: freeze.reason,
+          },
+        },
+        { status: 503 },
+      );
+      res.headers.set("retry-after", "0");
+      res.headers.set("x-workspace-frozen", "1");
+      if (requestId) res.headers.set("x-request-id", requestId);
+      await recordAuditEvent({
+        req,
+        route,
+        method,
+        status: 503,
+        key,
+        reason: "workspace_frozen",
+        details: { frozen_at: freeze.frozen_at, frozen_by: freeze.frozen_by },
+      }).catch(() => {});
+      observeRequest({ method, status: 503, route_class, durationMs: Date.now() - t0 });
+      return res;
+    }
     const netPolicy = await getNetworkPolicy();
     const netDecision = decideNetworkAllowed(req, netPolicy);
     if (!netDecision.allowed) {
@@ -258,6 +292,35 @@ export async function enforceRateLimit(
     if (ipBlock) {
       observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
       return ipBlock;
+    }
+    if (!isRouteAllowed(route, key.route_allowlist)) {
+      const res = NextResponse.json(
+        {
+          error: {
+            code: "route_not_allowed",
+            message:
+              "this API key's route allowlist does not permit " + route,
+            route,
+          },
+        },
+        { status: 403 },
+      );
+      if (requestId) res.headers.set("x-request-id", requestId);
+      await recordAuditEvent({
+        req,
+        route,
+        method,
+        status: 403,
+        key,
+        reason: "route_not_allowed",
+        details: {
+          allowlist_size: Array.isArray(key.route_allowlist)
+            ? key.route_allowlist.length
+            : 0,
+        },
+      }).catch(() => {});
+      observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+      return res;
     }
     const rotation = await enforceRotationPolicy(req, key, route, method, requestId);
     if (rotation.block) {

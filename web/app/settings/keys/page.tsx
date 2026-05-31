@@ -31,6 +31,7 @@ type StoredKey = {
   last_used_user_agent?: string | null;
   revoked: boolean;
   ip_allowlist?: string[];
+  route_allowlist?: string[];
   expires_at?: string | null;
   expired?: boolean;
   suspended?: boolean;
@@ -71,6 +72,10 @@ export default function ApiKeysPage() {
   const [allowlistDraft, setAllowlistDraft] = useState("");
   const [allowlistErr, setAllowlistErr] = useState<string | null>(null);
   const [savingAllowlist, setSavingAllowlist] = useState(false);
+  const [editingRoutes, setEditingRoutes] = useState<string | null>(null);
+  const [routesDraft, setRoutesDraft] = useState("");
+  const [routesErr, setRoutesErr] = useState<string | null>(null);
+  const [savingRoutes, setSavingRoutes] = useState(false);
   const [editingRate, setEditingRate] = useState<string | null>(null);
   const [rateDraft, setRateDraft] = useState("");
   const [rateErr, setRateErr] = useState<string | null>(null);
@@ -210,6 +215,28 @@ export default function ApiKeysPage() {
       setAllowlistErr(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingAllowlist(false);
+    }
+  }
+
+  async function onSaveRoutes(id: string) {
+    setRoutesErr(null);
+    setSavingRoutes(true);
+    try {
+      const routes = routesDraft
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await api(`/admin/keys/${id}/route-allowlist`, {
+        method: "PUT",
+        body: JSON.stringify({ route_allowlist: routes }),
+      });
+      setEditingRoutes(null);
+      setRoutesDraft("");
+      mutate();
+    } catch (err) {
+      setRoutesErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingRoutes(false);
     }
   }
 
@@ -538,6 +565,11 @@ export default function ApiKeysPage() {
                         IP allowlist · {k.ip_allowlist.length}
                       </Badge>
                     )}
+                    {k.route_allowlist && k.route_allowlist.length > 0 && (
+                      <Badge tone="neutral">
+                        Route allowlist · {k.route_allowlist.length}
+                      </Badge>
+                    )}
                     {k.suspended && (
                       <Badge tone="warn">
                         suspended{k.suspended_reason ? ` · ${k.suspended_reason}` : ""}
@@ -589,6 +621,22 @@ export default function ApiKeysPage() {
                     title="Restrict this key to specific source IPs or CIDR blocks"
                   >
                     IP allowlist
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (editingRoutes === k.id) {
+                        setEditingRoutes(null);
+                      } else {
+                        setEditingRoutes(k.id);
+                        setRoutesDraft((k.route_allowlist || []).join("\n"));
+                        setRoutesErr(null);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm"
+                    title="Restrict this key to specific /api/v1/* paths (least privilege)"
+                  >
+                    Route allowlist
                   </button>
                   <button
                     type="button"
@@ -836,6 +884,54 @@ export default function ApiKeysPage() {
                         className="px-3 py-1 text-[11px] font-medium bg-[var(--amber)] text-black rounded-sm disabled:opacity-50"
                       >
                         {savingAllowlist ? "Saving..." : "Save allowlist"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {editingRoutes === k.id && (
+                  <div className="mt-2 ml-0 sm:ml-2 p-3 border border-[var(--border)] rounded-sm bg-black/20 space-y-2">
+                    <label className="block text-[10px] uppercase tracking-widest muted">
+                      Route allowlist (one /api/v1/* path per line)
+                    </label>
+                    <textarea
+                      value={routesDraft}
+                      onChange={(e) => setRoutesDraft(e.target.value)}
+                      placeholder={"/api/v1/runs\n/api/v1/watchlist"}
+                      rows={4}
+                      className="w-full bg-black/30 border border-[var(--border)] rounded-sm px-2 py-1.5 text-[12px] mono focus:outline-none focus:border-[var(--amber)]"
+                    />
+                    <p className="text-[11px] muted">
+                      Empty means this key may reach any /api/v1 path its
+                      scopes already allow. When non-empty, requests to
+                      paths outside the list are rejected with 403
+                      route_not_allowed. Entries are path prefixes, so
+                      /api/v1/runs also allows /api/v1/runs/abc/export.
+                      Up to 32 entries.
+                    </p>
+                    {routesErr && (
+                      <div className="flex items-start gap-2 p-2 border border-red-500/40 bg-red-500/10 rounded-sm text-[12px]">
+                        <WarningCircle size={14} weight="duotone" className="text-red-400 shrink-0 mt-0.5" />
+                        <span>{routesErr}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingRoutes(null);
+                          setRoutesErr(null);
+                        }}
+                        className="px-3 py-1 text-[11px] muted hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingRoutes}
+                        onClick={() => onSaveRoutes(k.id)}
+                        className="px-3 py-1 text-[11px] font-medium bg-[var(--amber)] text-black rounded-sm disabled:opacity-50"
+                      >
+                        {savingRoutes ? "Saving..." : "Save allowlist"}
                       </button>
                     </div>
                   </div>

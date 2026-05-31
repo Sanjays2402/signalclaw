@@ -25,6 +25,12 @@ export type StoredKey = {
   // Stored as canonical CIDR strings (e.g. "10.0.0.0/8" or "203.0.113.5/32").
   // Enforced in v1Guard before the rate limiter consumes a token.
   ip_allowlist?: string[];
+  // Per-key route allowlist (least-privilege path narrowing). Empty or
+  // undefined means "any v1 path the scope already permits". A non-empty
+  // list additionally requires the request pathname to prefix-match at
+  // least one entry; everything else is denied with 403:route_not_allowed.
+  // Entries are canonical prefixes under /api/v1/ (see lib/routeAllowlist).
+  route_allowlist?: string[];
   // Optional absolute expiry (ISO 8601 UTC). After this instant, the key
   // stops authenticating and is reported as expired. Null/undefined means
   // "never expires" (legacy behaviour). Enforced inside authenticate() so
@@ -85,6 +91,7 @@ export function publicView(k: StoredKey) {
     last_used_at: k.last_used_at,
     revoked: k.revoked,
     ip_allowlist: Array.isArray(k.ip_allowlist) ? [...k.ip_allowlist] : [],
+    route_allowlist: Array.isArray(k.route_allowlist) ? [...k.route_allowlist] : [],
     expires_at: k.expires_at ?? null,
     expired: isExpired(k),
     suspended: !!k.suspended,
@@ -170,6 +177,24 @@ export async function setKeyIpAllowlist(
   if (!k) return null;
   if (k.revoked) return null;
   k.ip_allowlist = cidrs.length === 0 ? [] : [...cidrs];
+  await writeStore(store);
+  return k;
+}
+
+// Per-key route allowlist storage primitive. Caller must canonicalize via
+// lib/routeAllowlist.canonicalizeRouteList. The env admin id ("env-admin")
+// cannot be narrowed here — admins always have full surface access; rotate
+// SIGNALCLAW_ADMIN_KEY if you need to restrict them.
+export async function setKeyRouteAllowlist(
+  id: string,
+  routes: string[],
+): Promise<StoredKey | null> {
+  if (id === "env-admin") return null;
+  const store = await readStore();
+  const k = store.keys.find((x) => x.id === id);
+  if (!k) return null;
+  if (k.revoked) return null;
+  k.route_allowlist = routes.length === 0 ? [] : [...routes];
   await writeStore(store);
   return k;
 }
