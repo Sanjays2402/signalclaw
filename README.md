@@ -24,6 +24,7 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - FX rates + multi-currency trade view
 - Notifier with DLQ, replay, and test endpoint
 - Webhook subscriptions (events, ticker filter, HMAC secret)
+- User-managed API keys with scopes (`read`, `trade`), one-time secret reveal, revocation, last-used timestamps; managed at `/settings/keys` in the dashboard or via `/admin/keys` over HTTP
 - Next.js dashboard (pages per resource) with lightweight-charts and recharts
 
 ## Stack
@@ -129,6 +130,28 @@ API:
 
 ```bash
 curl "http://localhost:7431/public/regime/demo?ticker=SPY&lookback_days=504" | jq '.snapshot, .counts'
+```
+
+## Try it: mint a scoped API key
+
+User-managed keys live alongside the env-based registry. The dashboard at `/settings/keys` lists, mints, and revokes them. Secrets are SHA-256 hashed at rest and revealed exactly once at creation. Scopes `read` and `trade` can be granted from the UI; `admin` is server-config only to prevent privilege escalation.
+
+Web: http://localhost:7430/settings/keys
+
+API (requires an admin-scoped key, e.g. the dev fallback `dev-key`):
+
+```bash
+# create
+curl -X POST http://localhost:7431/admin/keys \
+  -H "x-api-key: dev-key" -H "content-type: application/json" \
+  -d '{"label":"my laptop","scopes":["read","trade"]}'
+# response includes "secret": "sck_..." once; copy it now
+
+# use the new key
+curl http://localhost:7431/picks -H "x-api-key: sck_..."
+
+# revoke
+curl -X DELETE http://localhost:7431/admin/keys/<id> -H "x-api-key: dev-key"
 ```
 
 ## Try it: regime classifier

@@ -140,6 +140,29 @@ def reset_registry() -> None:
     _REGISTRY = None
 
 
+# Optional secondary store of user-managed keys (injected by app factory).
+# Kept loose to avoid a circular import on the api_keys package.
+_USER_STORE = None
+
+
+def set_user_key_store(store) -> None:
+    global _USER_STORE
+    _USER_STORE = store
+
+
+def _resolve_key(api_key):
+    rec = get_registry().get(api_key)
+    if rec is not None:
+        return rec
+    store = _USER_STORE
+    if store is not None and api_key:
+        stored = store.lookup(api_key)
+        if stored is not None:
+            return ApiKey(key=api_key, scopes=set(stored.scopes),
+                          label=stored.label)
+    return None
+
+
 class ScopeEnforcementMiddleware(BaseHTTPMiddleware):
     """Enforce SCOPE_RULES on every request, not just decorated routes.
 
@@ -170,7 +193,7 @@ class ScopeEnforcementMiddleware(BaseHTTPMiddleware):
         if required == "read":
             return await call_next(request)
         api_key = request.headers.get("x-api-key")
-        rec = get_registry().get(api_key)
+        rec = _resolve_key(api_key)
         if rec is None:
             # Defer to the per-route 401 from require_api_key. For
             # routes that lack that dependency (admin-only ones), still
@@ -191,7 +214,7 @@ class ScopeEnforcementMiddleware(BaseHTTPMiddleware):
 def require_scope(scope: str) -> Callable:
     """FastAPI dependency factory enforcing a scope on a route."""
     def _dep(x_api_key: str | None = Header(default=None)) -> None:
-        rec = get_registry().get(x_api_key)
+        rec = _resolve_key(x_api_key)
         if rec is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                                 detail="invalid api key")

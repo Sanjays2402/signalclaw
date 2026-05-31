@@ -56,6 +56,8 @@ from ..audit import AuditMiddleware, get_audit_log
 from ..audit.retention import AuditRetentionPruner, retention_config_from_env
 from ..privacy import StoreBundle, collect_user_data, erase_user_data
 from ..alerts import Alert, AlertCondition, AlertStore, evaluate_alerts
+from ..api_keys import ApiKeyStore
+from .rate_limit import set_user_key_store
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
                           StopRule, StopKind, StopStore, evaluate_rules,
                           attribution, sector_exposure, tax_summary, LotMethod,
@@ -186,6 +188,9 @@ def create_app() -> FastAPI:
     dlq = DeadLetterQueue(settings.data_dir / "notifier_dlq.json")
     ledger_store = LedgerStore(settings.data_dir / "ledger.json")
     scaling_store = ScalingPlanStore(settings.data_dir / "scaling.json")
+    api_key_store = ApiKeyStore(settings.data_dir / "api_keys.json")
+    app.state.api_key_store = api_key_store
+    set_user_key_store(api_key_store)
 
     def _notifier_for(channel: str) -> Notifier | None:
         c = (channel or "").lower()
@@ -233,6 +238,36 @@ def create_app() -> FastAPI:
     @app.get("/audit/days", dependencies=[Depends(require_scope("admin"))])
     def audit_days():
         return {"days": audit_log.list_days()}
+
+    # --- user-managed API keys -------------------------------------------
+    # These require the ``admin`` scope so a read-only key cannot mint a
+    # trade-scoped key for itself. The dev fallback key has admin; in
+    # production set SIGNALCLAW_API_KEYS_JSON with an admin-scoped key.
+    @app.get("/admin/keys", dependencies=[Depends(require_scope("admin"))])
+    def admin_keys_list():
+        return {"keys": [k.to_public() for k in api_key_store.list()]}
+
+    @app.post("/admin/keys", dependencies=[Depends(require_scope("admin"))])
+    def admin_keys_create(body: dict):
+        label = str(body.get("label") or "").strip()
+        scopes_in = body.get("scopes") or ["read"]
+        if not isinstance(scopes_in, list) or not all(isinstance(s, str) for s in scopes_in):
+            raise HTTPException(400, "scopes must be a list of strings")
+        allowed = {"read", "trade"}
+        scopes = [s for s in scopes_in if s in allowed]
+        if not scopes:
+            scopes = ["read"]
+        rec, secret = api_key_store.create(label=label, scopes=scopes)
+        out = rec.to_public()
+        out["secret"] = secret  # one-time reveal
+        return out
+
+    @app.delete("/admin/keys/{key_id}", dependencies=[Depends(require_scope("admin"))])
+    def admin_keys_revoke(key_id: str):
+        ok = api_key_store.revoke(key_id)
+        if not ok:
+            raise HTTPException(404, "key not found")
+        return {"revoked": key_id}
 
     @app.get("/disclaimer")
     def disclaimer():
