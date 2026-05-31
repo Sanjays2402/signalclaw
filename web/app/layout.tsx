@@ -80,6 +80,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <NavLink href="/welcome">Welcome</NavLink>
           <NavLink href="/demo">Demo</NavLink>
           <NavLink href="/history">History</NavLink>
+          <NavLink href="/compare">Compare</NavLink>
           <NavLink href="/batch">Batch</NavLink>
           <NavLink href="/portfolio">Portfolio</NavLink>
           <NavLink href="/watchlist">Watch</NavLink>

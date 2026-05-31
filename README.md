@@ -1,8 +1,23 @@
 # SignalClaw
 
-Quant trading dashboard and research stack. Local-first signal generation, portfolio accounting, walk-forward optimization, and execution simulation for equities and crypto.
+A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, and now compare runs side by side.
 
 ![landing](docs/screenshots/landing.png)
+
+## What's new
+
+- **Compare runs** at `/compare`: pick any two saved regime runs and overlay their normalized price series, regime mix, and window return. Backed by `GET /api/runs/compare?a=ID&b=ID`.
+
+### Try it
+
+```bash
+# 1. Boot the web app
+cd web && npm run dev   # http://localhost:7430/compare
+
+# 2. Save two runs from the Demo page, then compare them via the API
+curl -s 'http://localhost:7430/api/runs/compare?a=RUN_ID_A&b=RUN_ID_B' | jq .summary
+```
+
 
 ## What it does
 
