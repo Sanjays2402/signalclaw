@@ -25,6 +25,7 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - Notifier with DLQ, replay, and test endpoint
 - Webhook subscriptions (events, ticker filter, HMAC secret)
 - User-managed API keys with scopes (`read`, `trade`), one-time secret reveal, revocation, last-used timestamps; managed at `/settings/keys` in the dashboard or via `/admin/keys` over HTTP
+- Save & share regime runs from `/demo` to permanent public URLs at `/r/<id>`; manage saved runs at `/history` (rename, re-run, copy link, delete)
 - Next.js dashboard (pages per resource) with lightweight-charts and recharts
 
 ## Stack
@@ -130,6 +131,40 @@ API:
 
 ```bash
 curl "http://localhost:7431/public/regime/demo?ticker=SPY&lookback_days=504" | jq '.snapshot, .counts'
+```
+
+## Try it: save and share a regime run
+
+Hit **Save & share** on `/demo` to snapshot the chart, stats, and regime mix to a permanent, public URL. Anyone can open the link without signing in, and the data is frozen at save time so the chart never drifts. Manage your saves at `/history`: rename, re-run with the same parameters, copy the share link, or delete.
+
+Web: http://localhost:7430/history
+
+API:
+
+```bash
+# Save a run
+curl -X POST http://localhost:7430/api/runs \
+  -H 'content-type: application/json' \
+  -d '{
+    "ticker": "SPY",
+    "lookback_days": 504,
+    "label": "SPY 2Y",
+    "payload": { "ticker": "SPY", "dates": ["2024-01-02"], "close": [470.1], "regime": ["bull"], "counts": {"bull": 1}, "snapshot": null, "disclaimer": "research only" }
+  }'
+# => {"id": "abc1234567", ...}
+
+# Open share page
+open http://localhost:7430/r/abc1234567
+
+# List saved runs
+curl http://localhost:7430/api/runs
+
+# Rename
+curl -X PATCH http://localhost:7430/api/runs/abc1234567 \
+  -H 'content-type: application/json' -d '{"label":"My SPY snapshot"}'
+
+# Delete
+curl -X DELETE http://localhost:7430/api/runs/abc1234567
 ```
 
 ## Try it: mint a scoped API key

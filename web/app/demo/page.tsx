@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import RegimeChart, { REGIME_PALETTE } from "@/components/RegimeChart";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, fmtPct } from "@/components/ui";
 import {
@@ -8,6 +9,10 @@ import {
   ArrowRight,
   ShieldCheck,
   LightningSlash,
+  FloppyDisk,
+  Copy,
+  Check,
+  ClockCounterClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 
 // Public demo. No API key required. Calls the unauthenticated
@@ -54,13 +59,33 @@ function regimeTone(label: string): "up" | "down" | "warn" | "info" {
   return "info";
 }
 
+const VALID_TICKERS = new Set(SAMPLES.map((s) => s.ticker));
+const VALID_LOOKBACKS = new Set(LOOKBACKS.map((l) => l.days));
+
 export default function DemoPage() {
-  const [ticker, setTicker] = useState("SPY");
-  const [lookback, setLookback] = useState(504);
+  return (
+    <Suspense fallback={<div className="max-w-6xl mx-auto p-6"><Loading /></div>}>
+      <DemoInner />
+    </Suspense>
+  );
+}
+
+function DemoInner() {
+  const params = useSearchParams();
+  const qTicker = params.get("ticker");
+  const qLook = Number(params.get("lookback"));
+  const initialTicker = qTicker && VALID_TICKERS.has(qTicker) ? qTicker : "SPY";
+  const initialLookback = VALID_LOOKBACKS.has(qLook) ? qLook : 504;
+  const [ticker, setTicker] = useState(initialTicker);
+  const [lookback, setLookback] = useState(initialLookback);
   const [data, setData] = useState<DemoResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState<{ id: string; url: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +126,49 @@ export default function DemoPage() {
   const currentLabel = snap?.label ?? "--";
   const sample = SAMPLES.find((s) => s.ticker === ticker)!;
 
+  // Clear share state when inputs change so we never show a stale link.
+  useEffect(() => {
+    setSaved(null);
+    setSaveErr(null);
+  }, [ticker, lookback]);
+
+  async function saveRun() {
+    if (!data) return;
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      const r = await fetch("/api/runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticker,
+          lookback_days: lookback,
+          label: `${sample.label} · ${LOOKBACKS.find((l) => l.days === lookback)?.label ?? lookback + "d"}`,
+          payload: data,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error?.message || `${r.status}`);
+      const url = `${window.location.origin}/r/${j.id}`;
+      setSaved({ id: j.id, url });
+    } catch (e: any) {
+      setSaveErr(String(e?.message || e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function copyShareLink() {
+    if (!saved) return;
+    try {
+      await navigator.clipboard.writeText(saved.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      window.prompt("Copy this link:", saved.url);
+    }
+  }
+
   return (
     <div className="max-w-6xl mx-auto space-y-5">
       {/* Hero */}
@@ -123,7 +191,13 @@ export default function DemoPage() {
               real price history right now.
             </p>
           </div>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-2 shrink-0 flex-wrap">
+            <Link
+              href="/history"
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
+            >
+              <ClockCounterClockwise size={12} weight="bold" /> History
+            </Link>
             <Link
               href="/regime"
               className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
@@ -215,6 +289,50 @@ export default function DemoPage() {
           tone={snap && snap.drawdown < -0.05 ? "down" : undefined}
         />
       </div>
+
+      {/* Save & share strip */}
+      <Card title="Save this run">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <p className="muted text-[11px] flex-1">
+            Snapshot the chart, stats, and regime mix to a permanent URL anyone can open.
+            No signup required.
+          </p>
+          {saved ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <code className="text-[11px] mono px-2 py-1.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] truncate max-w-[280px]">
+                {saved.url}
+              </code>
+              <button
+                onClick={copyShareLink}
+                className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
+              >
+                {copied ? <Check size={11} weight="bold" /> : <Copy size={11} weight="bold" />}
+                {copied ? "Copied" : "Copy link"}
+              </button>
+              <Link
+                href={`/r/${saved.id}`}
+                className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--amber)]/40 bg-[var(--amber)]/10 text-[var(--amber)] uppercase tracking-widest font-semibold mono"
+              >
+                Open
+              </Link>
+            </div>
+          ) : (
+            <button
+              onClick={saveRun}
+              disabled={saving || !data || !!err}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--amber)]/40 bg-[var(--amber)]/10 text-[var(--amber)] uppercase tracking-widest font-semibold mono flex items-center gap-1.5 disabled:opacity-40"
+            >
+              <FloppyDisk size={12} weight="bold" />
+              {saving ? "Saving" : "Save & share"}
+            </button>
+          )}
+        </div>
+        {saveErr && (
+          <div className="text-[11px] mt-2" style={{ color: "var(--red)" }}>
+            Could not save: {saveErr}
+          </div>
+        )}
+      </Card>
 
       {/* Chart */}
       <Card

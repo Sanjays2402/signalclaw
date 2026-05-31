@@ -6,7 +6,8 @@
     "dev": "next dev -p 7430",
     "build": "next build",
     "start": "next start -p 7430",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "dependencies": {
     "next": "15.0.0",
