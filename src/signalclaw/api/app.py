@@ -51,7 +51,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .request_context import RequestContextMiddleware
-from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware
+from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
 from ..audit.retention import AuditRetentionPruner, retention_config_from_env
@@ -158,6 +158,19 @@ def create_app() -> FastAPI:
     # want the old permissive behaviour.
     if os.environ.get("SIGNALCLAW_RBAC_ENFORCE", "1") == "1":
         app.add_middleware(ScopeEnforcementMiddleware)
+    # Per-key IP allowlist. Enforced for user-managed keys that opt in
+    # by setting an allowlist on their key; legacy env keys and
+    # unauthenticated traffic are not affected. Shares the same XFF
+    # trust knobs as the per-IP limiter so the resolved client IP is
+    # consistent across middlewares.
+    _ipa_trust_xff = os.environ.get("SIGNALCLAW_TRUST_FORWARDED", "0") == "1"
+    _ipa_trusted_raw = os.environ.get("SIGNALCLAW_TRUSTED_PROXIES", "").strip()
+    _ipa_trusted = tuple(p.strip() for p in _ipa_trusted_raw.split(",") if p.strip())
+    app.add_middleware(
+        IPAllowlistMiddleware,
+        trust_forwarded=_ipa_trust_xff,
+        trusted_proxies=_ipa_trusted,
+    )
     # Per-IP DoS guard. Added last so it executes first in the
     # middleware chain, shedding floods before auth, audit, or
     # per-key buckets see them. Enabled by default with a generous
@@ -261,9 +274,38 @@ def create_app() -> FastAPI:
         if not scopes:
             scopes = ["read"]
         rec, secret = api_key_store.create(label=label, scopes=scopes)
+        # Optional ip_allowlist on create. Validated by the store helper;
+        # invalid CIDRs return 400 without leaving a half-configured key
+        # because we revoke the just-minted key on failure.
+        cidrs_in = body.get("ip_allowlist")
+        if cidrs_in is not None:
+            if not isinstance(cidrs_in, list) or not all(isinstance(s, str) for s in cidrs_in):
+                api_key_store.revoke(rec.id)
+                raise HTTPException(400, "ip_allowlist must be a list of strings")
+            try:
+                rec = api_key_store.set_ip_allowlist(rec.id, cidrs_in) or rec
+            except ValueError as exc:
+                api_key_store.revoke(rec.id)
+                raise HTTPException(400, str(exc))
         out = rec.to_public()
         out["secret"] = secret  # one-time reveal
         return out
+
+    @app.put("/admin/keys/{key_id}/ip-allowlist",
+             dependencies=[Depends(require_scope("admin"))])
+    def admin_keys_set_allowlist(key_id: str, body: dict):
+        cidrs = body.get("ip_allowlist")
+        if cidrs is None:
+            cidrs = []
+        if not isinstance(cidrs, list) or not all(isinstance(s, str) for s in cidrs):
+            raise HTTPException(400, "ip_allowlist must be a list of strings")
+        try:
+            updated = api_key_store.set_ip_allowlist(key_id, cidrs)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
 
     @app.delete("/admin/keys/{key_id}", dependencies=[Depends(require_scope("admin"))])
     def admin_keys_revoke(key_id: str):

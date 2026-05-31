@@ -11,13 +11,14 @@ the UI can show it and then forget it.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import secrets
 import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set
 
 
 _PREFIX = "sck_"  # signalclaw key
@@ -36,6 +37,67 @@ def _mint() -> str:
     return _PREFIX + secrets.token_urlsafe(_SECRET_BYTES)
 
 
+def normalise_cidrs(cidrs: Iterable[str]) -> List[str]:
+    """Validate and normalise a list of CIDR blocks or bare IPs.
+
+    Bare IPs become host networks (``/32`` or ``/128``). Duplicates are
+    collapsed, order is stable, and the result is always strict
+    networks so a future ``ip_address in network`` check is safe.
+    Raises ``ValueError`` on the first bad entry.
+    """
+    out: List[str] = []
+    seen: Set[str] = set()
+    for raw in cidrs or []:
+        s = (raw or "").strip()
+        if not s:
+            continue
+        try:
+            if "/" in s:
+                net = ipaddress.ip_network(s, strict=False)
+            else:
+                # Bare IP -> host network so membership tests work uniformly.
+                addr = ipaddress.ip_address(s)
+                net = ipaddress.ip_network(
+                    f"{addr}/{addr.max_prefixlen}", strict=False)
+        except ValueError as exc:
+            raise ValueError(f"invalid CIDR or IP: {s!r}: {exc}")
+        key = str(net)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+        if len(out) >= 64:
+            # Hard cap to keep the JSON file small and per-request checks O(1)-ish.
+            raise ValueError("ip_allowlist may contain at most 64 entries")
+    return out
+
+
+def is_ip_allowed(stored: "StoredKey", client_ip: str) -> bool:
+    """Return True if ``client_ip`` matches the key's allowlist.
+
+    Keys with an empty allowlist are unrestricted. An unparseable
+    ``client_ip`` against a restricted key is always denied (fail
+    closed) so a missing/garbled X-Forwarded-For cannot bypass the
+    policy by accident.
+    """
+    cidrs = stored.ip_allowlist or []
+    if not cidrs:
+        return True
+    if not client_ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    for c in cidrs:
+        try:
+            if addr in ipaddress.ip_network(c, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 @dataclass
 class StoredKey:
     id: str
@@ -46,6 +108,11 @@ class StoredKey:
     created_at: str
     last_used_at: Optional[str] = None
     revoked: bool = False
+    # Optional CIDR allowlist. When non-empty, requests authenticated with
+    # this key are rejected with 403 unless the client IP falls inside one
+    # of the listed networks. Stored as strings so the JSON file stays
+    # human-readable; parsed on demand by ``is_ip_allowed``.
+    ip_allowlist: List[str] = field(default_factory=list)
 
     def to_public(self) -> Dict:
         d = asdict(self)
@@ -83,6 +150,7 @@ class ApiKeyStore:
                 created_at=r.get("created_at", _now_iso()),
                 last_used_at=r.get("last_used_at"),
                 revoked=bool(r.get("revoked", False)),
+                ip_allowlist=list(r.get("ip_allowlist", []) or []),
             ))
         return out
 
@@ -120,6 +188,27 @@ class ApiKeyStore:
             self._write(rows)
             self._reload_index()
         return rec, secret
+
+    def set_ip_allowlist(self, key_id: str, cidrs: Iterable[str]) -> Optional[StoredKey]:
+        """Replace the IP allowlist on a key. Validates every CIDR.
+
+        An empty list clears the allowlist (allow any source). Raises
+        ``ValueError`` if any entry is not a valid IPv4/IPv6 address or
+        CIDR block, so the API can return a structured 400.
+        """
+        normalised = normalise_cidrs(cidrs)
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    r.ip_allowlist = normalised
+                    updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
 
     def revoke(self, key_id: str) -> bool:
         with self._lock:
@@ -166,4 +255,4 @@ class ApiKeyStore:
         return rec
 
 
-__all__ = ["ApiKeyStore", "StoredKey"]
+__all__ = ["ApiKeyStore", "StoredKey", "normalise_cidrs", "is_ip_allowed"]

@@ -353,6 +353,62 @@ class PerIPRateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class IPAllowlistMiddleware(BaseHTTPMiddleware):
+    """Enforce per-key IP allowlists for user-managed API keys.
+
+    For requests carrying an ``x-api-key`` that resolves to a user-
+    managed key with a non-empty ``ip_allowlist``, the client IP must
+    match one of the listed CIDR blocks or the request is rejected
+    with 403. Env-configured registry keys and unauthenticated traffic
+    are unaffected so existing deployments keep working unchanged.
+
+    Mirrors the proxy-trust knobs of the rate-limit middlewares so
+    operators get one consistent answer for "what is the client IP?".
+    """
+
+    def __init__(self, app,
+                 trust_forwarded: bool = False,
+                 trusted_proxies: Iterable[str] = (),
+                 exempt_paths: Iterable[str] = (
+                     "/health", "/ready", "/metrics", "/disclaimer",
+                     "/docs", "/openapi.json", "/redoc",
+                     "/docs/oauth2-redirect",
+                 )) -> None:
+        super().__init__(app)
+        self.trust_forwarded = bool(trust_forwarded)
+        self.trusted_proxies = tuple(trusted_proxies)
+        self.exempt = tuple(exempt_paths)
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path == p or path.startswith(p + "/") for p in self.exempt):
+            return await call_next(request)
+        api_key = request.headers.get("x-api-key")
+        store = _USER_STORE
+        if not api_key or store is None:
+            return await call_next(request)
+        stored = store.lookup(api_key)
+        if stored is None or not stored.ip_allowlist:
+            return await call_next(request)
+        from ..api_keys import is_ip_allowed  # local import to avoid cycle at module load
+        ip = client_ip_from_request(
+            request,
+            trusted_proxies=self.trusted_proxies,
+            trust_forwarded=self.trust_forwarded,
+        )
+        if not is_ip_allowed(stored, ip):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "client IP not in key allowlist",
+                    "client_ip": ip,
+                    "key_id": stored.id,
+                    "allowlist": list(stored.ip_allowlist),
+                },
+            )
+        return await call_next(request)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Per-key + per-route-class token bucket.
 

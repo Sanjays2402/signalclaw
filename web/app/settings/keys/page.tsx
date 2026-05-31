@@ -24,6 +24,7 @@ type StoredKey = {
   created_at: string;
   last_used_at: string | null;
   revoked: boolean;
+  ip_allowlist?: string[];
 };
 
 type KeyList = { keys: StoredKey[] };
@@ -45,6 +46,32 @@ export default function ApiKeysPage() {
   const [busy, setBusy] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [rotating, setRotating] = useState<string | null>(null);
+  const [editingAllowlist, setEditingAllowlist] = useState<string | null>(null);
+  const [allowlistDraft, setAllowlistDraft] = useState("");
+  const [allowlistErr, setAllowlistErr] = useState<string | null>(null);
+  const [savingAllowlist, setSavingAllowlist] = useState(false);
+
+  async function onSaveAllowlist(id: string) {
+    setAllowlistErr(null);
+    setSavingAllowlist(true);
+    try {
+      const cidrs = allowlistDraft
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await api(`/admin/keys/${id}/ip-allowlist`, {
+        method: "PUT",
+        body: JSON.stringify({ ip_allowlist: cidrs }),
+      });
+      setEditingAllowlist(null);
+      setAllowlistDraft("");
+      mutate();
+    } catch (err) {
+      setAllowlistErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingAllowlist(false);
+    }
+  }
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -223,7 +250,8 @@ export default function ApiKeysPage() {
         {!error && !isLoading && visibleKeys.length > 0 && (
           <ul className="divide-y divide-[var(--border)]">
             {visibleKeys.map((k) => (
-              <li key={k.id} className="flex items-center gap-3 py-2.5 flex-wrap">
+              <li key={k.id} className="py-2.5 flex-wrap">
+                <div className="flex items-center gap-3 flex-wrap">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[13px] font-medium truncate">{k.label || "unnamed"}</span>
@@ -232,6 +260,11 @@ export default function ApiKeysPage() {
                         {s}
                       </Badge>
                     ))}
+                    {k.ip_allowlist && k.ip_allowlist.length > 0 && (
+                      <Badge tone="neutral">
+                        IP allowlist · {k.ip_allowlist.length}
+                      </Badge>
+                    )}
                   </div>
                   <div className="text-[11px] muted mono mt-0.5">
                     {k.prefix}… · created {fmtDate(k.created_at)}
@@ -239,6 +272,22 @@ export default function ApiKeysPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (editingAllowlist === k.id) {
+                        setEditingAllowlist(null);
+                      } else {
+                        setEditingAllowlist(k.id);
+                        setAllowlistDraft((k.ip_allowlist || []).join("\n"));
+                        setAllowlistErr(null);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm"
+                    title="Restrict this key to specific source IPs or CIDR blocks"
+                  >
+                    IP allowlist
+                  </button>
                   <button
                     type="button"
                     onClick={() => onRotate(k.id, k.label || k.prefix)}
@@ -263,6 +312,53 @@ export default function ApiKeysPage() {
                     {revoking === k.id ? "Revoking..." : "Revoke"}
                   </button>
                 </div>
+                </div>
+                {editingAllowlist === k.id && (
+                  <div className="mt-2 ml-0 sm:ml-2 p-3 border border-[var(--border)] rounded-sm bg-black/20 space-y-2">
+                    <label className="block text-[10px] uppercase tracking-widest muted">
+                      Source IP allowlist (one CIDR or IP per line)
+                    </label>
+                    <textarea
+                      value={allowlistDraft}
+                      onChange={(e) => setAllowlistDraft(e.target.value)}
+                      placeholder={"10.0.0.0/8\n203.0.113.42\n2001:db8::/32"}
+                      rows={4}
+                      className="w-full bg-black/30 border border-[var(--border)] rounded-sm px-2 py-1.5 text-[12px] mono focus:outline-none focus:border-[var(--amber)]"
+                    />
+                    <p className="text-[11px] muted">
+                      When the list is empty, this key works from any source.
+                      When non-empty, requests from outside these networks are
+                      rejected with 403. Up to 64 entries. IPv4 and IPv6 both
+                      supported. Bare IPs are stored as host networks.
+                    </p>
+                    {allowlistErr && (
+                      <div className="flex items-start gap-2 p-2 border border-red-500/40 bg-red-500/10 rounded-sm text-[12px]">
+                        <WarningCircle size={14} weight="duotone" className="text-red-400 shrink-0 mt-0.5" />
+                        <span>{allowlistErr}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingAllowlist(null);
+                          setAllowlistErr(null);
+                        }}
+                        className="px-3 py-1 text-[11px] muted hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingAllowlist}
+                        onClick={() => onSaveAllowlist(k.id)}
+                        className="px-3 py-1 text-[11px] font-medium bg-[var(--amber)] text-black rounded-sm disabled:opacity-50"
+                      >
+                        {savingAllowlist ? "Saving..." : "Save allowlist"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

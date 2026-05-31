@@ -6,6 +6,25 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Per-key IP allowlist**. Restrict any user-managed API key to a fixed set of source IPs or CIDR blocks. Mint or update an allowlist in the dashboard at `/settings/keys`, or via the API. Requests from outside the list are rejected with HTTP 403 and a structured payload (`detail`, `client_ip`, `key_id`, `allowlist`) so SIEM rules can pivot on key id without parsing prose. IPv4 and IPv6 both supported; bare IPs become host networks (`/32` or `/128`); up to 64 entries per key; fail-closed when the client IP is missing or unparseable; honours `SIGNALCLAW_TRUST_FORWARDED` + `SIGNALCLAW_TRUSTED_PROXIES` so the same proxy-trust knobs that gate the rate limiter gate this check too. Keys with an empty allowlist are unaffected, so existing deployments keep working unchanged.
+
+  ```bash
+  # UI
+  open http://localhost:7430/settings/keys
+
+  # Restrict a key to your office and a single VPC CIDR
+  curl -X PUT http://localhost:7430/api/admin/keys/<key_id>/ip-allowlist \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"ip_allowlist": ["203.0.113.0/24", "10.0.0.0/8"]}'
+
+  # Clear the allowlist (empty list = unrestricted)
+  curl -X PUT http://localhost:7430/api/admin/keys/<key_id>/ip-allowlist \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"ip_allowlist": []}'
+  ```
+
 - **Audit log on every authenticated route**. Every call into `/api/v1/*` and `/api/admin/keys*` now appends an immutable record to `web/.data/audit.jsonl`: the calling key id + label + scopes, the route, method, status, a per-key SHA-256 hash of the caller IP (never the raw IP), a reason on failures (`unauthorized`, `forbidden:trade-required`, `forbidden:admin-required`, …), and a small JSON details blob capped at 2 KiB. Plaintext secrets never touch the log. Browse and filter the log in the UI at `/settings/audit`, or hit it programmatically:
 
   ```bash
