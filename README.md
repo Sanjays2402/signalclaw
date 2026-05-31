@@ -2,6 +2,30 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
+## New: emergency workspace freeze (break-glass kill switch)
+
+Procurement reality: enterprise security teams want a single lever that halts every authenticated API call for a workspace during a suspected breach, leaked CI secret, billing dispute, or compliance review. Revoking keys one by one is too slow, and IP allowlists only help if you know the attacker's IP. SignalClaw now ships a workspace-wide freeze. When enabled, every `/api/v1/*` request returns `HTTP 503 workspace_frozen` with `x-workspace-frozen: 1` and `Retry-After: 0` headers before any handler, rate limiter, quota, or residency check runs. Admin routes deliberately stay reachable so an operator can unfreeze. Freeze and unfreeze events are written to the tamper-evident audit log with actor, reason, and timestamp.
+
+Try it locally: `cd web && npm run dev`, then
+
+```bash
+# Freeze the workspace with an audit-logged reason.
+curl -s -X POST http://localhost:7430/api/admin/freeze \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"suspected key leak in CI logs"}' | jq
+
+# Every v1 call now returns 503 workspace_frozen.
+curl -s -i http://localhost:7430/api/v1/whoami -H "Authorization: Bearer $SEC" | head -n 5
+# HTTP/1.1 503 Service Unavailable
+# x-workspace-frozen: 1
+# retry-after: 0
+
+# Unfreeze when the incident is resolved.
+curl -s -X DELETE http://localhost:7430/api/admin/freeze | jq
+```
+
+UI: visit http://localhost:7430/settings/freeze for the freeze and unfreeze console with a typed FREEZE confirmation guard.
+
 ## New: per-API-key route allowlist (least privilege)
 
 Enterprise procurement reviewers ask whether a single leaked API key can reach every endpoint. SignalClaw now narrows individual keys to a specific list of `/api/v1/*` paths on top of the existing scope (`read` / `trade` / `admin`) and IP allowlist checks. Empty allowlist means “any v1 path the scope already permits”; non-empty means everything else is rejected with `403 route_not_allowed` before any rate-limit token, quota, or handler body runs, and the denial is written to the tamper-evident audit chain.
