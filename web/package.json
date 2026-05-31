@@ -13,7 +13,7 @@
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "lightweight-charts": "4.2.0",
+    "lightweight-charts": "5.2.0",
     "recharts": "2.13.3",
     "@phosphor-icons/react": "2.1.10",
     "swr": "2.4.1",
