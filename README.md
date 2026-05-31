@@ -6,6 +6,30 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Per-API-key source IP allowlist (CIDR), enforced on every `/api/v1/*` route**. Enterprise security teams want defence in depth on top of the workspace-wide network policy: even if a key leaks, it should only authenticate from the customer's known service IPs (a backend ETL VPC, an office VPN, a Render egress range). SignalClaw now stores a per-key `ip_allowlist` (canonical CIDRs, IPv4 and IPv6, bare IPs stored as `/32` or `/128`, dedupe-on-write, capped at 64 entries) inside the existing keys file at `<data>/keys.json`. The check lives in the shared `v1Guard.enforceRateLimit` wrapper, so every existing v1 route picks it up without per-handler changes: a blocked request returns `403 {"error":{"code":"ip_not_allowed"}}` before any rate-limit token is consumed or any handler body runs, and is written to the audit log with `reason: ip_not_allowed:<source>` so operators can see which key tried what from where. IPv4-mapped IPv6 sources like `::ffff:203.0.113.5` arriving on a dual-stack socket are normalised so a plain IPv4 CIDR still matches. The new admin endpoints `GET /api/admin/keys/{id}/ip-allowlist` and `PUT /api/admin/keys/{id}/ip-allowlist` validate every entry at the boundary (a single bad CIDR rejects the whole update with `400 bad_cidr`), and the dashboard at `/settings/keys` exposes a per-key IP allowlist editor with the same lockout-aware copy as the workspace page. Empty list means "any source"; revoked keys cannot be edited. Covered by `tests/ipAllowlist.test.mjs` (CIDR canonicalisation and dedupe, max-entries cap, garbage rejection, IPv4 and IPv6 network match, IPv4-mapped IPv6 normalisation, `x-forwarded-for` leftmost extraction, cross-key isolation showing a blocked IP still passes on a different key with no allowlist, unknown source IP blocked, clearing the list reopens the key).
+
+  Try it locally: `pnpm --filter signalclaw-web dev` then
+  ```bash
+  # pin a key to your office and a single bastion host
+  curl -X PUT http://localhost:7430/api/admin/keys/$KEY_ID/ip-allowlist \
+    -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+    -H "content-type: application/json" \
+    -d '{"ip_allowlist":["203.0.113.0/24","198.51.100.7"]}'
+
+  # a call from outside that range is now 403 before rate limiting
+  curl -i http://localhost:7430/api/v1/runs \
+    -H "Authorization: Bearer $KEY_SECRET" \
+    -H "x-forwarded-for: 8.8.8.8"
+  # => HTTP/1.1 403 Forbidden
+  # => {"error":{"code":"ip_not_allowed","message":"source IP is not in this key's allowlist"}}
+
+  # clear the allowlist (empty array = any source)
+  curl -X PUT http://localhost:7430/api/admin/keys/$KEY_ID/ip-allowlist \
+    -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+    -H "content-type: application/json" \
+    -d '{"ip_allowlist":[]}'
+  ```
+
 - **Sandbox / dry-run mode on every mutating v1 endpoint**. Enterprise procurement reviewers want to exercise the API surface before they trust it with state, and SREs want a safe way to verify that an automation does the right thing without flipping a real alert or deleting a real run. Every mutating route under `/api/v1` now accepts `?dry_run=true` (also `1`/`yes`), an `X-Dry-Run: true` header, or a top-level `"dry_run": true` JSON body field. Wired across `POST /api/v1/runs`, `DELETE /api/v1/runs/{id}`, `POST /api/v1/alerts`, `DELETE /api/v1/alerts/{id}`, `POST /api/v1/alerts/check`, `POST /api/v1/watchlist`, `PATCH /api/v1/watchlist/{ticker}`, and `DELETE /api/v1/watchlist/{ticker}`. Dry-run requests run the same auth, scope, rate-limit, and input validation as a real call, then return `200` with `{ dry_run: true, would: { action, resource, id, preview } }` and an `X-Dry-Run: true` response header, without writing to any store. The audit log records each dry-run with `reason: "dry_run"` so security review can see who probed the API and what they would have done. For `POST /api/v1/alerts/check` the evaluator runs end to end but `last_fired_at` and the history ring are not persisted, so a buyer can preview which alerts would fire against any supplied price snapshot without burning the cooldown gate. Covered by `tests/dryRun.test.mjs` (query string, header, and body opt-in detection; `false` overrides body; `runCheck({ dryRun: true })` does not persist `last_fired_at` while the real call does).
 
   Try it locally: `pnpm --filter signalclaw-web dev` then

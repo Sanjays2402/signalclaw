@@ -115,7 +115,7 @@ function Inner() {
         : (error as Error).message;
     return (
       <div className="p-6 max-w-3xl mx-auto">
-        <ErrorBox message={msg} />
+        <ErrorBox err={msg} />
       </div>
     );
   }

@@ -21,6 +21,10 @@ export type StoredKey = {
   created_at: string;
   last_used_at: string | null;
   revoked: boolean;
+  // Per-key source IP allowlist. Empty/undefined means "any source".
+  // Stored as canonical CIDR strings (e.g. "10.0.0.0/8" or "203.0.113.5/32").
+  // Enforced in v1Guard before the rate limiter consumes a token.
+  ip_allowlist?: string[];
 };
 
 type Store = { keys: StoredKey[] };
@@ -67,7 +71,30 @@ export function publicView(k: StoredKey) {
     created_at: k.created_at,
     last_used_at: k.last_used_at,
     revoked: k.revoked,
+    ip_allowlist: Array.isArray(k.ip_allowlist) ? [...k.ip_allowlist] : [],
   };
+}
+
+// Replaces the IP allowlist on a key. Caller is responsible for validating
+// and canonicalizing entries (see lib/ipMatch.canonicalizeCidrList) so this
+// stays a pure storage primitive. Returns the updated stored key or null if
+// the key does not exist or has been revoked.
+export async function setKeyIpAllowlist(
+  id: string,
+  cidrs: string[],
+): Promise<StoredKey | null> {
+  const store = await readStore();
+  const k = store.keys.find((x) => x.id === id);
+  if (!k) return null;
+  if (k.revoked) return null;
+  k.ip_allowlist = cidrs.length === 0 ? [] : [...cidrs];
+  await writeStore(store);
+  return k;
+}
+
+export async function getKey(id: string): Promise<StoredKey | null> {
+  const store = await readStore();
+  return store.keys.find((x) => x.id === id) ?? null;
 }
 
 export async function listKeys(): Promise<StoredKey[]> {

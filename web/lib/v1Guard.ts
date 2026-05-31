@@ -25,6 +25,51 @@ import {
   incInFlight,
   decInFlight,
 } from "./metricsStore";
+import {
+  clientIpFromRequest,
+  ipMatchesAny,
+  parseCidr,
+  type ParsedCidr,
+} from "./ipMatch";
+import { decideKeyIpAllowed } from "./keyIpPolicy";
+
+// Returns null when the request passes the per-key IP allowlist (including
+// the trivial "no allowlist configured" case), or a 403 NextResponse when
+// the source IP is blocked. The 403 path also writes a structured audit
+// line so operators can see what the key tried to do and from where.
+async function enforceKeyIpAllowlist(
+  req: Request,
+  key: StoredKey,
+  route: string,
+  method: string,
+  requestId: string | undefined,
+): Promise<NextResponse | null> {
+  const decision = decideKeyIpAllowed(req, key);
+  if (decision.allowed) return null;
+  const ipPart = decision.reason.split(":")[1] || "unknown";
+  const res = NextResponse.json(
+    {
+      error: {
+        code: "ip_not_allowed",
+        message:
+          ipPart === "unknown"
+            ? "source IP could not be determined and this key requires an IP allowlist match"
+            : "source IP is not in this key's allowlist",
+      },
+    },
+    { status: 403 },
+  );
+  if (requestId) res.headers.set("x-request-id", requestId);
+  await recordAuditEvent({
+    req,
+    route,
+    method,
+    status: 403,
+    key,
+    reason: decision.reason,
+  }).catch(() => {});
+  return res;
+}
 
 export async function enforceRateLimit(
   req: Request,
@@ -38,6 +83,11 @@ export async function enforceRateLimit(
   const route_class = classifyRoute(route);
   const requestId = req.headers.get("x-request-id") || undefined;
   try {
+    const ipBlock = await enforceKeyIpAllowlist(req, key, route, method, requestId);
+    if (ipBlock) {
+      observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+      return ipBlock;
+    }
     const decision = await consume(key);
     if (!decision.allowed) {
       const res = NextResponse.json(
