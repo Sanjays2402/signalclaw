@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
-import { queryRuns } from "@/lib/runStore";
+import { queryRuns, createRun, normalizeTags } from "@/lib/runStore";
+import { classifyRegime } from "@/lib/regimeClassify";
+import { recordSafe } from "@/lib/activityStore";
+import { dispatchEvents, type PickEvent } from "@/lib/webhookStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,4 +57,90 @@ export async function GET(req: NextRequest) {
     offset: appliedOffset,
     has_more: appliedOffset + items.length < total,
   });
+}
+
+// POST /v1/runs
+// Auth: Authorization: Bearer <key>  (trade or admin scope)
+// Body: { ticker: string, close: number[], dates?: string[YYYY-MM-DD],
+//         label?: string, tags?: string[], lookback_days?: number }
+// Runs the regime classifier on the caller-supplied price series, persists
+// the result, fires webhook events, and returns the saved run id + share url.
+export async function POST(req: NextRequest) {
+  const key = await authenticate(extractKey(req));
+  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key.scopes.includes("trade") && !key.scopes.includes("admin")) {
+    return err(403, "forbidden", "trade scope required to create runs");
+  }
+
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return err(400, "bad_json", "request body must be valid JSON");
+  }
+  if (!body || typeof body !== "object") {
+    return err(400, "bad_body", "request body must be a JSON object");
+  }
+
+  const { ticker, close, dates, label, tags, lookback_days } = body;
+  const result = classifyRegime({ ticker, close, dates });
+  if (!result.ok) {
+    return err(400, result.error.code, result.error.message);
+  }
+  const payload = result.payload;
+
+  const lb =
+    typeof lookback_days === "number" && lookback_days >= 1 && lookback_days <= 10000
+      ? Math.floor(lookback_days)
+      : payload.dates.length;
+
+  const safeLabel =
+    typeof label === "string" && label.trim().length > 0
+      ? label.trim().slice(0, 80)
+      : `${payload.ticker} \u00b7 ${lb}d \u00b7 api`;
+
+  const run = await createRun({
+    label: safeLabel,
+    ticker: payload.ticker,
+    lookback_days: lb,
+    payload,
+    tags: normalizeTags(tags),
+  });
+
+  await recordSafe({
+    kind: "run.saved",
+    title: `API run \u00b7 ${run.ticker}`,
+    body: `${run.label} \u00b7 ${payload.snapshot?.label ?? "unknown regime"}`,
+    href: `/r/${run.id}`,
+  });
+
+  // Fire webhook subscribers (best-effort, errors are swallowed by dispatcher).
+  // We translate "new run" into an "entered" pick-style event so existing
+  // ticker-scoped subscriptions can match.
+  if (payload.snapshot) {
+    const ev: PickEvent = {
+      kind: "entered",
+      ticker: run.ticker,
+      as_of: payload.snapshot.as_of,
+      new_label: payload.snapshot.label,
+      prior_label: null,
+      score_delta: null,
+    };
+    dispatchEvents([ev]).catch(() => {});
+  }
+
+  return NextResponse.json(
+    {
+      id: run.id,
+      label: run.label,
+      ticker: run.ticker,
+      created_at: run.created_at,
+      lookback_days: run.lookback_days,
+      bars: payload.dates.length,
+      snapshot: payload.snapshot,
+      tags: run.tags,
+      share_url: `/r/${run.id}`,
+    },
+    { status: 201 },
+  );
 }

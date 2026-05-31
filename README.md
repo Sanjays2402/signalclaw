@@ -350,7 +350,7 @@ Rotation keeps the key's id, label, and scopes intact (so dashboards, activity e
 
 Web: <http://localhost:7430/settings/keys>
 
-The minted key unlocks the public `/v1/*` endpoints over bearer auth. Today that covers `GET /v1/runs` (with search, regime filter, ticker filter, limit, offset) and `GET /v1/runs/:id` (full payload plus a `share_url`).
+The minted key unlocks the public `/v1/*` endpoints over bearer auth. Today that covers `GET /v1/runs` (with search, regime filter, ticker filter, limit, offset), `GET /v1/runs/:id` (full payload plus a `share_url`), and `POST /v1/runs` (classify a price series you supply and persist the result; requires the `trade` scope).
 
 ```bash
 # mint a key (single-user mode; set SIGNALCLAW_ADMIN_KEY to require auth here)
@@ -367,6 +367,20 @@ curl 'http://localhost:7430/v1/runs?regime=bull&limit=10' \
 
 # fetch one run with its full payload
 curl http://localhost:7430/v1/runs/<id> -H "Authorization: Bearer $SC_KEY"
+
+# classify your own price series and save the run (trade scope required)
+curl -X POST http://localhost:7430/v1/runs \
+  -H "Authorization: Bearer $SC_KEY" \
+  -H 'content-type: application/json' \
+  -d '{
+    "ticker": "SPY",
+    "label": "my first api run",
+    "close": [470.1,471.5,469.8,472.0,473.2,474.6,473.9,475.1,476.3,477.8,
+               478.5,479.2,480.0,481.1,482.4,483.0,484.2,485.5,486.1,487.0,
+               488.3,489.2,490.5,491.7,492.4,493.1,494.0,495.3,496.2,497.5,
+               498.1,499.0]
+  }'
+# response: { id, label, snapshot, share_url, ... }; open share_url to view it
 
 # rotate a key in place: same id and scopes, brand new secret, old one stops working now
 curl -X POST http://localhost:7430/admin/keys/<id>/rotate

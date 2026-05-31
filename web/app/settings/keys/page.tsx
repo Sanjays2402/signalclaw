@@ -389,8 +389,22 @@ function CurlExample() {
     typeof window !== "undefined"
       ? process.env.NEXT_PUBLIC_API_URL || window.location.origin
       : "";
-  const snippet = `curl ${base}/v1/runs \\
+  const listSnippet = `curl ${base}/v1/runs \\
   -H 'Authorization: Bearer sc_live_your_key_here'`;
+  const postSnippet = `curl -X POST ${base}/v1/runs \\
+  -H 'Authorization: Bearer sc_live_your_trade_key' \\
+  -H 'Content-Type: application/json' \\
+  -d '{
+    "ticker": "SPY",
+    "label": "my first api run",
+    "close": [470.1, 471.5, 469.8, 472.0, 473.2, 474.6, 473.9, 475.1,
+               476.3, 477.8, 478.5, 479.2, 480.0, 481.1, 482.4, 483.0,
+               484.2, 485.5, 486.1, 487.0, 488.3, 489.2, 490.5, 491.7,
+               492.4, 493.1, 494.0, 495.3, 496.2, 497.5, 498.1, 499.0]
+  }'`;
+  const snippet = `${listSnippet}
+
+${postSnippet}`;
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -424,9 +438,10 @@ function CurlExample() {
         {snippet}
       </pre>
       <p className="text-[11px] muted mt-2">
-        Replace the key with the value shown above. The read scope unlocks
-        GET /v1/runs and GET /v1/runs/:id. Pass q, ticker, regime, limit, and
-        offset as query params to filter and paginate.
+        The read scope unlocks GET /v1/runs and GET /v1/runs/:id. Pass q,
+        ticker, regime, limit, and offset to filter and paginate. The trade
+        scope unlocks POST /v1/runs, which classifies a price series you
+        supply and saves the result to your history.
       </p>
     </Card>
   );
