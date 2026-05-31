@@ -2,7 +2,36 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: SIEM audit log forwarder
+## New: per-workspace Content Security Policy with violation logging
+
+Procurement reality: every browser-based SaaS questionnaire asks how you ship `Content-Security-Policy`. "X-Frame-Options" plus `nosniff` cover a thin slice of browser threats. CSP is what blocks a malicious script injected through a stored XSS or a compromised CDN. SignalClaw now ships a CSP rollout flow built for that conversation.
+
+The edge middleware reads CSP from environment (`SIGNALCLAW_CSP_MODE=off|report|enforce`, `SIGNALCLAW_CSP_EXTRA_HOSTS="cdn.example.com *.intercom.io"`, `SIGNALCLAW_CSP_REPORT_DISABLED=1` to silence reports) so the header lands on every dashboard response, including 401s and 503s. A new admin route at `/api/admin/csp` persists the per-workspace policy and shows operators when the saved policy has drifted from the env-driven effective one. Browser violations POST to `/api/csp-report`, get summarized, and write into the tamper-evident audit chain as `csp:violation` events so SOC operators can spot stored XSS attempts the moment a browser reports them. Roll out in `report`, watch `/api/v1/audit` for `csp:violation` entries, then flip to `enforce` when the report stream is quiet.
+
+Try it locally: `cd web && pnpm install && pnpm dev`, then open <http://localhost:7430/settings/security/csp>. Or drive it from the API:
+
+```bash
+# Inspect current policy (admin scope + MFA required in production posture)
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  http://localhost:7430/api/admin/csp | jq .
+
+# Update policy: report-only with two extra trusted hosts
+curl -s -X PUT -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  -H 'content-type: application/json' \
+  -d '{"mode":"report","extra_hosts":["cdn.example.com","*.intercom.io"],"reporting_enabled":true}' \
+  http://localhost:7430/api/admin/csp | jq .
+
+# Simulate a violation report (browsers do this automatically)
+curl -s -X POST -H 'content-type: application/csp-report' \
+  -d '{"csp-report":{"violated-directive":"script-src","blocked-uri":"https://evil.example/x.js","document-uri":"http://localhost:7430/"}}' \
+  http://localhost:7430/api/csp-report -i | head -1
+```
+
+The violation lands in the audit log alongside actor, route, request id, and a hashed source IP, exportable by the existing audit endpoints.
+
+## Previous: SIEM audit log forwarder
 
 Procurement reality: SOC2 CC7.2 and ISO 27001 A.12.4 both require security-relevant events to leave the system in near real time so the customer's SOC can correlate SignalClaw activity with the rest of their estate (Splunk, Datadog, Elastic, Panther). The internal append-only tamper-evident audit chain at `lib/auditStore.ts` is the source of truth. The SIEM forwarder is the optional outbound mirror: every audit event is signed with HMAC-SHA256 and POSTed fire-and-forget to a configured collector URL. A failing or slow SIEM never blocks an end-user request.
 

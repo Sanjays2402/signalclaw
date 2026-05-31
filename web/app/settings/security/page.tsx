@@ -457,8 +457,35 @@ function SecurityInner() {
         </Card>
       )}
 
+      <CspLinkCard />
       <ResponseHeadersCard />
     </div>
+  );
+}
+
+function CspLinkCard() {
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={20} weight="duotone" className="text-sky-500" />
+            <h2 className="text-base font-semibold">Content Security Policy</h2>
+          </div>
+          <p className="text-sm text-neutral-500 max-w-xl">
+            Roll CSP out in report-only, watch the audit log for
+            violations, then enforce. Per-workspace trusted hosts are
+            configured separately from response headers.
+          </p>
+        </div>
+        <a
+          href="/settings/security/csp"
+          className="text-sm underline decoration-dotted underline-offset-4 hover:text-white"
+        >
+          Open CSP settings
+        </a>
+      </div>
+    </Card>
   );
 }
 

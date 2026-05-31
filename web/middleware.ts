@@ -97,6 +97,43 @@ export function middleware(req: NextRequest) {
     );
     res.headers.set("Cross-Origin-Opener-Policy", "same-origin");
     res.headers.set("Cross-Origin-Resource-Policy", "same-site");
+
+    // Content-Security-Policy. Env-driven so the edge middleware stays
+    // filesystem-free. Operators can preview with
+    // `SIGNALCLAW_CSP_MODE=report` and flip to `enforce` once the
+    // /api/csp-report log is quiet. The admin UI at /settings/security/csp
+    // documents the current effective values and persists workspace
+    // overrides that take effect on next deploy.
+    const cspMode = (process.env.SIGNALCLAW_CSP_MODE || "").toLowerCase();
+    if (cspMode === "report" || cspMode === "report-only" || cspMode === "enforce") {
+      const extraRaw = process.env.SIGNALCLAW_CSP_EXTRA_HOSTS || "";
+      const extras = extraRaw
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter((s) => /^(?:'(?:self|none|unsafe-inline|unsafe-eval|strict-dynamic|sha(?:256|384|512)-[A-Za-z0-9+/=]+)'|(?:data|https?|wss?):(?:\/\/(?:\*\.)?[a-z0-9.-]+(?::\d+)?(?:\/[A-Za-z0-9._~/\-]*)?)?|(?:\*\.)?[a-z0-9.-]+(?::\d+)?)$/i.test(s))
+        .join(" ");
+      const join = (b: string) => (extras ? `${b} ${extras}` : b);
+      const reportOff = process.env.SIGNALCLAW_CSP_REPORT_DISABLED === "1";
+      const parts = [
+        "default-src 'self'",
+        join("script-src 'self'"),
+        "style-src 'self' 'unsafe-inline'",
+        join("img-src 'self' data: blob:"),
+        join("connect-src 'self'"),
+        "font-src 'self' data:",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "object-src 'none'",
+        "worker-src 'self' blob:",
+      ];
+      if (!reportOff) parts.push("report-uri /api/csp-report");
+      const header = parts.join("; ");
+      const name = cspMode === "enforce"
+        ? "Content-Security-Policy"
+        : "Content-Security-Policy-Report-Only";
+      res.headers.set(name, header);
+    }
   }
   return res;
 }
