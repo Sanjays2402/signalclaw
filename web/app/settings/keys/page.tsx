@@ -391,6 +391,10 @@ function CurlExample() {
       : "";
   const listSnippet = `curl ${base}/v1/runs \\
   -H 'Authorization: Bearer sc_live_your_key_here'`;
+  const exportSnippet = `curl -o runs.csv ${base}/v1/runs/export?format=csv \\
+  -H 'Authorization: Bearer sc_live_your_key_here'`;
+  const usageSnippet = `curl ${base}/v1/usage \\
+  -H 'Authorization: Bearer sc_live_your_key_here'`;
   const postSnippet = `curl -X POST ${base}/v1/runs \\
   -H 'Authorization: Bearer sc_live_your_trade_key' \\
   -H 'Content-Type: application/json' \\
@@ -403,6 +407,10 @@ function CurlExample() {
                492.4, 493.1, 494.0, 495.3, 496.2, 497.5, 498.1, 499.0]
   }'`;
   const snippet = `${listSnippet}
+
+${exportSnippet}
+
+${usageSnippet}
 
 ${postSnippet}`;
   const [copied, setCopied] = useState(false);
@@ -439,9 +447,13 @@ ${postSnippet}`;
       </pre>
       <p className="text-[11px] muted mt-2">
         The read scope unlocks GET /v1/runs and GET /v1/runs/:id. Pass q,
-        ticker, regime, limit, and offset to filter and paginate. The trade
-        scope unlocks POST /v1/runs, which classifies a price series you
-        supply and saves the result to your history.
+        ticker, regime, limit, and offset to filter and paginate. Use
+        /v1/runs/export and /v1/runs/:id/export with format=csv or json to
+        pull results into a spreadsheet or notebook. GET /v1/usage returns
+        the same free-tier meter shown in the UI so you can warn users
+        before they hit the cap. The trade scope unlocks POST /v1/runs to
+        classify a price series and save it to history, and DELETE
+        /v1/runs/:id to remove one.
       </p>
     </Card>
   );

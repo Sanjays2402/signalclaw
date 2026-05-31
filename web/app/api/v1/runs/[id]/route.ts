@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
-import { getRun } from "@/lib/runStore";
+import { deleteRun, getRun } from "@/lib/runStore";
+import { recordSafe } from "@/lib/activityStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,4 +33,28 @@ export async function GET(
     payload: run.payload,
     share_url: `/r/${run.id}`,
   });
+}
+
+// DELETE /v1/runs/:id  (trade or admin scope)
+export async function DELETE(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  const key = await authenticate(extractKey(req));
+  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key.scopes.includes("trade") && !key.scopes.includes("admin")) {
+    return err(403, "forbidden", "trade scope required to delete runs");
+  }
+  const { id } = await ctx.params;
+  const existing = await getRun(id);
+  if (!existing) return err(404, "not_found", "run not found");
+  const ok = await deleteRun(id);
+  if (!ok) return err(500, "delete_failed", "could not delete run");
+  await recordSafe({
+    kind: "run.deleted",
+    title: `API run deleted \u00b7 ${existing.ticker}`,
+    body: existing.label,
+    href: "/history",
+  });
+  return NextResponse.json({ id, deleted: true });
 }
