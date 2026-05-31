@@ -2,7 +2,24 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: GDPR self-service via the v1 API (export + erase)
+## New: API key expiry watch (rotate before automation breaks)
+
+Procurement reality: enterprise security policies mandate time-bound credentials, and SOC2 CC6.1 expects evidence that credentials are reviewed on a cadence. SignalClaw has supported per-key `expires_at` for a while; what was missing was a place to ask "what is about to lapse" without grepping the keys JSON. The new admin endpoint and settings banner make that visible at a glance, with the same audit and admin-key gating as the rest of `/api/admin/*`. The watch list always surfaces already-expired keys even outside the window, so a dead credential still wired into a downstream job cannot hide.
+
+### Try it
+
+Local URL: http://localhost:3000/settings/keys (banner appears once any key has an `expires_at`).
+
+```bash
+# Window defaults to 30 days; bump it for a longer-horizon roster.
+curl -s "http://localhost:3000/api/admin/keys/expiring?within_days=14" \
+  -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" | jq .counts
+# { "expired": 0, "critical": 1, "soon": 2, "upcoming": 4, ... }
+```
+
+In local single-user mode (no `SIGNALCLAW_ADMIN_KEY` env) the endpoint is open and the request is audited as `local-mode`. In production posture an admin-scoped key is required; missing or under-scoped requests get a 403 and a `forbidden:admin-required` audit line.
+
+## Previously: GDPR self-service via the v1 API (export + erase)
 
 Procurement reality: every EU and UK customer asks how a data subject can exercise their GDPR rights without filing a ticket. Admin-only privacy buttons are not enough; reviewers want a documented programmatic surface so DSAR handling can sit inside the customer's own pipeline. SignalClaw now exposes the same export + erase machinery the admin console uses as two v1 endpoints, with the existing rate limits, audit logging, scope checks, and legal-hold respect already in place.
 

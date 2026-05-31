@@ -16,6 +16,8 @@ import {
   ArrowsClockwise,
   Gauge,
   ChartLineUp,
+  Hourglass,
+  Clock,
 } from "@phosphor-icons/react/dist/ssr";
 
 type StoredKey = {
@@ -399,6 +401,8 @@ export default function ApiKeysPage() {
           </button>
         )}
       </header>
+
+      <ExpiryWatch />
 
       {created && <RevealedSecret created={created} onDismiss={() => setCreated(null)} />}
 
@@ -1145,4 +1149,165 @@ function fmtDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Key expiry watch panel. Read-only summary backed by
+// GET /api/admin/keys/expiring. Surfaces here so an operator sees the same
+// "is anything about to lapse" view they would see from the API. Stays
+// silent when nothing is expiring or already expired.
+
+type ClassifiedKey = {
+  id: string;
+  label: string;
+  prefix: string;
+  scopes: string[];
+  expires_at: string;
+  expires_in_ms: number;
+  expires_in_days: number;
+  bucket: "expired" | "critical" | "soon" | "upcoming";
+  revoked: boolean;
+  suspended: boolean;
+};
+
+type ExpirySummary = {
+  generated_at: string;
+  window_days: number;
+  counts: {
+    expired: number;
+    critical: number;
+    soon: number;
+    upcoming: number;
+    active_with_expiry: number;
+    no_expiry: number;
+    revoked_or_suspended: number;
+  };
+  keys: ClassifiedKey[];
+};
+
+function relativeExpiry(k: ClassifiedKey): string {
+  const ms = k.expires_in_ms;
+  if (ms <= 0) {
+    const days = Math.max(0, -k.expires_in_days);
+    if (days === 0) return "expired today";
+    if (days === 1) return "expired 1 day ago";
+    return `expired ${days} days ago`;
+  }
+  const hours = Math.round(ms / (60 * 60 * 1000));
+  if (hours < 24) return hours <= 1 ? "in under 1 hour" : `in ${hours} hours`;
+  const days = Math.round(ms / (24 * 60 * 60 * 1000));
+  return days === 1 ? "in 1 day" : `in ${days} days`;
+}
+
+function bucketTone(b: ClassifiedKey["bucket"]): {
+  border: string;
+  label: string;
+} {
+  switch (b) {
+    case "expired":
+      return { border: "border-red-500/40", label: "Expired" };
+    case "critical":
+      return { border: "border-red-500/40", label: "Under 24h" };
+    case "soon":
+      return { border: "border-amber-500/40", label: "Under 7d" };
+    case "upcoming":
+      return { border: "border-[var(--border-strong)]", label: "Upcoming" };
+  }
+}
+
+function ExpiryWatch() {
+  const { data, error, isLoading } = useSWR<ExpirySummary>(
+    "/admin/keys/expiring?within_days=30",
+    swrFetcher,
+    { refreshInterval: 60_000 },
+  );
+
+  if (isLoading) {
+    return (
+      <div className="rounded-sm border border-[var(--border-strong)] bg-white/[0.02] px-3 py-2 text-[12px] muted flex items-center gap-2">
+        <Clock size={14} weight="duotone" /> Checking key expiries
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="rounded-sm border border-red-500/40 bg-red-500/5 px-3 py-2 text-[12px] text-red-300 flex items-center gap-2">
+        <WarningCircle size={14} weight="duotone" />
+        Could not load expiry summary
+      </div>
+    );
+  }
+  if (!data) return null;
+  const c = data.counts;
+  const total = c.expired + c.critical + c.soon + c.upcoming;
+  if (total === 0) {
+    // Stay quiet when nothing is on the radar; empty state lives below in
+    // the keys list itself. Avoids "all green" badge noise on a fresh
+    // install where every key is fresh.
+    return null;
+  }
+  const headlineRed = c.expired > 0 || c.critical > 0;
+  return (
+    <div
+      className={`rounded-sm border ${headlineRed ? "border-red-500/40 bg-red-500/5" : "border-amber-500/40 bg-amber-500/5"} px-3 py-2.5`}
+    >
+      <div className="flex items-center gap-2 text-[12px] font-medium">
+        <Hourglass
+          size={14}
+          weight="duotone"
+          className={headlineRed ? "text-red-400" : "text-amber-400"}
+        />
+        <span>
+          {c.expired > 0 && (
+            <span className="text-red-300">
+              {c.expired} expired
+              {(c.critical || c.soon || c.upcoming) > 0 ? " · " : ""}
+            </span>
+          )}
+          {c.critical > 0 && (
+            <span className="text-red-300">
+              {c.critical} under 24h
+              {(c.soon || c.upcoming) > 0 ? " · " : ""}
+            </span>
+          )}
+          {c.soon > 0 && (
+            <span className="text-amber-300">
+              {c.soon} under 7d{c.upcoming > 0 ? " · " : ""}
+            </span>
+          )}
+          {c.upcoming > 0 && (
+            <span className="muted">{c.upcoming} within 30d</span>
+          )}
+        </span>
+      </div>
+      <ul className="mt-2 space-y-1.5">
+        {data.keys.slice(0, 6).map((k) => {
+          const t = bucketTone(k.bucket);
+          return (
+            <li
+              key={k.id}
+              className={`flex items-center justify-between gap-3 rounded-sm border ${t.border} bg-white/[0.02] px-2 py-1.5 text-[12px]`}
+            >
+              <div className="min-w-0 flex items-center gap-2">
+                <Key size={12} weight="duotone" className="shrink-0 muted" />
+                <span className="truncate font-medium">{k.label}</span>
+                <span className="muted font-mono text-[11px] truncate">
+                  {k.prefix}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Badge>{t.label}</Badge>
+                <span className="muted tabular-nums">{relativeExpiry(k)}</span>
+              </div>
+            </li>
+          );
+        })}
+        {data.keys.length > 6 && (
+          <li className="text-[11px] muted px-2">
+            and {data.keys.length - 6} more in the list below
+          </li>
+        )}
+      </ul>
+    </div>
+  );
 }
