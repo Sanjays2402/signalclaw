@@ -23,6 +23,7 @@ import {
   Globe,
   ArchiveBox,
   UserPlus,
+  ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -117,6 +118,12 @@ function Settings() {
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
             <UserPlus size={14} weight="duotone" /> Invites
+          </Link>
+          <Link
+            href="/settings/idempotency"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <ArrowsClockwise size={14} weight="duotone" /> Idempotency
           </Link>
           <Link
             href="/usage"

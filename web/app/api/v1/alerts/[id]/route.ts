@@ -4,6 +4,7 @@ import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { deleteAlert, listAlerts } from "@/lib/alertStore";
 import { isDryRun, dryRunResponse } from "@/lib/dryRun";
+import { withIdempotency } from "@/lib/idempotency";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +30,8 @@ export async function DELETE(
   }
   await recordAuditEvent({ req, route: "/api/v1/alerts/[id]", method: req.method, status: 200, key });
   return enforceRateLimit(req, key, "/api/v1/alerts/[id]", async () => {
+  const raw = await req.text();
+  return withIdempotency(req, key, "/api/v1/alerts/[id]", raw, async () => {
 
   const { id } = await ctx.params;
   if (!id || typeof id !== "string") {
@@ -51,5 +54,6 @@ export async function DELETE(
   if (!ok) return err(404, "not_found", "alert not found");
   return NextResponse.json({ ok: true, id });
 
+  });
   });
 }

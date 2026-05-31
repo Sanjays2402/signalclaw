@@ -5,6 +5,7 @@ import { recordAuditEvent } from "@/lib/auditStore";
 import { createAlert, listAlerts, MAX_ALERTS, validateInput } from "@/lib/alertStore";
 import { recordSafe } from "@/lib/activityStore";
 import { isDryRun, dryRunResponse } from "@/lib/dryRun";
+import { withIdempotency } from "@/lib/idempotency";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,13 +56,8 @@ export async function POST(req: NextRequest) {
   }
   await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 200, key });
   return enforceRateLimit(req, key, "/api/v1/alerts", async () => {
-
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return err(400, "bad_json", "request body must be valid JSON");
-  }
+  const raw = await req.text();
+  return withIdempotency(req, key, "/api/v1/alerts", raw, async ({ body }) => {
   if (!body || typeof body !== "object") {
     return err(400, "bad_body", "request body must be a JSON object");
   }
@@ -91,5 +87,6 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ alert: r.alert }, { status: 201 });
 
+  });
   });
 }

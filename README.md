@@ -6,6 +6,37 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Idempotency-Key support for every mutating `/api/v1/*` endpoint**. Stripe-style retries are table-stakes for any API a customer is going to wire into their order pipeline: a flaky network must not double-arm an alert or double-save a run. Every POST, PATCH, and DELETE under `/api/v1/*` (alerts, alert check, runs, watchlist, watchlist/[ticker]) now accepts an optional `Idempotency-Key` header. The first call with a given (api-key id, header) executes the work and caches the response for 24 hours; subsequent calls with the same body return the cached status + body and add `Idempotent-Replayed: true` so the handler does not run twice. Reusing the same header value with a different body returns `409 idempotency_conflict` (handler not invoked) so a caller that accidentally mutates the body on retry sees a loud error instead of silent divergence. Records are scoped strictly by API-key id, so a second key reusing the same header value is a miss and not a conflict. Persistence is the same file-backed atomic-write pattern as the other stores under `web/.data/idempotency.json`, capped at 2000 records with a 24h sliding TTL and opportunistic GC on every read. Only 2xx responses are cached (so clients can fix a 4xx and retry), and the cached entry stores only a small whitelist of safe response headers (`location`, `etag`, `x-resource-id`) so replays do not echo stale rate-limit counters. Header validation rejects empty, oversized (>255), and non-printable values at the boundary with `400 bad_idempotency_key`. Replays and conflicts are both written to the audit chain with the originating Idempotency-Key so a reviewer can prove which retried requests were short-circuited and why. A new admin endpoint `GET /api/admin/keys/:id/idempotency` returns the recent cache entries (header, fingerprint prefix, status, bytes, created/expires) for one key without ever exposing the cached body, and `/settings/idempotency` surfaces a per-key picker with the live table so the key owner can see exactly which retries are landing. Covered by `tests/idempotency.test.mjs`: missing header is a pass-through, malformed header returns 400 without running the handler, the same key + same body returns the cached body and proves the handler did not run again, the same key + different body returns 409 without running the handler, 4xx responses are not cached so the next attempt runs again, and two different API keys reusing the same header value are isolated (different fingerprints, both stored, neither overwriting the other).
+
+  Try it locally: `cd web && pnpm dev` then
+  ```bash
+  # Mint a key in the dashboard at http://localhost:7430/settings/keys, then:
+  K=sc_live_your_minted_key_here
+  IDK=$(uuidgen)
+
+  # First call: real work, response cached for 24h
+  curl -si -X POST http://localhost:7430/api/v1/watchlist \
+    -H "authorization: Bearer $K" \
+    -H "content-type: application/json" \
+    -H "Idempotency-Key: $IDK" \
+    -d '{"ticker":"AAPL","note":"flagship"}'
+
+  # Replay: same body, returns the cached response with Idempotent-Replayed: true
+  curl -si -X POST http://localhost:7430/api/v1/watchlist \
+    -H "authorization: Bearer $K" \
+    -H "content-type: application/json" \
+    -H "Idempotency-Key: $IDK" \
+    -d '{"ticker":"AAPL","note":"flagship"}' | grep -i idempotent-replayed
+
+  # Conflict: same key, different body, returns 409 without mutating state
+  curl -si -X POST http://localhost:7430/api/v1/watchlist \
+    -H "authorization: Bearer $K" \
+    -H "content-type: application/json" \
+    -H "Idempotency-Key: $IDK" \
+    -d '{"ticker":"MSFT"}'
+  ```
+  UI: visit http://localhost:7430/settings/idempotency and pick a key to see its cache.
+
 - **Tamper-evident audit log with hash-chain verification**. SOC2 CC7.2 + CC7.3 require audit logs to be protected from undetected modification, and procurement reviewers fail any product that ships an `audit.jsonl` they can edit with `vi`. Every `recordAuditEvent` now computes an HMAC-SHA256 over the canonical event payload plus the previous event's hash, persists both `prev_hash` and `hash` on the row, and seeds the chain with a 32-byte random key written to `.data/audit.chainkey` (mode 0600, generated on first write, never rotated because rotating would invalidate prior links). The chain serializes through the existing write queue so concurrent route handlers cannot fork the log. `GET /api/audit/verify` (admin scope when `SIGNALCLAW_ADMIN_KEY` is set, open in local mode, mirroring `/api/audit`) walks the entire on-disk log (rolled + primary, oldest first), re-derives each link, and returns `{ok, checked, skipped_legacy, last_hash, break_at_index, break_event_id, reason}`; events written before this feature shipped are accepted as a pre-chain prefix so existing installs do not flip red. The verify call is itself recorded into the chain, so an auditor can prove not just integrity-right-now but that integrity-was-checked at a given timestamp. The `/settings/audit` page adds a Chain Integrity panel with a Verify button, an intact/broken badge, the last hash, and a precise break-at-index callout if the chain has been mutated. Covered by `tests/auditChain.test.mjs`: sequential writes link together, editing a single field on a recorded row trips `hash_mismatch` at the right index, dropping a middle event trips `prev_hash_mismatch`, and legacy unchained rows are tolerated as a pre-chain prefix.
 
   Try it locally: `cd web && pnpm dev` then

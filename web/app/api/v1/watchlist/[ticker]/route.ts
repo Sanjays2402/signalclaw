@@ -11,6 +11,7 @@ import {
 } from "@/lib/watchlistStore";
 import { recordSafe } from "@/lib/activityStore";
 import { isDryRun, dryRunResponse } from "@/lib/dryRun";
+import { withIdempotency } from "@/lib/idempotency";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,17 +40,13 @@ export async function PATCH(
   }
   await recordAuditEvent({ req, route: "/api/v1/watchlist/[ticker]", method: req.method, status: 200, key });
   return enforceRateLimit(req, key, "/api/v1/watchlist/[ticker]", async () => {
+  const raw = await req.text();
+  return withIdempotency(req, key, "/api/v1/watchlist/[ticker]", raw, async ({ body }) => {
 
   const { ticker } = await ctx.params;
   const t = normalizeTicker(ticker);
   if (!t) return err(400, "bad_ticker", "invalid ticker");
 
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return err(400, "bad_json", "request body must be valid JSON");
-  }
   if (!body || typeof body !== "object") {
     return err(400, "bad_body", "request body must be a JSON object");
   }
@@ -72,6 +69,7 @@ export async function PATCH(
   return NextResponse.json({ entry });
 
   });
+  });
 }
 
 // DELETE /v1/watchlist/{ticker}
@@ -92,6 +90,8 @@ export async function DELETE(
   }
   await recordAuditEvent({ req, route: "/api/v1/watchlist/[ticker]", method: req.method, status: 200, key });
   return enforceRateLimit(req, key, "/api/v1/watchlist/[ticker]", async () => {
+  const raw = await req.text();
+  return withIdempotency(req, key, "/api/v1/watchlist/[ticker]", raw, async () => {
   const { ticker } = await ctx.params;
   const t = normalizeTicker(ticker);
   if (!t) return err(400, "bad_ticker", "invalid ticker");
@@ -117,5 +117,6 @@ export async function DELETE(
   });
   return NextResponse.json({ ok: true, ticker: t });
 
+  });
   });
 }

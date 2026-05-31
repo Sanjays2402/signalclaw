@@ -7,6 +7,7 @@ import { classifyRegime } from "@/lib/regimeClassify";
 import { recordSafe } from "@/lib/activityStore";
 import { dispatchEvents, type PickEvent } from "@/lib/webhookStore";
 import { isDryRun, dryRunResponse } from "@/lib/dryRun";
+import { withIdempotency } from "@/lib/idempotency";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -91,13 +92,8 @@ export async function POST(req: NextRequest) {
   }
   await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 200, key });
   return enforceRateLimit(req, key, "/api/v1/runs", async () => {
-
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return err(400, "bad_json", "request body must be valid JSON");
-  }
+  const raw = await req.text();
+  return withIdempotency(req, key, "/api/v1/runs", raw, async ({ body }) => {
   if (!body || typeof body !== "object") {
     return err(400, "bad_body", "request body must be a JSON object");
   }
@@ -182,5 +178,6 @@ export async function POST(req: NextRequest) {
     { status: 201 },
   );
 
+  });
   });
 }

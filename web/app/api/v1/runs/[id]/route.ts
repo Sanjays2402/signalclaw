@@ -5,6 +5,7 @@ import { recordAuditEvent } from "@/lib/auditStore";
 import { deleteRun, getRun } from "@/lib/runStore";
 import { recordSafe } from "@/lib/activityStore";
 import { isDryRun, dryRunResponse } from "@/lib/dryRun";
+import { withIdempotency } from "@/lib/idempotency";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,6 +63,8 @@ export async function DELETE(
   }
   await recordAuditEvent({ req, route: "/api/v1/runs/[id]", method: req.method, status: 200, key });
   return enforceRateLimit(req, key, "/api/v1/runs/[id]", async () => {
+  const raw = await req.text();
+  return withIdempotency(req, key, "/api/v1/runs/[id]", raw, async () => {
   const { id } = await ctx.params;
   const existing = await getRun(id);
   if (!existing) return err(404, "not_found", "run not found");
@@ -85,5 +88,6 @@ export async function DELETE(
   });
   return NextResponse.json({ id, deleted: true });
 
+  });
   });
 }

@@ -4,6 +4,7 @@ import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { runCheck } from "@/lib/alertStore";
 import { isDryRun, dryRunResponse } from "@/lib/dryRun";
+import { withIdempotency } from "@/lib/idempotency";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,16 +30,10 @@ export async function POST(req: NextRequest) {
   }
   await recordAuditEvent({ req, route: "/api/v1/alerts/check", method: req.method, status: 200, key });
   return enforceRateLimit(req, key, "/api/v1/alerts/check", async () => {
+  const raw = await req.text();
+  return withIdempotency(req, key, "/api/v1/alerts/check", raw, async ({ body: parsed }) => {
 
-  let body: any = {};
-  const text = await req.text();
-  if (text) {
-    try {
-      body = JSON.parse(text);
-    } catch {
-      return err(400, "bad_json", "request body must be valid JSON");
-    }
-  }
+  const body: any = parsed ?? {};
 
   let prices: Record<string, number> | undefined;
   if (body && body.prices != null) {
@@ -69,5 +64,6 @@ export async function POST(req: NextRequest) {
   }
   return NextResponse.json(result);
 
+  });
   });
 }
