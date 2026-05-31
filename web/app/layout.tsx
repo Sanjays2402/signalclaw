@@ -54,6 +54,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <NavLink href="/">Today</NavLink>
           <NavLink href="/demo">Demo</NavLink>
           <NavLink href="/history">History</NavLink>
+          <NavLink href="/batch">Batch</NavLink>
           <NavLink href="/portfolio">Portfolio</NavLink>
           <NavLink href="/watchlist">Watch</NavLink>
           <NavLink href="/alerts">Alerts</NavLink>

@@ -26,6 +26,23 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - Webhook subscriptions (events, ticker filter, HMAC secret)
 - User-managed API keys with scopes (`read`, `trade`), one-time secret reveal, revocation, last-used timestamps; managed at `/settings/keys` in the dashboard or via `/admin/keys` over HTTP
 - Save & share regime runs from `/demo` to permanent public URLs at `/r/<id>`; manage saved runs at `/history` (rename, re-run, copy link, delete)
+- Batch regime scan at `/batch`: paste tickers or drop a CSV, classify up to 50 in one pass, save each as a shareable run, export the whole batch as CSV or JSON
+
+## Try the batch scanner
+
+1. Run the dev server: `cd web && npm install && npm run dev` (port 7430)
+2. Start the backend: `signalclaw serve` or `services/api/run.sh` (port 7431)
+3. Open <http://localhost:7430/batch>, click "Load sample", hit Run.
+
+Or from the command line:
+
+```bash
+curl -s -X POST http://localhost:7430/api/batch \
+  -H 'content-type: application/json' \
+  -d '{"tickers":["SPY","QQQ","IWM","TLT","GLD"],"lookback_days":504,"save":true}' | jq .
+```
+
+Add `"format":"csv"` to stream a CSV download instead of JSON.
 - Next.js dashboard (pages per resource) with lightweight-charts and recharts
 
 ## Stack
