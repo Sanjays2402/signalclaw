@@ -2,6 +2,29 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
+## New: per-API-key route allowlist (least privilege)
+
+Enterprise procurement reviewers ask whether a single leaked API key can reach every endpoint. SignalClaw now narrows individual keys to a specific list of `/api/v1/*` paths on top of the existing scope (`read` / `trade` / `admin`) and IP allowlist checks. Empty allowlist means “any v1 path the scope already permits”; non-empty means everything else is rejected with `403 route_not_allowed` before any rate-limit token, quota, or handler body runs, and the denial is written to the tamper-evident audit chain.
+
+Try it locally: `cd web && pnpm dev`, then
+
+```bash
+# Mint a read-only key, then narrow it to /api/v1/runs only.
+KID=...   # id returned by POST /api/admin/keys
+SEC=...   # the one-time plaintext secret
+
+curl -s -X PUT http://localhost:7430/api/admin/keys/$KID/route-allowlist \
+  -H 'Content-Type: application/json' \
+  -d '{"route_allowlist":["/api/v1/runs","/api/v1/watchlist"]}' | jq
+
+curl -s -o /dev/null -w 'runs   HTTP %{http_code}\n' -H "Authorization: Bearer $SEC" \
+  http://localhost:7430/api/v1/runs          # 200
+curl -s -o /dev/null -w 'alerts HTTP %{http_code}\n' -H "Authorization: Bearer $SEC" \
+  http://localhost:7430/api/v1/alerts        # 403 route_not_allowed
+```
+
+UI: visit http://localhost:7430/settings/keys and use the **Route allowlist** button on any active key.
+
 ![landing](docs/screenshots/landing.png)
 
 ## What's new
