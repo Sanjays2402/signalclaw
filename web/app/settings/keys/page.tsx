@@ -33,6 +33,9 @@ type StoredKey = {
   ip_allowlist?: string[];
   expires_at?: string | null;
   expired?: boolean;
+  suspended?: boolean;
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
 };
 
 type KeyList = { keys: StoredKey[] };
@@ -63,6 +66,7 @@ export default function ApiKeysPage() {
   const [busy, setBusy] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [rotating, setRotating] = useState<string | null>(null);
+  const [suspending, setSuspending] = useState<string | null>(null);
   const [editingAllowlist, setEditingAllowlist] = useState<string | null>(null);
   const [allowlistDraft, setAllowlistDraft] = useState("");
   const [allowlistErr, setAllowlistErr] = useState<string | null>(null);
@@ -279,6 +283,40 @@ export default function ApiKeysPage() {
       window.alert(err instanceof Error ? err.message : String(err));
     } finally {
       setRevoking(null);
+    }
+  }
+
+  async function onToggleSuspend(
+    id: string,
+    displayLabel: string,
+    currentlySuspended: boolean,
+  ) {
+    let reason: string | null = null;
+    if (!currentlySuspended) {
+      const ans = window.prompt(
+        `Suspend "${displayLabel}"?\n\nThis blocks all authentication until you lift the hold.\nOptional reason for the audit trail (200 chars max):`,
+        "",
+      );
+      if (ans === null) return;
+      reason = ans.trim() || null;
+    } else {
+      if (
+        !window.confirm(`Lift suspension on "${displayLabel}"? The key can authenticate again immediately.`)
+      )
+        return;
+    }
+    setSuspending(id);
+    try {
+      await api(`/admin/keys/${id}/suspend`, {
+        method: "PUT",
+        body: JSON.stringify({ suspended: !currentlySuspended, reason }),
+        headers: { "Content-Type": "application/json" },
+      });
+      mutate();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSuspending(null);
     }
   }
 
@@ -500,6 +538,11 @@ export default function ApiKeysPage() {
                         IP allowlist · {k.ip_allowlist.length}
                       </Badge>
                     )}
+                    {k.suspended && (
+                      <Badge tone="warn">
+                        suspended{k.suspended_reason ? ` · ${k.suspended_reason}` : ""}
+                      </Badge>
+                    )}
                   </div>
                   <div className="text-[11px] muted mono mt-0.5">
                     {k.prefix}… · created {fmtDate(k.created_at)}
@@ -590,6 +633,30 @@ export default function ApiKeysPage() {
                       className={rotating === k.id ? "animate-spin" : ""}
                     />
                     {rotating === k.id ? "Rotating..." : "Rotate"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onToggleSuspend(k.id, k.label || k.prefix, !!k.suspended)
+                    }
+                    disabled={
+                      suspending === k.id || revoking === k.id || rotating === k.id
+                    }
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-amber-500/30 text-amber-300 hover:bg-amber-500/10 rounded-sm disabled:opacity-50"
+                    title={
+                      k.suspended
+                        ? "Lift the operational hold and let the key authenticate again"
+                        : "Reversibly block the key from authenticating without rotating its secret"
+                    }
+                  >
+                    <WarningCircle size={12} weight="duotone" />
+                    {suspending === k.id
+                      ? k.suspended
+                        ? "Resuming..."
+                        : "Suspending..."
+                      : k.suspended
+                        ? "Unsuspend"
+                        : "Suspend"}
                   </button>
                   <button
                     type="button"

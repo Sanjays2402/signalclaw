@@ -6,6 +6,39 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Reversible API key suspension as the operational hold between revoke and rotate.** Revoke is permanent and rotate forces every legitimate client to redeploy a new secret; neither is the right tool when a SOC2 incident response (or an enterprise customer's billing dispute) needs the key to stop authenticating *right now* with the option to lift the hold in five minutes. `web/lib/keyStore.ts` now carries `suspended` / `suspended_at` / `suspended_reason` on every stored key, exposes a new `setKeySuspended(id, suspended, reason?)` primitive (rejects revoked keys and `env-admin`, caps the reason at 200 chars for the audit trail), and `authenticate()` refuses suspended keys before any route handler or rate-limit token is touched, so they fail uniformly with `401 unauthorized` across `/api/v1/*` and the admin surface. A new `GET/PUT /api/admin/keys/:id/suspend` route returns the live hold state and toggles it with `{ suspended: boolean, reason?: string|null }`, writes the existing tamper-evident audit chain under `reason: suspend:active->suspended` (and back), and refuses `409 revoked` / `409 env_admin` so an operator cannot accidentally suspend an already-dead key or the bootstrap admin. The `/settings/keys` admin UI surfaces a `suspended` badge with the reason inline, swaps the action button between **Suspend** (prompts for a reason) and **Unsuspend** (confirm-only) per row, and disables both controls while a sibling action is in flight. Covered by `tests/keySuspend.test.mjs`: new keys are not suspended, suspending blocks `authenticate()` on the exact same secret, unsuspending restores it without rotation (proves reversibility), revoked keys and `env-admin` are refused, and reason is truncated at 200 chars.
+
+  Try it locally: `cd web && npm run dev` then
+  ```bash
+  # Mint a key (local mode)
+  CREATE=$(curl -s -X POST http://localhost:7430/api/admin/keys \
+    -H 'Content-Type: application/json' \
+    -d '{"label":"laptop","scopes":["read"]}')
+  KID=$(echo "$CREATE" | jq -r .id)
+  SEC=$(echo "$CREATE" | jq -r .secret)
+
+  # Baseline: authenticates.
+  curl -s -o /dev/null -w 'HTTP %{http_code}\n' -H "Authorization: Bearer $SEC" \
+    http://localhost:7430/api/v1/whoami        # HTTP 200
+
+  # Suspend with an audit reason.
+  curl -s -X PUT "http://localhost:7430/api/admin/keys/$KID/suspend" \
+    -H 'Content-Type: application/json' \
+    -d '{"suspended":true,"reason":"incident-2026-05-31"}' | jq
+
+  # Same secret now blocked at authenticate().
+  curl -s -o /dev/null -w 'HTTP %{http_code}\n' -H "Authorization: Bearer $SEC" \
+    http://localhost:7430/api/v1/whoami        # HTTP 401
+
+  # Lift the hold without rotating.
+  curl -s -X PUT "http://localhost:7430/api/admin/keys/$KID/suspend" \
+    -H 'Content-Type: application/json' -d '{"suspended":false}' | jq
+
+  curl -s -o /dev/null -w 'HTTP %{http_code}\n' -H "Authorization: Bearer $SEC" \
+    http://localhost:7430/api/v1/whoami        # HTTP 200
+  ```
+  UI: visit http://localhost:7430/settings/keys and use the **Suspend** / **Unsuspend** button on any active key.
+
 - **Workspace network policy on the Next dashboard + `/api/v1/*`.** The Python service already shipped a global IP allowlist; the Node web tier had a settings page (`/settings/network`) wired to an admin endpoint that did not exist. That gap is now closed. A new `web/lib/networkPolicyStore.ts` is the single source of truth for the workspace-wide CIDR allowlist (IPv4 + IPv6, bare IPs promoted to `/32` or `/128`, dedupe-on-write, capped at `MAX_CIDR_ENTRIES`, persisted atomically at `.data/network-policy.json`). The new `GET/PUT /api/admin/network-policy` route returns the live policy plus `max_cidrs` and writes the existing audit chain with the full before/after diff under reason `network_policy_updated`. Enforcement is wired into `web/lib/v1Guard.ts` ahead of the per-key IP allowlist, monthly quota, rotation, and per-minute rate limit, so every `/api/v1/*` call from an off-policy source IP is rejected with `403 { error: { code: "network_policy_block", message } }` and an audit line with `reason: network_policy_block:<not-matched|no-ip>` before any handler or rate-limit token is touched. Loopback (`127.0.0.1`, `::1`) is always allowed so on-box liveness probes keep working, and the store refuses to persist `enabled: true` with an empty CIDR list so an operator cannot lock themselves out from the dashboard in a single click. Covered by `tests/networkPolicy.test.mjs` (default disabled, disabled-policy pass-through, empty-allowlist lockout protection, invalid CIDR rejection, non-array type rejection, enforcement allows listed IPv4 + IPv6, blocks unlisted, treats loopback as always allowed, denies when source IP cannot be determined).
 
   Try it locally: `cd web && npm run dev` then

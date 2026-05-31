@@ -30,6 +30,14 @@ export type StoredKey = {
   // "never expires" (legacy behaviour). Enforced inside authenticate() so
   // every caller, v1 or admin, sees the same cutoff.
   expires_at?: string | null;
+  // Reversible operational hold. Distinct from `revoked` (irreversible).
+  // When true, authenticate() refuses the key with reason `key_suspended`
+  // on every route. Suspended keys can be re-enabled by an admin without
+  // rotating the secret. Used during compromise investigations or while
+  // an enterprise customer disputes a charge.
+  suspended?: boolean;
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
 };
 
 type Store = { keys: StoredKey[] };
@@ -79,7 +87,37 @@ export function publicView(k: StoredKey) {
     ip_allowlist: Array.isArray(k.ip_allowlist) ? [...k.ip_allowlist] : [],
     expires_at: k.expires_at ?? null,
     expired: isExpired(k),
+    suspended: !!k.suspended,
+    suspended_at: k.suspended_at ?? null,
+    suspended_reason: k.suspended_reason ?? null,
   };
+}
+
+// Reversible suspend/unsuspend. Returns the updated key, or null if not
+// found. Refuses to suspend the env admin id (use SIGNALCLAW_ADMIN_KEY env
+// removal instead) or revoked keys (already permanently dead). Reason is
+// optional free-form text capped at 200 chars for the audit trail.
+export async function setKeySuspended(
+  id: string,
+  suspended: boolean,
+  reason?: string | null,
+): Promise<StoredKey | null> {
+  if (id === "env-admin") return null;
+  const store = await readStore();
+  const k = store.keys.find((x) => x.id === id);
+  if (!k) return null;
+  if (k.revoked) return null;
+  if (suspended) {
+    k.suspended = true;
+    k.suspended_at = new Date().toISOString();
+    k.suspended_reason = (reason ?? "").toString().slice(0, 200) || null;
+  } else {
+    k.suspended = false;
+    k.suspended_at = null;
+    k.suspended_reason = null;
+  }
+  await writeStore(store);
+  return k;
 }
 
 // Pure predicate so route handlers and the UI agree on the cutoff.
@@ -246,6 +284,7 @@ export async function authenticate(
   const k = store.keys.find((x) => x.hash === h && !x.revoked);
   if (!k) return null;
   if (isExpired(k)) return null;
+  if (k.suspended) return null;
   k.last_used_at = new Date().toISOString();
   await writeStore(store).catch(() => {});
   return k;
