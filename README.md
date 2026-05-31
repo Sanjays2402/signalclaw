@@ -6,6 +6,23 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Audit log on every authenticated route**. Every call into `/api/v1/*` and `/api/admin/keys*` now appends an immutable record to `web/.data/audit.jsonl`: the calling key id + label + scopes, the route, method, status, a per-key SHA-256 hash of the caller IP (never the raw IP), a reason on failures (`unauthorized`, `forbidden:trade-required`, `forbidden:admin-required`, …), and a small JSON details blob capped at 2 KiB. Plaintext secrets never touch the log. Browse and filter the log in the UI at `/settings/audit`, or hit it programmatically:
+
+  ```bash
+  # UI
+  open http://localhost:7430/settings/audit
+
+  # Public API (admin scope required)
+  curl -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+    'http://localhost:7430/api/v1/audit?ok=0&limit=50'
+
+  # Filter by key id, method, route substring, since timestamp
+  curl -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+    'http://localhost:7430/api/v1/audit?key_id=<id>&method=POST&route=/runs&since=2026-01-01T00:00:00Z'
+  ```
+
+  Reading the audit log is itself audited. The file auto-rotates at 50k entries into `audit.jsonl.1`. Queries are validated (string length caps, ISO 8601 on `since`) and capped at 1000 events per request. Backed by `lib/auditStore.ts` with serialized appends and a salted IP hash that differs across keys, so the same caller produces a different `ip_hash` per key.
+
 - **Bulk actions in run history**. Select runs on `/history` with row checkboxes (or the page-level select-all), then pin, unpin, tag, untag, export as CSV/JSON, or delete in one step. Backed by a single `POST /api/runs/bulk` endpoint that takes `{ ids, action, tags?, format? }` and returns `{ matched, affected, ids }`. Capped at 200 ids per request, idempotent for pin/unpin/tag ops.
 
 ### Try bulk actions

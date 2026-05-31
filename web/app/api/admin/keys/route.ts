@@ -8,6 +8,7 @@ import {
   type Scope,
 } from "@/lib/keyStore";
 import { recordSafe } from "@/lib/activityStore";
+import { recordAuditEvent } from "@/lib/auditStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,24 +20,29 @@ function err(status: number, code: string, message: string) {
 // In local single-user mode (default) the keys page is unauthenticated so a
 // fresh install can mint its first key. Set SIGNALCLAW_ADMIN_KEY in the env
 // to require an admin key on these endpoints (production posture).
-async function requireAdmin(req: NextRequest): Promise<NextResponse | null> {
-  if (!process.env.SIGNALCLAW_ADMIN_KEY) return null;
+async function requireAdmin(req: NextRequest, route: string, method: string): Promise<NextResponse | null> {
   const k = await authenticate(extractKey(req));
+  if (!process.env.SIGNALCLAW_ADMIN_KEY) {
+    await recordAuditEvent({ req, route, method, status: 200, key: k, reason: "local-mode" });
+    return null;
+  }
   if (!k || !k.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route, method, status: 403, key: k ?? null, reason: "forbidden:admin-required" });
     return err(403, "forbidden", "admin scope required");
   }
+  await recordAuditEvent({ req, route, method, status: 200, key: k });
   return null;
 }
 
 export async function GET(req: NextRequest) {
-  const denied = await requireAdmin(req);
+  const denied = await requireAdmin(req, "/api/admin/keys", "GET");
   if (denied) return denied;
   const keys = await listKeys();
   return NextResponse.json({ keys: keys.map(publicView) });
 }
 
 export async function POST(req: NextRequest) {
-  const denied = await requireAdmin(req);
+  const denied = await requireAdmin(req, "/api/admin/keys", "POST");
   if (denied) return denied;
   let body: any;
   try {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { recordAuditEvent } from "@/lib/auditStore";
 import { deleteAlert } from "@/lib/alertStore";
 
 export const runtime = "nodejs";
@@ -16,10 +17,15 @@ export async function DELETE(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const key = await authenticate(extractKey(req));
-  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key) {
+    await recordAuditEvent({ req, route: "/api/v1/alerts/[id]", method: req.method, status: 401, key: null, reason: "unauthorized" });
+    return err(401, "unauthorized", "missing or invalid api key");
+  }
   if (!key.scopes.includes("trade") && !key.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route: "/api/v1/alerts/[id]", method: req.method, status: 403, key, reason: "forbidden:trade-required" });
     return err(403, "forbidden", "trade scope required to delete alerts");
   }
+  await recordAuditEvent({ req, route: "/api/v1/alerts/[id]", method: req.method, status: 200, key });
 
   const { id } = await ctx.params;
   if (!id || typeof id !== "string") {

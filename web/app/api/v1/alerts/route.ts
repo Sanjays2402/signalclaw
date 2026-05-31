@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { recordAuditEvent } from "@/lib/auditStore";
 import { createAlert, listAlerts, MAX_ALERTS } from "@/lib/alertStore";
 import { recordSafe } from "@/lib/activityStore";
 
@@ -16,10 +17,15 @@ function err(status: number, code: string, message: string) {
 // scope filtering is by ownership of the key, not the alert.
 export async function GET(req: NextRequest) {
   const key = await authenticate(extractKey(req));
-  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key) {
+    await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 401, key: null, reason: "unauthorized" });
+    return err(401, "unauthorized", "missing or invalid api key");
+  }
   if (!key.scopes.includes("read") && !key.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 403, key, reason: "forbidden:read-required" });
     return err(403, "forbidden", "read scope required");
   }
+  await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 200, key });
   const alerts = await listAlerts();
   return NextResponse.json({
     alerts,
@@ -34,10 +40,15 @@ export async function GET(req: NextRequest) {
 // Arms a new alert. Returns the persisted alert with its id and created_at.
 export async function POST(req: NextRequest) {
   const key = await authenticate(extractKey(req));
-  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key) {
+    await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 401, key: null, reason: "unauthorized" });
+    return err(401, "unauthorized", "missing or invalid api key");
+  }
   if (!key.scopes.includes("trade") && !key.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 403, key, reason: "forbidden:trade-required" });
     return err(403, "forbidden", "trade scope required to arm alerts");
   }
+  await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 200, key });
 
   let body: any;
   try {

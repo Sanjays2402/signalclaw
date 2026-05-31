@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { recordAuditEvent } from "@/lib/auditStore";
 import {
   listWatchlist,
   addTicker,
@@ -22,10 +23,15 @@ function err(status: number, code: string, message: string) {
 // terminal model, so there is exactly one watchlist per install.
 export async function GET(req: NextRequest) {
   const key = await authenticate(extractKey(req));
-  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key) {
+    await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 401, key: null, reason: "unauthorized" });
+    return err(401, "unauthorized", "missing or invalid api key");
+  }
   if (!key.scopes.includes("read") && !key.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 403, key, reason: "forbidden:read-required" });
     return err(403, "forbidden", "read scope required");
   }
+  await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 200, key });
   const entries = await listWatchlist();
   return NextResponse.json({
     entries,
@@ -42,10 +48,15 @@ export async function GET(req: NextRequest) {
 // and returns the same entry. Returns 409 when the watchlist is full.
 export async function POST(req: NextRequest) {
   const key = await authenticate(extractKey(req));
-  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key) {
+    await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 401, key: null, reason: "unauthorized" });
+    return err(401, "unauthorized", "missing or invalid api key");
+  }
   if (!key.scopes.includes("trade") && !key.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 403, key, reason: "forbidden:trade-required" });
     return err(403, "forbidden", "trade scope required to edit watchlist");
   }
+  await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 200, key });
 
   let body: any;
   try {

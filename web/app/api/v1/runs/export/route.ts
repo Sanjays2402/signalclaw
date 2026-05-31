@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { recordAuditEvent } from "@/lib/auditStore";
 import { queryRuns, runsToCSV } from "@/lib/runStore";
 
 export const runtime = "nodejs";
@@ -15,10 +16,15 @@ function err(status: number, code: string, message: string) {
 // Capped at 200 rows per request to keep responses bounded.
 export async function GET(req: NextRequest) {
   const key = await authenticate(extractKey(req));
-  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key) {
+    await recordAuditEvent({ req, route: "/api/v1/runs/export", method: req.method, status: 401, key: null, reason: "unauthorized" });
+    return err(401, "unauthorized", "missing or invalid api key");
+  }
   if (!key.scopes.includes("read") && !key.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route: "/api/v1/runs/export", method: req.method, status: 403, key, reason: "forbidden:read-required" });
     return err(403, "forbidden", "read scope required");
   }
+  await recordAuditEvent({ req, route: "/api/v1/runs/export", method: req.method, status: 200, key });
 
   const sp = req.nextUrl.searchParams;
   const format = (sp.get("format") ?? "csv").toLowerCase();

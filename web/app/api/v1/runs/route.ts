@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { recordAuditEvent } from "@/lib/auditStore";
 import { queryRuns, createRun, normalizeTags } from "@/lib/runStore";
 import { classifyRegime } from "@/lib/regimeClassify";
 import { recordSafe } from "@/lib/activityStore";
@@ -23,10 +24,15 @@ function parseIntParam(v: string | null, fallback: number): number {
 // Returns a slim public view; no internal hashes or raw payloads.
 export async function GET(req: NextRequest) {
   const key = await authenticate(extractKey(req));
-  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key) {
+    await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 401, key: null, reason: "unauthorized" });
+    return err(401, "unauthorized", "missing or invalid api key");
+  }
   if (!key.scopes.includes("read") && !key.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 403, key, reason: "forbidden:read-required" });
     return err(403, "forbidden", "read scope required");
   }
+  await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 200, key });
 
   const sp = req.nextUrl.searchParams;
   const q = sp.get("q") ?? "";
@@ -70,10 +76,15 @@ export async function GET(req: NextRequest) {
 // the result, fires webhook events, and returns the saved run id + share url.
 export async function POST(req: NextRequest) {
   const key = await authenticate(extractKey(req));
-  if (!key) return err(401, "unauthorized", "missing or invalid api key");
+  if (!key) {
+    await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 401, key: null, reason: "unauthorized" });
+    return err(401, "unauthorized", "missing or invalid api key");
+  }
   if (!key.scopes.includes("trade") && !key.scopes.includes("admin")) {
+    await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 403, key, reason: "forbidden:trade-required" });
     return err(403, "forbidden", "trade scope required to create runs");
   }
+  await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 200, key });
 
   let body: any;
   try {
