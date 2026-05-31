@@ -6,6 +6,7 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Alerts in the public API** under `/api/v1/alerts`: list, arm, and disarm price or percent alerts with the same Bearer key already used for `/api/v1/runs`. `POST /api/v1/alerts/check` evaluates every armed alert against caller-supplied prices, returns the hits, and writes them to the alert history and activity feed. Read scope can list, trade scope can mutate.
 - **Digest subscriptions** at `/digest`: subscribe any webhook URL (Slack incoming, Discord, n8n, Zapier, custom) to a daily or weekly SignalClaw activity digest. Real outbound HTTP POST signed with HMAC-SHA256 in `x-signalclaw-signature`, one automatic retry on network errors and 5xx, per-subscription delivery log with status, attempt, and byte count. Schedule by pinging `POST /api/digest/cron` (optionally protected by `DIGEST_CRON_TOKEN`) from cron, Vercel scheduled functions, or any pinger. Pause, resume, rotate the secret, and trigger a one-off send from the UI.
 - **Alerts, end to end** at `/alerts`: arm price-above / price-below / percent-change rules with cooldown windows, run `POST /api/alerts/check` to evaluate them against live or supplied prices, and browse the paginated fire history filtered by ticker. Records land in `web/.data/alerts.json` with atomic writes, and every fire posts to the activity feed.
 - **Activity digest** at `/digest`: rolling summary of saved runs, webhook deliveries, batches, and alerts over a selectable window (1 / 3 / 7 / 14 / 30 / 90 days). Renders text + HTML previews of what the email digest will contain. Backed by `GET /api/digest/preview?days=N&format=json|text|html`.
@@ -30,6 +31,17 @@ curl -s -XPOST http://localhost:7430/api/digest/subscriptions \
 curl -s 'http://localhost:7430/api/digest/subscriptions' | jq '.subscriptions[0].id' \
   | xargs -I{} curl -s -XPOST http://localhost:7430/api/digest/subscriptions/{}/deliver | jq '.ok,.status,.attempt'
 curl -s 'http://localhost:7430/api/digest/deliveries?limit=5' | jq '.deliveries'
+
+# 6. Manage alerts from the API (needs a trade-scope key minted at /settings/keys)
+curl -s -XPOST http://localhost:7430/api/v1/alerts \
+  -H 'authorization: Bearer sc_live_YOUR_KEY' \
+  -H 'content-type: application/json' \
+  -d '{"ticker":"NVDA","condition":"price_above","value":150,"cooldown_hours":6}'
+curl -s -H 'authorization: Bearer sc_live_YOUR_KEY' http://localhost:7430/api/v1/alerts | jq '.alerts'
+curl -s -XPOST http://localhost:7430/api/v1/alerts/check \
+  -H 'authorization: Bearer sc_live_YOUR_KEY' \
+  -H 'content-type: application/json' \
+  -d '{"prices":{"NVDA":152.4}}' | jq '.hits'
 
 # 5. Arm an alert and fire a check against a supplied price
 curl -s -XPOST http://localhost:7430/api/alerts \

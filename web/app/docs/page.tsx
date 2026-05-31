@@ -126,6 +126,70 @@ const ENDPOINTS: Endpoint[] = [
       "Render a one-page PDF report for any saved run. Suitable for archiving or sharing with a non-technical reviewer.",
     responseSample: `<binary PDF, content-type application/pdf>`,
   },
+  {
+    id: "alerts-list",
+    method: "GET",
+    path: "/api/v1/alerts",
+    scopes: ["read"],
+    summary:
+      "List every armed price or percent alert. Use this from a watchdog job to confirm what is currently being monitored.",
+    responseSample: `{
+  "alerts": [
+    { "id": "...", "ticker": "NVDA", "condition": "price_above", "value": 150 }
+  ],
+  "total": 1,
+  "limit": 200
+}`,
+  },
+  {
+    id: "alerts-create",
+    method: "POST",
+    path: "/api/v1/alerts",
+    scopes: ["trade"],
+    summary:
+      "Arm a new alert. Conditions: price_above, price_below, pct_change_above, pct_change_below. Cooldown is in hours and defaults to 12.",
+    body: `{
+  "ticker": "NVDA",
+  "condition": "price_above",
+  "value": 150,
+  "cooldown_hours": 6,
+  "note": "breakout watch"
+}`,
+    responseSample: `{
+  "alert": {
+    "id": "a_8f3c2a",
+    "ticker": "NVDA",
+    "condition": "price_above",
+    "value": 150,
+    "enabled": true
+  }
+}`,
+  },
+  {
+    id: "alerts-delete",
+    method: "DELETE",
+    path: "/api/v1/alerts/{id}",
+    scopes: ["trade"],
+    summary:
+      "Disarm a single alert by id. Returns 404 if the alert is already gone.",
+    responseSample: `{ "ok": true, "id": "a_8f3c2a" }`,
+  },
+  {
+    id: "alerts-check",
+    method: "POST",
+    path: "/api/v1/alerts/check",
+    scopes: ["trade"],
+    summary:
+      "Evaluate every armed alert against supplied prices, or the built-in quote source when prices is omitted. Hits are logged to alert history and the activity feed.",
+    body: `{ "prices": { "NVDA": 152.4 } }`,
+    responseSample: `{
+  "hits": [
+    { "alert_id": "a_8f3c2a", "ticker": "NVDA", "observed": 152.4 }
+  ],
+  "checked": 1,
+  "quotes": { "NVDA": { "last": 152.4, "prev": 150 } }
+}`,
+  },
 ];
 
 const SCOPE_TONE: Record<Scope, "up" | "warn" | "down"> = {
