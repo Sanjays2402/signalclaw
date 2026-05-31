@@ -28,6 +28,22 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - Save & share regime runs from `/demo` to permanent public URLs at `/r/<id>`; manage saved runs at `/history` (rename, re-run, copy link, delete, tag)
 - Batch regime scan at `/batch`: paste tickers or drop a CSV, classify up to 50 in one pass, save each as a shareable run, export the whole batch as CSV or JSON
 - Free-tier usage meter at `/usage`: real per-month quota of saved runs, daily activity chart, top tickers, regime breakdown, and upgrade CTA; live quota pill in the header that links to `/usage`
+- Guided 3-step onboarding at `/welcome`: unlock the terminal, run a real regime classification on a deterministic seeded series, save it to history with the `#onboarding` tag; dismissible homepage banner points new users to it and a replay button lets anyone redo the tour
+
+## Try the welcome flow
+
+1. Run the dev server: `cd web && npm install && npm run dev` (port 7430)
+2. Open <http://localhost:7430/welcome> in a fresh browser profile and step through unlock, sample run, and save.
+3. Your seeded run appears in `/history` tagged `#onboarding #sample` and has a working public share URL at `/r/<id>`.
+
+Or seed a sample run directly from the API:
+
+```bash
+curl -s -X POST http://localhost:7430/api/welcome/seed \
+  -H 'content-type: application/json' \
+  -d '{"ticker":"acme"}'
+# => {"id":"...","label":"ACME · welcome sample","ticker":"ACME"}
+```
 
 ## Try the usage meter
 

@@ -26,6 +26,7 @@ import {
   type DrawdownReport,
 } from "@/lib/api";
 import { ShieldCheck, CaretRight, ArrowUpRight, ArrowDownRight } from "@phosphor-icons/react/dist/ssr";
+import OnboardingBanner from "@/components/OnboardingBanner";
 
 export default function Page() {
   return (
@@ -64,6 +65,7 @@ function Today() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-4">
+      <OnboardingBanner />
       <Hero snap={snap.data} dd={dd.data} reg={reg.data} />
 
       <Card

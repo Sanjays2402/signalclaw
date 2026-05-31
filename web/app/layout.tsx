@@ -54,6 +54,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* Nav */}
         <nav className="border-b border-[var(--border)] bg-[var(--bg)] px-4 py-1.5 flex flex-wrap gap-0.5 text-[11px] uppercase tracking-wider">
           <NavLink href="/">Today</NavLink>
+          <NavLink href="/welcome">Welcome</NavLink>
           <NavLink href="/demo">Demo</NavLink>
           <NavLink href="/history">History</NavLink>
           <NavLink href="/batch">Batch</NavLink>
