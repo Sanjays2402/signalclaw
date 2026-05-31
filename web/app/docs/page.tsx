@@ -19,7 +19,7 @@ type Scope = "read" | "trade" | "admin";
 
 type Endpoint = {
   id: string;
-  method: "GET" | "POST" | "DELETE";
+  method: "GET" | "POST" | "DELETE" | "PATCH";
   path: string;
   scopes: Scope[];
   summary: string;
@@ -190,6 +190,55 @@ const ENDPOINTS: Endpoint[] = [
   "quotes": { "NVDA": { "last": 152.4, "prev": 150 } }
 }`,
   },
+  {
+    id: "watchlist-list",
+    method: "GET",
+    path: "/api/v1/watchlist",
+    scopes: ["read"],
+    summary:
+      "List every tracked ticker in stable insertion order. Returns both the rich entry view and a flat ticker array for legacy clients.",
+    responseSample: `{
+  "entries": [
+    { "ticker": "NVDA", "added_at": "2025-01-04T18:22:11Z", "note": "breakout watch" }
+  ],
+  "tickers": ["NVDA"],
+  "total": 1,
+  "limit": 100
+}`,
+  },
+  {
+    id: "watchlist-add",
+    method: "POST",
+    path: "/api/v1/watchlist",
+    scopes: ["trade"],
+    summary:
+      "Add a ticker to the watchlist. Re-posting an existing ticker with a note updates the note. Returns 409 when the cap of 100 tickers is reached.",
+    body: `{ "ticker": "NVDA", "note": "breakout watch" }`,
+    responseSample: `{
+  "entry": { "ticker": "NVDA", "added_at": "2025-01-04T18:22:11Z", "note": "breakout watch" }
+}`,
+  },
+  {
+    id: "watchlist-update",
+    method: "PATCH",
+    path: "/api/v1/watchlist/{ticker}",
+    scopes: ["trade"],
+    summary:
+      "Update the note on an existing watchlist entry. Send {\"note\": null} to clear it. Returns 404 if the ticker is not tracked.",
+    body: `{ "note": "earnings on the 24th" }`,
+    responseSample: `{
+  "entry": { "ticker": "NVDA", "added_at": "2025-01-04T18:22:11Z", "note": "earnings on the 24th" }
+}`,
+  },
+  {
+    id: "watchlist-remove",
+    method: "DELETE",
+    path: "/api/v1/watchlist/{ticker}",
+    scopes: ["trade"],
+    summary:
+      "Remove a ticker from the watchlist. Returns 404 if the ticker was not tracked.",
+    responseSample: `{ "ok": true, "ticker": "NVDA" }`,
+  },
 ];
 
 const SCOPE_TONE: Record<Scope, "up" | "warn" | "down"> = {
@@ -201,6 +250,7 @@ const SCOPE_TONE: Record<Scope, "up" | "warn" | "down"> = {
 function methodTone(m: Endpoint["method"]): string {
   if (m === "GET") return "var(--green, #4ade80)";
   if (m === "POST") return "var(--amber)";
+  if (m === "PATCH") return "var(--amber)";
   return "var(--red, #f87171)";
 }
 
