@@ -97,6 +97,15 @@ docker compose -f docker-compose.dev.yml up --build
 
 No external broker is required. The execution simulator is offline and yfinance covers data. Optional notifier credentials (Telegram / Discord / Slack / NewsAPI) can be added to `.env`.
 
+## Try it: ticker page with regime overlay
+
+Open any symbol at `http://localhost:7430/ticker/SPY` (or QQQ, AAPL, etc.) to see the live price chart with bull / chop / bear / crash markers under each bar, regime bar counts, and the current snapshot (label, risk scale, confidence). Lookback toggles between 1Y / 2Y / 5Y.
+
+```bash
+curl -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  "http://localhost:7431/regime/series?ticker=SPY&lookback_days=504" | jq '.counts, .snapshot'
+```
+
 ## Try it: explain a signal
 
 See exactly why the model picked watch, hold, or skip for any ticker. The `/explain/{ticker}` endpoint runs the same per-ticker pipeline used by daily picks (technical features, ensemble classifier, return regressor) and returns the prediction with per-feature contributions, rationale text, risk flags, and a price history window.

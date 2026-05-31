@@ -1,12 +1,19 @@
 "use client";
 import useSWR from "swr";
 import Link from "next/link";
-import { use } from "react";
+import { use, useState } from "react";
 import AuthGate from "@/components/AuthGate";
 import EquityChart from "@/components/EquityChart";
+import RegimeChart, { REGIME_PALETTE } from "@/components/RegimeChart";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, fmtPct, Button } from "@/components/ui";
-import { swrFetcher, api, type Backtest, type Regime } from "@/lib/api";
-import { ArrowLeft, ChartLine, Pulse, WarningOctagon, Plus } from "@phosphor-icons/react/dist/ssr";
+import { swrFetcher, api, type Backtest, type Regime, type RegimeSeries } from "@/lib/api";
+import { ArrowLeft, ChartLine, Pulse, WarningOctagon, Plus, Waveform } from "@phosphor-icons/react/dist/ssr";
+
+const LOOKBACKS: { days: number; label: string }[] = [
+  { days: 252, label: "1Y" },
+  { days: 504, label: "2Y" },
+  { days: 1260, label: "5Y" },
+];
 
 type AnomalyReport = {
   ticker: string;
@@ -26,8 +33,14 @@ export default function Page({ params }: { params: Promise<{ symbol: string }> }
 }
 
 function Detail({ symbol }: { symbol: string }) {
+  const [lookback, setLookback] = useState<number>(504);
   const bt = useSWR<Backtest>(`/backtest/${symbol}`, swrFetcher);
   const reg = useSWR<Regime>(`/regime?ticker=${symbol}`, swrFetcher);
+  const series = useSWR<RegimeSeries>(
+    `/regime/series?ticker=${symbol}&lookback_days=${lookback}`,
+    swrFetcher,
+    { shouldRetryOnError: false }
+  );
   const anom = useSWR<AnomalyReport>(`/quality/anomalies/${symbol}`, swrFetcher, {
     shouldRetryOnError: false,
   });
@@ -55,6 +68,7 @@ function Detail({ symbol }: { symbol: string }) {
             onClick={() => {
               bt.mutate();
               reg.mutate();
+              series.mutate();
               anom.mutate();
             }}
           >
@@ -66,6 +80,42 @@ function Detail({ symbol }: { symbol: string }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <RegimeStat reg={reg.data} loading={!reg.data && !reg.error} err={reg.error} />
       </div>
+
+      <Card
+        title="Price with regime overlay"
+        right={
+          <div className="flex items-center gap-2">
+            <Waveform weight="duotone" className="text-[var(--accent)]" size={16} />
+            <div role="tablist" aria-label="Lookback window" className="flex border border-[var(--border)] rounded-sm overflow-hidden">
+              {LOOKBACKS.map((lb) => (
+                <button
+                  key={lb.days}
+                  role="tab"
+                  aria-selected={lookback === lb.days}
+                  onClick={() => setLookback(lb.days)}
+                  className={`px-2 py-1 text-[10px] uppercase tracking-widest mono ${
+                    lookback === lb.days
+                      ? "bg-white/10 text-white"
+                      : "muted hover:text-white"
+                  }`}
+                >
+                  {lb.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        }
+      >
+        {series.error ? (
+          <SeriesEmpty err={series.error} />
+        ) : !series.data ? (
+          <Loading label="Classifying regimes" />
+        ) : series.data.dates.length === 0 ? (
+          <Empty title="No price history" hint="Run a backtest below to seed the OHLCV cache, then refresh." />
+        ) : (
+          <RegimeBody data={series.data} />
+        )}
+      </Card>
 
       <Card title="Walk-forward backtest" right={<ChartLine weight="duotone" className="text-[var(--accent)]" size={16} />}>
         {bt.error ? <ErrorBox err={bt.error} /> :
@@ -138,6 +188,49 @@ function KV({ k, v, tone }: { k: string; v: string; tone?: "up" | "down" }) {
     <div className="panel p-3">
       <div className="muted text-xs uppercase tracking-wide">{k}</div>
       <div className={`num text-lg ${cls}`}>{v}</div>
+    </div>
+  );
+}
+
+function SeriesEmpty({ err }: { err: unknown }) {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("404") || msg.includes("422")) {
+    return <Empty title="Not enough price history" hint="At least one year of OHLCV is required. Run a backtest to seed the cache." />;
+  }
+  return <ErrorBox err={err} />;
+}
+
+function RegimeBody({ data }: { data: RegimeSeries }) {
+  const total = Object.values(data.counts).reduce((a, b) => a + b, 0) || 1;
+  const order = ["bull", "chop", "bear", "crash"];
+  return (
+    <div className="space-y-3">
+      <RegimeChart dates={data.dates} close={data.close} regime={data.regime} height={340} />
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <div className="flex flex-wrap gap-3">
+          {order.map((k) => {
+            const n = data.counts[k] || 0;
+            const pct = n / total;
+            return (
+              <div key={k} className="flex items-center gap-1.5 text-[11px] mono">
+                <span
+                  aria-hidden
+                  className="inline-block w-2.5 h-2.5 rounded-sm"
+                  style={{ background: (REGIME_PALETTE as any)[k] || "#6C7388" }}
+                />
+                <span className="muted uppercase tracking-widest">{k}</span>
+                <span>{n}</span>
+                <span className="muted">({fmtPct(pct)})</span>
+              </div>
+            );
+          })}
+        </div>
+        {data.snapshot && (
+          <div className="text-[11px] mono muted">
+            now: <span className="text-white">{data.snapshot.label}</span> · risk {data.snapshot.risk_scale.toFixed(2)}x · conf {fmtPct(data.snapshot.confidence)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
