@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getRun } from "@/lib/runStore";
 import RegimeChart, { REGIME_PALETTE } from "@/components/RegimeChart";
+import CopyLinkButton from "@/components/CopyLinkButton";
 import { Card, Stat, Badge, fmtPct } from "@/components/ui";
 import {
   ShieldCheck,
@@ -19,12 +20,22 @@ export async function generateMetadata({ params }: Params) {
   const run = await getRun(id);
   if (!run) return { title: "Shared run not found · SignalClaw" };
   const label = run.payload.snapshot?.label ?? "unknown";
+  const title = `${run.ticker} · ${label.toUpperCase()} · SignalClaw`;
+  const description = `Regime classification for ${run.ticker} over ${run.lookback_days} trading days (${run.payload.dates.length} bars).`;
   return {
-    title: `${run.ticker} · ${label.toUpperCase()} · SignalClaw`,
-    description: `Regime classification for ${run.ticker} over ${run.lookback_days} trading days.`,
+    title,
+    description,
+    alternates: { canonical: `/r/${id}` },
     openGraph: {
+      type: "article",
       title: `${run.ticker} · ${label.toUpperCase()}`,
-      description: `SignalClaw regime classification across ${run.payload.dates.length} bars.`,
+      description,
+      url: `/r/${id}`,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${run.ticker} · ${label.toUpperCase()}`,
+      description,
     },
   };
 }
@@ -75,7 +86,8 @@ export default async function SharePage({ params }: Params) {
               </div>
             )}
           </div>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-2 shrink-0 flex-wrap">
+            <CopyLinkButton path={`/r/${run.id}`} />
             <Link
               href="/demo"
               className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"

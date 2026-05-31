@@ -220,7 +220,14 @@ curl "http://localhost:7431/public/regime/demo?ticker=SPY&lookback_days=504" | j
 
 ## Try it: save and share a regime run
 
-Hit **Save & share** on `/demo` to snapshot the chart, stats, and regime mix to a permanent, public URL. Anyone can open the link without signing in, and the data is frozen at save time so the chart never drifts. Manage your saves at `/history`: search by label, ticker, or id, filter by regime, paginate, rename, re-run with the same parameters, copy the share link, export to CSV or JSON, or delete.
+Hit **Save & share** on `/demo` to snapshot the chart, stats, and regime mix to a permanent, public URL. Anyone can open the link without signing in, and the data is frozen at save time so the chart never drifts. Each share URL renders a dynamic Open Graph + Twitter preview card at `/r/<id>/opengraph-image` (ticker, regime badge, confidence, vol, drawdown, sparkline) so links unfurl nicely in Slack, Discord, iMessage, and X. The share page itself has a one click **Copy link** button. Manage your saves at `/history`: search by label, ticker, or id, filter by regime, paginate, rename, re-run with the same parameters, copy the share link, export to CSV or JSON, or delete.
+
+```bash
+# Verify the share preview image renders (1200x630 PNG)
+curl -sI http://localhost:7430/r/abc1234567/opengraph-image | head -2
+# => HTTP/1.1 200 OK
+# => content-type: image/png
+```
 
 Web: http://localhost:7430/history
 
