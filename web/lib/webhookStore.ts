@@ -1,0 +1,321 @@
+// File-backed webhook subscriptions + outbound delivery with HMAC signing,
+// retries (3 attempts, exponential backoff), and a per-subscription delivery log.
+// Persisted under web/.data/ alongside settings/runs.
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+
+const DATA_DIR = path.join(process.cwd(), ".data");
+const SUBS_FILE = path.join(DATA_DIR, "webhooks.json");
+const LOG_FILE = path.join(DATA_DIR, "webhook-deliveries.json");
+
+export const EVENT_KINDS = [
+  "entered",
+  "exited",
+  "upgraded",
+  "downgraded",
+  "score_jump",
+] as const;
+export type EventKind = (typeof EVENT_KINDS)[number];
+
+export type Webhook = {
+  id: string;
+  url: string;
+  events: string[];
+  tickers: string[]; // empty = all
+  secret: string;
+  enabled: boolean;
+  created_at: string;
+  last_status: number | null;
+  last_error: string | null;
+  last_delivered_at: string | null;
+};
+
+export type WebhookIn = {
+  url: string;
+  events?: string[];
+  tickers?: string[];
+  secret?: string;
+  enabled?: boolean;
+};
+
+export type PickEvent = {
+  kind: EventKind | string;
+  ticker: string;
+  as_of: string;
+  new_label?: string | null;
+  prior_label?: string | null;
+  score_delta?: number | null;
+};
+
+export type DeliveryAttempt = {
+  id: string;
+  subscription_id: string;
+  url: string;
+  status: number | null;
+  error: string | null;
+  attempt: number;
+  delivered_at: string;
+  signature: string | null;
+  event_count: number;
+};
+
+async function ensureDir() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+}
+
+async function readSubs(): Promise<Webhook[]> {
+  try {
+    const raw = await fs.readFile(SUBS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+}
+
+async function writeSubs(subs: Webhook[]) {
+  await ensureDir();
+  const tmp = SUBS_FILE + ".tmp";
+  await fs.writeFile(tmp, JSON.stringify(subs, null, 2), "utf8");
+  await fs.rename(tmp, SUBS_FILE);
+}
+
+async function readLog(): Promise<DeliveryAttempt[]> {
+  try {
+    const raw = await fs.readFile(LOG_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+}
+
+async function appendLog(attempts: DeliveryAttempt[]) {
+  if (attempts.length === 0) return;
+  await ensureDir();
+  const existing = await readLog();
+  const next = [...attempts, ...existing].slice(0, 500); // cap log size
+  const tmp = LOG_FILE + ".tmp";
+  await fs.writeFile(tmp, JSON.stringify(next, null, 2), "utf8");
+  await fs.rename(tmp, LOG_FILE);
+}
+
+function validateUrl(u: string): string | null {
+  try {
+    const parsed = new URL(u);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "URL must be http(s)";
+    }
+    return null;
+  } catch {
+    return "URL is not valid";
+  }
+}
+
+function sanitizeEvents(events: string[] | undefined): string[] {
+  const allowed = new Set<string>(EVENT_KINDS);
+  const xs = (events ?? []).filter((e) => allowed.has(e));
+  return xs.length > 0 ? Array.from(new Set(xs)) : Array.from(EVENT_KINDS);
+}
+
+function sanitizeTickers(tickers: string[] | undefined): string[] {
+  return (tickers ?? [])
+    .map((t) => String(t).trim().toUpperCase())
+    .filter((t) => /^[A-Z][A-Z0-9.\-]{0,9}$/.test(t));
+}
+
+export async function listWebhooks(): Promise<Webhook[]> {
+  const subs = await readSubs();
+  return subs.sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+export async function getWebhook(id: string): Promise<Webhook | null> {
+  const subs = await readSubs();
+  return subs.find((s) => s.id === id) ?? null;
+}
+
+export async function createWebhook(input: WebhookIn): Promise<{
+  ok: true;
+  webhook: Webhook;
+} | { ok: false; error: string }> {
+  const urlErr = validateUrl(input.url);
+  if (urlErr) return { ok: false, error: urlErr };
+
+  const wh: Webhook = {
+    id: crypto.randomUUID(),
+    url: input.url.trim(),
+    events: sanitizeEvents(input.events),
+    tickers: sanitizeTickers(input.tickers),
+    secret: (input.secret ?? "").trim(),
+    enabled: input.enabled !== false,
+    created_at: new Date().toISOString(),
+    last_status: null,
+    last_error: null,
+    last_delivered_at: null,
+  };
+  const subs = await readSubs();
+  subs.push(wh);
+  await writeSubs(subs);
+  return { ok: true, webhook: wh };
+}
+
+export async function deleteWebhook(id: string): Promise<boolean> {
+  const subs = await readSubs();
+  const next = subs.filter((s) => s.id !== id);
+  if (next.length === subs.length) return false;
+  await writeSubs(next);
+  return true;
+}
+
+export async function updateWebhookStatus(
+  id: string,
+  patch: Partial<Pick<Webhook, "last_status" | "last_error" | "last_delivered_at">>,
+): Promise<void> {
+  const subs = await readSubs();
+  const idx = subs.findIndex((s) => s.id === id);
+  if (idx === -1) return;
+  subs[idx] = { ...subs[idx], ...patch };
+  await writeSubs(subs);
+}
+
+function signBody(secret: string, body: string, timestamp: string): string {
+  const mac = crypto.createHmac("sha256", secret);
+  mac.update(`${timestamp}.${body}`);
+  return `t=${timestamp},v1=${mac.digest("hex")}`;
+}
+
+function matches(sub: Webhook, ev: PickEvent): boolean {
+  if (!sub.enabled) return false;
+  if (sub.events.length > 0 && !sub.events.includes(String(ev.kind))) return false;
+  if (sub.tickers.length > 0 && !sub.tickers.includes(ev.ticker.toUpperCase())) return false;
+  return true;
+}
+
+type FetchLike = (
+  input: string,
+  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
+) => Promise<{ status: number; text: () => Promise<string> }>;
+
+export type DeliverOpts = {
+  fetchImpl?: FetchLike;
+  maxAttempts?: number;
+  backoffMs?: number;
+  timeoutMs?: number;
+};
+
+async function deliverOne(
+  sub: Webhook,
+  events: PickEvent[],
+  opts: DeliverOpts,
+): Promise<DeliveryAttempt> {
+  const body = JSON.stringify({
+    id: crypto.randomUUID(),
+    delivered_at: new Date().toISOString(),
+    subscription_id: sub.id,
+    events,
+  });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = sub.secret ? signBody(sub.secret, body, timestamp) : null;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "user-agent": "SignalClaw-Webhook/1.0",
+    "x-signalclaw-event-count": String(events.length),
+  };
+  if (signature) {
+    headers["x-signalclaw-signature"] = signature;
+    headers["x-signalclaw-timestamp"] = timestamp;
+  }
+
+  const maxAttempts = opts.maxAttempts ?? 3;
+  const backoffMs = opts.backoffMs ?? 250;
+  const timeoutMs = opts.timeoutMs ?? 5000;
+  const fetchImpl = (opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike));
+
+  let lastStatus: number | null = null;
+  let lastError: string | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetchImpl(sub.url, { method: "POST", headers, body, signal: ctrl.signal });
+      lastStatus = res.status;
+      lastError = null;
+      if (res.status >= 200 && res.status < 300) {
+        clearTimeout(timer);
+        return {
+          id: crypto.randomUUID(),
+          subscription_id: sub.id,
+          url: sub.url,
+          status: res.status,
+          error: null,
+          attempt,
+          delivered_at: new Date().toISOString(),
+          signature,
+          event_count: events.length,
+        };
+      }
+      // non-2xx: retry on 5xx/429, give up on other 4xx
+      if (res.status < 500 && res.status !== 429) break;
+    } catch (e) {
+      lastStatus = null;
+      lastError = e instanceof Error ? e.message : String(e);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((r) => setTimeout(r, backoffMs * 2 ** (attempt - 1)));
+    }
+  }
+
+  return {
+    id: crypto.randomUUID(),
+    subscription_id: sub.id,
+    url: sub.url,
+    status: lastStatus,
+    error: lastError,
+    attempt: maxAttempts,
+    delivered_at: new Date().toISOString(),
+    signature,
+    event_count: events.length,
+  };
+}
+
+export async function dispatchEvents(
+  events: PickEvent[],
+  opts: DeliverOpts = {},
+): Promise<{ events: PickEvent[]; deliveries: DeliveryAttempt[] }> {
+  const subs = await readSubs();
+  const deliveries: DeliveryAttempt[] = [];
+  for (const sub of subs) {
+    const matched = events.filter((e) => matches(sub, e));
+    if (matched.length === 0) continue;
+    const attempt = await deliverOne(sub, matched, opts);
+    deliveries.push(attempt);
+    await updateWebhookStatus(sub.id, {
+      last_status: attempt.status,
+      last_error: attempt.error,
+      last_delivered_at: attempt.delivered_at,
+    });
+  }
+  await appendLog(deliveries);
+  return { events, deliveries };
+}
+
+export async function listDeliveries(limit = 50, subscriptionId?: string): Promise<DeliveryAttempt[]> {
+  const log = await readLog();
+  const filtered = subscriptionId ? log.filter((d) => d.subscription_id === subscriptionId) : log;
+  return filtered.slice(0, Math.max(1, Math.min(500, limit)));
+}
+
+// Test-only helper.
+export async function _resetForTests(): Promise<void> {
+  try {
+    await fs.rm(SUBS_FILE);
+  } catch {}
+  try {
+    await fs.rm(LOG_FILE);
+  } catch {}
+}

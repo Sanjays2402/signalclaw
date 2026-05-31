@@ -12,6 +12,9 @@ const cfg: NextConfig = {
       { source: "/v1/:path*", destination: "/api/v1/:path*" },
       // Admin endpoints called by the in-app keys management page.
       { source: "/admin/:path*", destination: "/api/admin/:path*" },
+      // Outbound webhooks management used by the in-app webhooks page.
+      { source: "/webhooks/:path*", destination: "/api/webhooks/:path*" },
+      { source: "/webhooks", destination: "/api/webhooks" },
     ];
   },
 };

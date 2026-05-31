@@ -3,8 +3,8 @@ import { useState } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
-import { api, swrFetcher, type WebhookList, type WebhookIn, type WebhookDelivery } from "@/lib/api";
-import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle } from "@phosphor-icons/react/dist/ssr";
+import { api, swrFetcher, type WebhookList, type WebhookIn, type WebhookDelivery, type WebhookDeliveryLog } from "@/lib/api";
+import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt } from "@phosphor-icons/react/dist/ssr";
 
 const EVENT_KINDS = ["entered", "exited", "upgraded", "downgraded", "score_jump"];
 
@@ -18,6 +18,7 @@ export default function WebhooksPage() {
 
 function Webhooks() {
   const { data, error, isLoading } = useSWR<WebhookList>("/webhooks", swrFetcher);
+  const { data: logData } = useSWR<WebhookDeliveryLog>("/webhooks/deliveries?limit=25", swrFetcher, { refreshInterval: 5000 });
   const [busy, setBusy] = useState<string | null>(null);
   const [formErr, setFormErr] = useState<string | null>(null);
   const [fireResult, setFireResult] = useState<WebhookDelivery | null>(null);
@@ -108,6 +109,35 @@ function Webhooks() {
       {error && <ErrorBox err={error} />}
       {data && data.subscriptions.length === 0 && (
         <Empty title="No webhooks" hint="Add an https endpoint above to receive pick events." />
+      )}
+
+      {logData && logData.deliveries.length > 0 && (
+        <Card title={`Delivery log (${logData.deliveries.length})`}>
+          <div className="text-xs muted mb-2 flex items-center gap-1">
+            <Receipt weight="duotone" size={12} /> Most recent attempts, newest first.
+          </div>
+          <ul className="divide-y divide-[var(--border)]">
+            {logData.deliveries.slice(0, 25).map((d) => {
+              const ok = d.status !== null && d.status >= 200 && d.status < 300;
+              return (
+                <li key={d.id} className="py-2 flex items-center gap-3 flex-wrap text-xs">
+                  {ok ? (
+                    <Badge tone="up">HTTP {d.status}</Badge>
+                  ) : d.status !== null ? (
+                    <Badge tone="down">HTTP {d.status}</Badge>
+                  ) : (
+                    <Badge tone="down">no response</Badge>
+                  )}
+                  <span className="font-mono break-all flex-1 min-w-0">{d.url}</span>
+                  <span className="muted">attempt {d.attempt}</span>
+                  <span className="muted">{d.event_count} event(s)</span>
+                  <span className="muted">{new Date(d.delivered_at).toLocaleString()}</span>
+                  {d.error && <span className="down break-all">{d.error}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
       )}
 
       {data && data.subscriptions.length > 0 && (

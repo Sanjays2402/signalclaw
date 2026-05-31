@@ -404,6 +404,18 @@ export type WebhookDelivery = {
   }[];
   deliveries: Record<string, unknown>[];
 };
+export type WebhookDeliveryLogItem = {
+  id: string;
+  subscription_id: string;
+  url: string;
+  status: number | null;
+  error: string | null;
+  attempt: number;
+  delivered_at: string;
+  signature: string | null;
+  event_count: number;
+};
+export type WebhookDeliveryLog = { deliveries: WebhookDeliveryLogItem[] };
 
 // Stops
 export type StopRule = {

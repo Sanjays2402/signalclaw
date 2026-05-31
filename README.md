@@ -60,6 +60,21 @@ curl -s -X POST http://localhost:7430/api/batch \
 Add `"format":"csv"` to stream a CSV download instead of JSON.
 - Next.js dashboard (pages per resource) with lightweight-charts and recharts
 
+## Try the webhooks
+
+Real outbound HTTP delivery for pick events with HMAC signing, retries, and a delivery log. Visit `http://localhost:7430/webhooks`, paste an https URL, choose the events you want, optionally set an HMAC secret. Hit "Fire latest" to send a synthesized `entered` event from your most recent saved run. Inspect attempts in the delivery log card.
+
+```sh
+curl -sS http://localhost:7430/webhooks \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://webhook.site/your-id","events":["entered","exited"],"tickers":["SPY"]}'
+
+curl -sS -X POST http://localhost:7430/webhooks/fire/latest
+curl -sS http://localhost:7430/webhooks/deliveries?limit=10
+```
+
+Deliveries retry up to 3 times with exponential backoff on 5xx/429/network errors. When a secret is set, each request is signed: `x-signalclaw-signature: t=<unix>,v1=<hex hmac of "<t>.<body>">` using HMAC-SHA256.
+
 ## Stack
 
 - Python 3.11+, FastAPI, Pydantic v2, uvicorn, Click, structlog
