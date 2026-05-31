@@ -873,3 +873,28 @@ class ScaleEventOut(BaseModel):
 class ScaleEvaluateOut(BaseModel):
     plan: ScalingPlanOut
     events: List[ScaleEventOut]
+
+
+class FeatureContribOut(BaseModel):
+    name: str
+    label: str
+    value: float
+    direction: str  # bullish, bearish, neutral
+    weight: float  # magnitude in [0, 1]
+    note: str
+
+
+class ExplainOut(BaseModel):
+    ticker: str
+    as_of: str
+    label: str
+    score: float
+    expected_return: float
+    proba: dict
+    rationale: str
+    risk_flags: List[str] = []
+    features: List[FeatureContribOut] = []
+    dates: List[str] = []
+    close: List[float] = []
+    history_label: Optional[str] = None
+    disclaimer: str = "NOT FINANCIAL ADVICE. See FINANCIAL_DISCLAIMER.md."

@@ -596,3 +596,28 @@ export type Backtest = {
   benchmark_max_drawdown?: number | null;
   exposure?: number | null;
 };
+
+export type FeatureContrib = {
+  name: string;
+  label: string;
+  value: number;
+  direction: "bullish" | "bearish" | "neutral";
+  weight: number;
+  note: string;
+};
+
+export type Explain = {
+  ticker: string;
+  as_of: string;
+  label: "watch" | "hold" | "skip";
+  score: number;
+  expected_return: number;
+  proba: { skip: number; hold: number; watch: number };
+  rationale: string;
+  risk_flags: string[];
+  features: FeatureContrib[];
+  dates: string[];
+  close: number[];
+  history_label?: string | null;
+  disclaimer: string;
+};

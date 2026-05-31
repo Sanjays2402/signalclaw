@@ -10,6 +10,10 @@ from ..utils import init_tracing, instrument_fastapi, instrument_httpx
 from ..observability import init_sentry, is_enabled as sentry_enabled
 from ..data import WatchlistStore, load_ohlcv, fetch_ohlcv, save_ohlcv
 from ..engine import run_daily, render_markdown
+from ..features import build_features
+from ..features.build import FEATURE_COLUMNS
+from ..models import WatchHoldSkipClassifier, ReturnRegressor, Ensemble, make_labels
+from ..explain import rationale_for, risk_flags as compute_risk_flags
 from ..backtest import WalkForwardBacktest, walk_forward_optimize
 from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut, BacktestTrade,
                        AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut,
@@ -41,7 +45,8 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        AnomalyOut, AnomalyReportOut,
                        ScalingPlanIn, ScalingPlanOut, ScalingPlanListOut,
                        ScaleRungIn, ScaleEvaluateIn,
-                       ScaleEventOut, ScaleEvaluateOut)
+                       ScaleEventOut, ScaleEvaluateOut,
+                       ExplainOut, FeatureContribOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .request_context import RequestContextMiddleware
@@ -939,6 +944,117 @@ def create_app() -> FastAPI:
             "counts": counts,
             "snapshot": snap.to_dict() if snap else None,
         }
+
+    @app.get("/explain/{ticker}", response_model=ExplainOut, dependencies=[Depends(require_api_key)])
+    def explain_endpoint(ticker: str, lookback_days: int = 180):
+        """Per-ticker explanation: runs the same per-ticker pipeline used by
+        daily picks (features + ensemble) and returns the prediction with
+        per-feature contributions, rationale text, risk flags, and a price
+        history window for charting. No persisted state is mutated.
+        """
+        t = ticker.upper().strip()
+        if not t or len(t) > 12 or not all(c.isalnum() or c in "-." for c in t):
+            raise HTTPException(400, "invalid ticker")
+        try:
+            lookback_days = max(30, min(int(lookback_days), 1260))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "lookback_days must be an integer")
+        df = load_ohlcv(t)
+        if df.empty:
+            df = fetch_ohlcv(t, period="3y")
+            if not df.empty:
+                save_ohlcv(t, df)
+        if df.empty or "close" not in df.columns or len(df) < 300:
+            raise HTTPException(404, "insufficient history for ticker")
+
+        import pandas as _pd
+        # Sentiment is intentionally omitted in /explain to keep latency low and
+        # avoid pulling a transformer model on the first call; the feature
+        # column is filled with 0.0 by build_features when sentiment is empty.
+        sentiment = _pd.Series(dtype=float)
+
+        feats = build_features(df, sentiment=sentiment)
+        labels = make_labels(df["close"], horizon=5)
+        joined = feats.join(labels, how="inner").dropna()
+        if len(joined) < 200:
+            raise HTTPException(422, "insufficient feature history")
+        feat_cols = [c for c in joined.columns if c not in ("label", "fwd_ret")]
+        train = joined.iloc[:-1]
+        clf = WatchHoldSkipClassifier().fit(train[feat_cols], train["label"])
+        reg = ReturnRegressor().fit(train[feat_cols], train["fwd_ret"])
+        ens = Ensemble(clf, reg)
+        last_row_df = joined.iloc[[-1]][feat_cols]
+        pred = ens.predict_row(last_row_df)
+        row = joined.iloc[-1]
+        rationale = rationale_for(t, row, pred)
+        flags = compute_risk_flags(row)
+
+        # Per-feature contributions: signed bullish/bearish reading per known feature.
+        feature_meta = {
+            "rsi14": ("RSI (14)", lambda v: ("bearish" if v > 65 else ("bullish" if v < 35 else "neutral")),
+                       lambda v: min(1.0, abs(v - 50) / 30.0),
+                       lambda v: f"{v:.0f} (oversold<35, overbought>65)"),
+            "macd_hist": ("MACD histogram", lambda v: "bullish" if v > 0 else ("bearish" if v < 0 else "neutral"),
+                          lambda v: min(1.0, abs(v) * 5.0),
+                          lambda v: f"{v:+.3f}"),
+            "bb_pct": ("Bollinger %B", lambda v: ("bearish" if v > 0.9 else ("bullish" if v < 0.1 else "neutral")),
+                       lambda v: min(1.0, abs(v - 0.5) * 2.0),
+                       lambda v: f"{v:.2f} (0=lower band, 1=upper band)"),
+            "sma_20_50_ratio": ("SMA20 / SMA50", lambda v: "bullish" if v > 1.0 else "bearish",
+                                lambda v: min(1.0, abs(v - 1.0) * 20.0),
+                                lambda v: f"{v:.3f}"),
+            "ema_12_26_ratio": ("EMA12 / EMA26", lambda v: "bullish" if v > 1.0 else "bearish",
+                                lambda v: min(1.0, abs(v - 1.0) * 20.0),
+                                lambda v: f"{v:.3f}"),
+            "ret_5": ("5-day return", lambda v: "bullish" if v > 0 else "bearish",
+                      lambda v: min(1.0, abs(v) * 10.0),
+                      lambda v: f"{v*100:+.2f}%"),
+            "ret_20": ("20-day return", lambda v: "bullish" if v > 0 else "bearish",
+                       lambda v: min(1.0, abs(v) * 5.0),
+                       lambda v: f"{v*100:+.2f}%"),
+            "vol_20": ("Realized vol (20d, ann.)", lambda v: "bearish" if v > 0.5 else ("bullish" if v < 0.2 else "neutral"),
+                       lambda v: min(1.0, abs(v - 0.3) * 3.0),
+                       lambda v: f"{v*100:.0f}%"),
+            "obv_z": ("OBV z-score", lambda v: "bullish" if v > 0 else "bearish",
+                      lambda v: min(1.0, abs(v) / 2.0),
+                      lambda v: f"{v:+.2f}"),
+            "sentiment_5d": ("News sentiment (5d)", lambda v: "bullish" if v > 0.1 else ("bearish" if v < -0.1 else "neutral"),
+                             lambda v: min(1.0, abs(v) * 2.0),
+                             lambda v: f"{v:+.2f}"),
+            "vol_regime": ("Vol regime", lambda v: "bearish" if v == 1 else ("bullish" if v == -1 else "neutral"),
+                           lambda v: 0.6 if v != 0 else 0.0,
+                           lambda v: {1: "high", -1: "low", 0: "normal"}.get(int(v), str(v))),
+        }
+        contribs: list[FeatureContribOut] = []
+        for name, (label, dir_fn, weight_fn, note_fn) in feature_meta.items():
+            if name not in row.index:
+                continue
+            try:
+                v = float(row[name])
+            except Exception:
+                continue
+            if v != v:  # NaN
+                continue
+            contribs.append(FeatureContribOut(
+                name=name, label=label, value=v,
+                direction=dir_fn(v), weight=float(weight_fn(v)), note=note_fn(v),
+            ))
+        contribs.sort(key=lambda c: c.weight, reverse=True)
+
+        tail = df["close"].dropna().tail(lookback_days)
+        dates = [str(d.date() if hasattr(d, "date") else d) for d in tail.index]
+        closes = [float(v) for v in tail.values]
+        as_of = dates[-1] if dates else ""
+
+        return ExplainOut(
+            ticker=t, as_of=as_of,
+            label=pred.label, score=float(pred.score),
+            expected_return=float(pred.expected_return),
+            proba={k: float(v) for k, v in pred.proba.items()},
+            rationale=rationale, risk_flags=flags,
+            features=contribs, dates=dates, close=closes,
+            history_label=pred.label,
+        )
 
     @app.get("/earnings", response_model=EarningsListOut, dependencies=[Depends(require_api_key)])
     def earnings_list(within_days: int | None = None):

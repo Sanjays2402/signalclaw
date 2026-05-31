@@ -97,6 +97,19 @@ docker compose -f docker-compose.dev.yml up --build
 
 No external broker is required. The execution simulator is offline and yfinance covers data. Optional notifier credentials (Telegram / Discord / Slack / NewsAPI) can be added to `.env`.
 
+## Try it: explain a signal
+
+See exactly why the model picked watch, hold, or skip for any ticker. The `/explain/{ticker}` endpoint runs the same per-ticker pipeline used by daily picks (technical features, ensemble classifier, return regressor) and returns the prediction with per-feature contributions, rationale text, risk flags, and a price history window.
+
+Web: http://localhost:7430/explain — sample selector (SPY, QQQ, AAPL, NVDA, TLT, BTC-USD) or any custom ticker, 3M/6M/1Y/2Y windows, class probability bar, price spark, bullish vs bearish feature panels with weighted contribution bars, and risk flag badges.
+
+API:
+
+```bash
+curl -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  "http://localhost:7431/explain/SPY?lookback_days=120" | jq '{label, score, expected_return, proba, rationale, risk_flags}'
+```
+
 ## Try it: regime classifier
 
 Classify any ticker into bull, chop, bear, or crash from realized vol, 60d trend slope, and 252d drawdown. Used by the picks engine to scale position sizes (crash 0.25x, bear 0.5x, chop 0.75x, bull 1.25x).

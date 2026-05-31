@@ -61,6 +61,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <NavLink href="/optimize">Optimize</NavLink>
           <NavLink href="/risk">Risk</NavLink>
           <NavLink href="/regime">Regime</NavLink>
+          <NavLink href="/explain">Explain</NavLink>
           <NavLink href="/execution">Exec</NavLink>
           <NavLink href="/rotation">Rotation</NavLink>
           <NavLink href="/reports">Reports</NavLink>
