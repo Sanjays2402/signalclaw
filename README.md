@@ -6,6 +6,17 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Sandbox / dry-run mode on every mutating endpoint**. Any POST, PUT, PATCH, or DELETE against the SignalClaw API accepts `?dry_run=true` (or an `X-Dry-Run: 1` header) and short-circuits with HTTP 202 plus a structured envelope describing what *would* have happened. No stores are written, no webhooks fire, no notifier traffic is queued. The probe still has to clear scope, MFA, rate-limit, and IP-allowlist checks (those middlewares run outside the dry-run guard), so a buyer can validate end-to-end that their key has the right permission to delete a record without deleting one. Every dry-run call is persisted to the audit log with `action="dry_run"` and `extra.dry_run=true` so SOC2 reviewers can tell probe traffic apart from real mutations. Covered by `tests/test_dry_run.py` (short-circuit on POST and DELETE, header parity with query param, audit row recorded, scope still enforced, GET unaffected).
+
+  ```bash
+  # Probe a destructive call without writing state.
+  curl -i -X POST 'http://localhost:7431/watchlist?ticker=AAPL&dry_run=true' \
+    -H "x-api-key: $SIGNALCLAW_API_KEY"
+  # HTTP/1.1 202 Accepted
+  # x-dry-run: true
+  # {"dry_run":true,"would_execute":{"method":"POST","path":"/watchlist",...},"note":"Sandbox mode: no state changed. Remove dry_run=true to apply this request."}
+  ```
+
 - **TOTP MFA gate on every admin endpoint**. SignalClaw API keys can now enroll a second factor so that admin actions (audit log access, key minting / rotation / revocation, GDPR export, GDPR delete, MFA disable itself) require both the key and a fresh 6-digit code. Enrollment is per key, scoped by SHA-256 of the secret so the secret itself is never written to disk, and the code window enforces RFC 6238 with a one-step skew and explicit replay protection (the most recently accepted step is recorded and re-presenting the same code returns 401). An enterprise deployment can set `SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN=1` to block any unenrolled key from admin routes at all. The dashboard at `/settings/security` runs the enroll flow (QR code plus copyable base32 secret plus 6-digit confirm) and stores the active code in tab-local sessionStorage so existing pages (`/settings/audit`, `/settings/keys`) keep working without per-page changes. Covered by `tests/test_mfa.py` (admin works before enrollment, admin requires `x-mfa-code` after enrollment, replayed code rejected, fresh code accepted).
 
   ```bash

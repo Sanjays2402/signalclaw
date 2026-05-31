@@ -273,6 +273,12 @@ class AuditMiddleware(BaseHTTPMiddleware):
             source_ip=ip,
             duration_ms=round(dur_ms, 2),
         )
+        # Dry-run flag is set by DryRunMiddleware when ?dry_run=true is
+        # honoured. Surface it in the audit row so compliance teams can
+        # tell probe traffic apart from real mutations.
+        if getattr(request.state, "dry_run", False):
+            event.action = "dry_run"
+            event.extra["dry_run"] = True
         try:
             self._log.record(event)
         except OSError:

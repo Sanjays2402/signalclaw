@@ -52,6 +52,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        ExplainOut, FeatureContribOut)
 from .security import require_api_key
 from .middleware import AccessLogMiddleware
+from .dry_run import DryRunMiddleware
 from .request_context import RequestContextMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware
 from .metrics import install_metrics, data_dir_ready
@@ -143,11 +144,24 @@ def create_app() -> FastAPI:
     )
     audit_pruner.start()
     app.state.audit_pruner = audit_pruner
+    # Sandbox / dry-run guard. Added BEFORE the audit middleware in
+    # source order so it sits INSIDE audit on the inbound chain: audit
+    # wraps it and still records dry-run probes with actor + path +
+    # status. Scopes, MFA, rate limits, and IP allowlists are added
+    # AFTER (outer) so they still gate sandbox probes; a caller cannot
+    # use ?dry_run=true to bypass a permission check.
+    app.add_middleware(DryRunMiddleware)
     app.add_middleware(
         AuditMiddleware,
         audit_log=audit_log,
         audit_reads=os.environ.get("SIGNALCLAW_AUDIT_READS", "0") == "1",
     )
+    # Sandbox / dry-run guard. Sits INSIDE audit on the inbound
+    # chain because it is added BEFORE audit in source order: audit
+    # wraps it and still records dry-run probes with actor + path +
+    # status. Scopes, MFA, rate limits, and IP allowlists are added
+    # AFTER this and therefore run BEFORE it on the inbound chain, so
+    # a sandbox probe still has to clear every permission check.
     if os.environ.get("SIGNALCLAW_RATE_LIMIT_ENABLED", "0") == "1":
         app.add_middleware(
             RateLimitMiddleware,
