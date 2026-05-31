@@ -55,10 +55,15 @@ export async function decideAdmin(req: Request): Promise<AdminDecision> {
   const k = await authenticate(extractKey(req));
   const policy = await getSsoPolicy();
 
-  // SSO session path.
+  // SSO session path. Pass caller IP so the registry can update the
+  // session row's last_seen timestamp on a successful verification.
   const sessionTok = readCookie(req, SSO_COOKIE_NAME);
   let session: SsoSession | null = null;
-  if (sessionTok) session = await verifySessionCookie(sessionTok);
+  if (sessionTok) {
+    const fwd = req.headers.get("x-forwarded-for") || "";
+    const ip = fwd.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "";
+    session = await verifySessionCookie(sessionTok, { liveness: { ip } });
+  }
   if (session && policy.enabled) {
     if (policy.allowed_domains.length > 0) {
       const dom = emailDomain(session.email);

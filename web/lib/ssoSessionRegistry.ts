@@ -46,6 +46,11 @@ export type SsoSessionRecord = {
   exp: number;          // unix seconds (cookie expiry)
   ip_hash: string;      // sha256(ip) — we never persist raw IPs
   user_agent: string;
+  // Liveness: updated on every successful verifySessionCookie call.
+  // Surfaces "session was minted 8h ago but hasn't been used in 6h" to
+  // the admin console — SOC2 reviewers expect this.
+  last_seen_at: number | null;
+  last_seen_ip_hash: string;
   revoked_at: number | null;     // unix seconds
   revoked_by: string | null;     // actor id (api key id, email, "local")
   revoked_reason: string | null;
@@ -148,6 +153,8 @@ export async function registerSession(input: RegisterInput): Promise<SsoSessionR
     exp: input.exp,
     ip_hash: hashIp(input.ip),
     user_agent: clamp(input.user_agent, MAX_UA_LEN),
+    last_seen_at: null,
+    last_seen_ip_hash: "",
     revoked_at: null,
     revoked_by: null,
     revoked_reason: null,
@@ -171,8 +178,18 @@ export type RevocationStatus =
   | { revoked: true; reason: "revoked" | "global-epoch" | "expired" | "unknown-jti" };
 
 // Consulted on every session verification. Returns revoked=true if the
-// session must be rejected.
-export async function checkSession(jti: string | undefined, iat: number, exp: number): Promise<RevocationStatus> {
+// session must be rejected. When `liveness` is supplied and the session
+// is valid, the registry row's `last_seen_at` / `last_seen_ip_hash` are
+// updated opportunistically (best-effort flush; never blocks the
+// request).
+export type LivenessInput = { ip?: string | null };
+
+export async function checkSession(
+  jti: string | undefined,
+  iat: number,
+  exp: number,
+  liveness?: LivenessInput,
+): Promise<RevocationStatus> {
   if (!jti) {
     // A jti-less cookie is a legacy/forged token in this model. Reject.
     return { revoked: true, reason: "unknown-jti" };
@@ -186,6 +203,18 @@ export async function checkSession(jti: string | undefined, iat: number, exp: nu
   const row = store.records.find((r) => r.jti === jti);
   if (!row) return { revoked: true, reason: "unknown-jti" };
   if (row.revoked_at) return { revoked: true, reason: "revoked" };
+  if (liveness) {
+    // Throttle disk writes: only flush when the recorded last_seen is
+    // more than 30s stale. Verification runs on every request and we
+    // would otherwise serialise on the same JSON file.
+    const ipH = hashIp(liveness.ip);
+    if (!row.last_seen_at || now - row.last_seen_at > 30 || row.last_seen_ip_hash !== ipH) {
+      row.last_seen_at = now;
+      if (ipH) row.last_seen_ip_hash = ipH;
+      // Fire-and-forget: never block verification on the flush.
+      void flush();
+    }
+  }
   return { revoked: false };
 }
 
@@ -244,7 +273,7 @@ export async function bumpEpoch(opts: RevokeInput): Promise<{ epoch: number; rev
   return { epoch: now, revoked: n };
 }
 
-export type ListOptions = { include_revoked?: boolean; limit?: number };
+export type ListOptions = { include_revoked?: boolean; limit?: number; email?: string };
 
 export async function listSessions(opts: ListOptions = {}): Promise<{
   sessions: SsoSessionRecord[];
@@ -254,8 +283,10 @@ export async function listSessions(opts: ListOptions = {}): Promise<{
   const store = await readStore();
   const now = nowS();
   const includeRevoked = opts.include_revoked === true;
+  const emailFilter = opts.email ? opts.email.trim().toLowerCase() : "";
   const rows = store.records
     .filter((r) => includeRevoked || (!r.revoked_at && r.exp > now))
+    .filter((r) => !emailFilter || r.email === emailFilter)
     .slice()
     .sort((a, b) => b.iat - a.iat);
   const limited = typeof opts.limit === "number" && opts.limit > 0

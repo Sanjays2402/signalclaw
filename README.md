@@ -7,6 +7,26 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 Procurement reality: SOC2 reviewers do not just want "we revoke sessions"; they want "prove the revoke worked and show me last-activity per device." SignalClaw's SSO session ledger now records `last_seen_at` and a `last_seen_ip_hash` on every successful verification (throttled to one disk write per 30s per session, so the hot path stays cheap), and the admin list endpoint accepts an `?email=` filter so an operator can answer "which devices does Alice have signed in right now?" in one request. Raw IPs are never persisted at any point in this path; only SHA-256 hashes.
 
 - `GET /api/admin/sessions?email=alice@example.com` returns just that user's rows. Combine with `?include_revoked=1` to see what was killed yesterday and by whom.
+- Every authenticated admin gate (`lib/adminGuardCore.ts`) now passes the caller IP into `verifySessionCookie`, which forwards it to the registry's throttled liveness updater. No schema migration is required; new fields default to `null` for sessions minted before the upgrade.
+- Settings → SSO sessions (`/settings/sessions`) shows a per-row `last seen Nm ago` line next to the `signed in Nh ago` line, plus an email filter input that round-trips through the new query parameter.
+- `tests/ssoSessionRegistry.test.mjs` pins the security properties an enterprise buyer cares about: a revoked session fails verification on the very next call, an offboarding-by-email kills every other session for that address while leaving every other user untouched, a global epoch bump invalidates every existing cookie at once, and a cookie without a known jti is rejected even when its HMAC signature is valid (no forged-but-otherwise-legal token can pass).
+
+Try it locally:
+
+```bash
+# Active sessions for one user, including any revoked rows.
+curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  "http://localhost:7430/api/admin/sessions?email=alice@example.com&include_revoked=1"
+
+# Revoke one device by jti (idempotent, audited).
+curl -fsSL -X DELETE \
+  -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"reason":"lost laptop"}' \
+  http://localhost:7430/api/admin/sessions/JTI_HERE
+```
+
+- `GET /api/admin/sessions?email=alice@example.com` returns just that user's rows. Combine with `?include_revoked=1` to see what was killed yesterday and by whom.
 - Every authenticated admin gate (`lib/adminGuardCore.ts`) now passes the caller IP into `verifySessionCookie`, which forwards it to the registry's throttled liveness updater. No new schema migration is required; new fields default to `null` for sessions minted before the upgrade.
 - Settings → SSO sessions (`/settings/sessions`) shows a per-row `last seen Nm ago` line next to the `signed in Nh ago` line, plus an email filter input that round-trips through the new query parameter.
 - `tests/ssoSessionRegistry.test.mjs` pins the security properties an enterprise buyer cares about: a revoked session fails verification on the very next call, an offboarding-by-email kills every other session for that address while leaving every other user untouched, a global epoch bump invalidates every existing cookie at once, and a cookie without a known jti is rejected even when its HMAC signature is valid (no forged-but-otherwise-legal token can pass).

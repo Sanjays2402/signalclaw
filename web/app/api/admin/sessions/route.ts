@@ -28,8 +28,10 @@ export async function GET(req: NextRequest) {
     || url.searchParams.get("include_revoked") === "true";
   const limitRaw = url.searchParams.get("limit");
   const limit = limitRaw ? Math.max(1, Math.min(1000, Number(limitRaw) || 0)) : undefined;
+  const emailRaw = url.searchParams.get("email");
+  const email = emailRaw && emailRaw.length <= 254 ? emailRaw.trim().toLowerCase() : undefined;
 
-  const out = await listSessions({ include_revoked: includeRevoked, limit });
+  const out = await listSessions({ include_revoked: includeRevoked, limit, email });
   await recordAuditEvent({
     req, route: ROUTE, method: "GET", status: 200, key: guard.key,
     reason: `sessions-list:active=${out.active_count}`,

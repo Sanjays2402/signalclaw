@@ -124,6 +124,10 @@ export type VerifySessionOptions = {
   // revoked cookie. Defaults to false so every guarded path consults
   // the registry.
   skipRegistry?: boolean;
+  // When supplied, the registry updates `last_seen_at` (throttled to
+  // 30s) on a successful verification. Pass the caller IP so the row's
+  // last-seen IP hash also moves. Pass `null` to skip the update.
+  liveness?: { ip?: string | null } | null;
 };
 
 export async function verifySessionCookie(
@@ -148,7 +152,7 @@ export async function verifySessionCookie(
   if (parsed.exp <= now) return null;
   if (typeof parsed.sub !== "string" || typeof parsed.email !== "string" || typeof parsed.iss !== "string") return null;
   if (!opts.skipRegistry) {
-    const status = await registryCheckSession(parsed.jti, parsed.iat, parsed.exp);
+    const status = await registryCheckSession(parsed.jti, parsed.iat, parsed.exp, opts.liveness ?? undefined);
     if (status.revoked) return null;
   }
   return parsed;

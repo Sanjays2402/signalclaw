@@ -30,6 +30,8 @@ type SessionRow = {
   exp: number;
   ip_hash: string;
   user_agent: string;
+  last_seen_at: number | null;
+  last_seen_ip_hash: string;
   revoked_at: number | null;
   revoked_by: string | null;
   revoked_reason: string | null;
@@ -73,7 +75,11 @@ function shortenUa(ua: string): string {
 
 function Inner() {
   const [includeRevoked, setIncludeRevoked] = useState(false);
-  const url = `/admin/sessions${includeRevoked ? "?include_revoked=1" : ""}`;
+  const [emailFilter, setEmailFilter] = useState("");
+  const qs = new URLSearchParams();
+  if (includeRevoked) qs.set("include_revoked", "1");
+  if (emailFilter.trim()) qs.set("email", emailFilter.trim().toLowerCase());
+  const url = `/admin/sessions${qs.toString() ? `?${qs.toString()}` : ""}`;
   const { data, error, isLoading, mutate } = useSWR<ListResponse>(url, swrFetcher);
 
   const [revokeEmail, setRevokeEmail] = useState("");
@@ -167,7 +173,7 @@ function Inner() {
 
       <Card>
         <div className="space-y-3 p-1">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3 text-sm">
               <Badge tone="up">
                 <Monitor size={14} weight="duotone" />
@@ -181,14 +187,23 @@ function Inner() {
                 <span className="muted text-[11px]">No global force-logout on file</span>
               )}
             </div>
-            <label className="inline-flex items-center gap-2 text-[11px] muted">
+            <div className="flex items-center gap-3">
               <input
-                type="checkbox"
-                checked={includeRevoked}
-                onChange={(e) => setIncludeRevoked(e.target.checked)}
+                type="search"
+                value={emailFilter}
+                onChange={(e) => setEmailFilter(e.target.value)}
+                placeholder="Filter by email"
+                className="w-56 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[12px] focus:border-neutral-600 focus:outline-none"
               />
-              Show revoked
-            </label>
+              <label className="inline-flex items-center gap-2 text-[11px] muted">
+                <input
+                  type="checkbox"
+                  checked={includeRevoked}
+                  onChange={(e) => setIncludeRevoked(e.target.checked)}
+                />
+                Show revoked
+              </label>
+            </div>
           </div>
 
           {rows.length === 0 ? (
@@ -215,7 +230,7 @@ function Inner() {
                         )}
                       </div>
                       <div className="muted mt-0.5 truncate text-[11px]">
-                        {shortenUa(r.user_agent)} {"\u00b7"} signed in {fmtAgo(r.iat)} {"\u00b7"} expires {fmtAgo(r.exp).replace(" ago", "")} from now
+                        {shortenUa(r.user_agent)} {"\u00b7"} signed in {fmtAgo(r.iat)} {"\u00b7"} {r.last_seen_at ? `last seen ${fmtAgo(r.last_seen_at)}` : "never used"} {"\u00b7"} expires {fmtAgo(r.exp).replace(" ago", "")} from now
                       </div>
                       <div className="muted mt-0.5 truncate font-mono text-[10px]">
                         jti {r.jti.slice(0, 12)} {"\u00b7"} ip# {r.ip_hash ? r.ip_hash.slice(0, 12) : "none"}
