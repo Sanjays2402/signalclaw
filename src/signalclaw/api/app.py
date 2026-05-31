@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 from datetime import datetime
+from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -29,6 +30,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        OptResultOut,
                        WebhookIn, WebhookOut, WebhookListOut,
                        PickEventOut, WebhookDeliveryOut,
+                       WebhookDeliveryLogItemOut, WebhookDeliveryLogOut,
                        DrawdownReportOut, JournalEntryIn, JournalEntryOut, JournalListOut,
                        ConvictionBucketOut, ConvictionStatsOut,
                        FxRateIn, FxRateOut, FxListOut,
@@ -83,7 +85,8 @@ from ..rotation import sector_rotation
 from ..news_events import NewsEvent, NewsEventStore, event_study
 from ..history import ReportArchive
 from ..webhooks import (WebhookStore, WebhookSubscription, diff_picks,
-                         deliver_events, EVENT_KINDS)
+                         deliver_events, replay_delivery,
+                         DeliveryLogStore, EVENT_KINDS)
 from ..regime import detect_regime, regime_series
 from ..earnings import EarningsStore, EarningsDate
 from ..quality import detect_anomalies, DetectorConfig
@@ -195,6 +198,8 @@ def create_app() -> FastAPI:
     earnings_store = EarningsStore(settings.data_dir / "earnings.json")
     archive = ReportArchive(settings.data_dir / "reports")
     webhooks_store = WebhookStore(settings.data_dir / "webhooks.json")
+    webhook_log_store = DeliveryLogStore(
+        settings.data_dir / "webhook_deliveries.json")
     drawdown_store = DrawdownGuardStore(settings.data_dir / "drawdown_guard.json")
     journal_store = JournalStore(settings.data_dir / "journal.json")
     fx_store = FxStore(settings.data_dir / "fx")
@@ -1381,11 +1386,34 @@ def create_app() -> FastAPI:
             current_as_of=latest.as_of,
             prior_as_of=prior.as_of if prior else None,
         )
-        deliveries = deliver_events(events, webhooks_store)
+        deliveries = deliver_events(events, webhooks_store,
+                                    log_store=webhook_log_store)
         return WebhookDeliveryOut(
             events=[PickEventOut(**e.to_dict()) for e in events],
             deliveries=deliveries,
         )
+
+    @app.get("/webhooks/deliveries", response_model=WebhookDeliveryLogOut,
+             dependencies=[Depends(require_api_key)])
+    def webhooks_deliveries(limit: int = 50,
+                            status: Optional[str] = None,
+                            subscription_id: Optional[str] = None):
+        if status is not None and status not in ("ok", "failed"):
+            raise HTTPException(400, "status must be 'ok' or 'failed'")
+        rows = webhook_log_store.list(
+            limit=limit, status=status, subscription_id=subscription_id)
+        return WebhookDeliveryLogOut(deliveries=[
+            WebhookDeliveryLogItemOut(**r.to_dict()) for r in rows])
+
+    @app.post("/webhooks/deliveries/{attempt_id}/replay",
+              response_model=WebhookDeliveryLogItemOut,
+              dependencies=[Depends(require_api_key)])
+    def webhooks_deliveries_replay(attempt_id: str):
+        replayed = replay_delivery(
+            attempt_id, webhooks_store, webhook_log_store)
+        if replayed is None:
+            raise HTTPException(404, "attempt not found or no payload to replay")
+        return WebhookDeliveryLogItemOut(**replayed.to_dict())
 
     def _drawdown_price_history():
         hist = {}

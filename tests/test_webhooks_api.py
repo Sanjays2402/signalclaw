@@ -54,3 +54,27 @@ def test_webhook_fire_latest_404_when_empty():
     # if there are reports it's a 200; either way the route must exist.
     r = c.post("/webhooks/fire/latest", headers=HEAD)
     assert r.status_code in (200, 404)
+
+
+def test_webhook_deliveries_endpoint():
+    c = TestClient(app)
+    r = c.get("/webhooks/deliveries", headers=HEAD)
+    assert r.status_code == 200, r.text
+    assert "deliveries" in r.json()
+
+
+def test_webhook_deliveries_rejects_bad_status():
+    c = TestClient(app)
+    r = c.get("/webhooks/deliveries?status=bogus", headers=HEAD)
+    assert r.status_code == 400
+
+
+def test_webhook_replay_missing_attempt_404():
+    c = TestClient(app)
+    r = c.post("/webhooks/deliveries/nope/replay", headers=HEAD)
+    assert r.status_code == 404
+
+
+def test_webhook_deliveries_requires_key():
+    c = TestClient(app)
+    assert c.get("/webhooks/deliveries").status_code in (401, 403)

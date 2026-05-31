@@ -463,7 +463,7 @@ curl -L -H "Authorization: Bearer $SC_API_KEY" \
 
 ## Try the webhooks
 
-Real outbound HTTP delivery for pick events with HMAC signing, retries, and a delivery log. Visit `http://localhost:7430/webhooks`, paste an https URL, choose the events you want, optionally set an HMAC secret. Hit "Fire latest" to send a synthesized `entered` event from your most recent saved run. Inspect attempts in the delivery log card, filter by `all` / `ok` / `failed`, and **Replay** any failed attempt to re-deliver the exact same payload (same events, fresh HMAC timestamp and signature).
+Real outbound HTTP delivery for pick events with HMAC signing, retries with exponential backoff on 5xx / 429 / network errors, and a persisted delivery log. Visit `http://localhost:7430/webhooks`, paste an https URL, choose the events you want, optionally set an HMAC secret. Hit "Fire latest" to send a synthesized `entered` event from your most recent saved run. Inspect attempts in the delivery log card, filter by `all` / `ok` / `failed`, and **Replay** any failed attempt to re-deliver the exact same signed payload byte-for-byte (same body, same HMAC).
 
 ```sh
 curl -sS http://localhost:7430/webhooks \

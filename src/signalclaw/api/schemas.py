@@ -405,6 +405,25 @@ class WebhookDeliveryOut(BaseModel):
     deliveries: List[dict]
 
 
+class WebhookDeliveryLogItemOut(BaseModel):
+    id: str
+    subscription_id: str
+    url: str
+    status: Optional[int] = None
+    error: Optional[str] = None
+    attempt: int = 1
+    delivered_at: str
+    signature: Optional[str] = None
+    event_count: int = 0
+    events: List[dict] = []
+    replay_of: Optional[str] = None
+    # payload_b64 intentionally omitted; clients don't need raw bytes.
+
+
+class WebhookDeliveryLogOut(BaseModel):
+    deliveries: List[WebhookDeliveryLogItemOut]
+
+
 class EarningsIn(BaseModel):
     next_report: str
     confirmed: bool = False
