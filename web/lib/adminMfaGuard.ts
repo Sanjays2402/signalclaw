@@ -23,7 +23,7 @@
 import { NextResponse } from "next/server";
 import type { StoredKey } from "./keyStore";
 import { recordAuditEvent } from "./auditStore";
-import { getRecord, verifyAndMark } from "./totpStore";
+import { getRecord, verifyAndMark, consumeRecoveryCode } from "./totpStore";
 
 function err(status: number, code: string, message: string) {
   return NextResponse.json({ error: { code, message } }, { status });
@@ -31,6 +31,15 @@ function err(status: number, code: string, message: string) {
 
 function extractCode(req: Request): string | null {
   const h = req.headers.get("x-mfa-code") ?? req.headers.get("X-MFA-Code");
+  if (!h) return null;
+  const trimmed = h.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
+function extractRecovery(req: Request): string | null {
+  const h =
+    req.headers.get("x-mfa-recovery-code") ??
+    req.headers.get("X-MFA-Recovery-Code");
   if (!h) return null;
   const trimmed = h.trim();
   return trimmed.length === 0 ? null : trimmed;
@@ -57,9 +66,9 @@ export async function enforceAdminMfa(
     return err(401, "mfa_required", "MFA required");
   }
   const enrollment = await getRecord(key.id);
-  if (!enrollment) {
-    // No TOTP set up for this key yet. Allow the call so the admin can
-    // enrol, but leave a breadcrumb.
+  if (!enrollment || !enrollment.confirmed_at) {
+    // No TOTP set up for this key yet, or enrollment never confirmed.
+    // Allow the call so the admin can enrol; leave a breadcrumb.
     await recordAuditEvent({
       req,
       route,
@@ -69,6 +78,33 @@ export async function enforceAdminMfa(
       reason: "mfa-not-enrolled",
     });
     return null;
+  }
+  // Recovery-code path: single-use escape hatch when the authenticator
+  // is unavailable. Checked first so a queued recovery code is consumed
+  // even if the user also left a stale TOTP code in the header.
+  const recovery = extractRecovery(req);
+  if (recovery) {
+    const result = await consumeRecoveryCode(key.id, recovery);
+    if (result.ok) {
+      await recordAuditEvent({
+        req,
+        route,
+        method,
+        status: 200,
+        key,
+        reason: `mfa-recovery-used:remaining=${result.remaining}`,
+      });
+      return null;
+    }
+    await recordAuditEvent({
+      req,
+      route,
+      method,
+      status: 401,
+      key,
+      reason: "mfa_invalid:recovery_rejected",
+    });
+    return err(401, "mfa_invalid", "recovery code rejected");
   }
   const code = extractCode(req);
   if (!code) {

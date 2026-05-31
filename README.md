@@ -2,7 +2,49 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-workspace Content Security Policy with violation logging
+## New: TOTP recovery codes for admin MFA lockout recovery
+
+Procurement reality: every enterprise security review asks the same question about MFA — "what happens when the admin loses their phone?" Without a documented escape hatch, mandatory MFA is a self-DoS waiting to happen, which is why SOC2 CC6.1, ISO 27001 A.9.4, and NIST 800-63B all require backup authenticators alongside any TOTP factor. SignalClaw now mints ten single-use recovery codes the moment an admin completes TOTP enrollment, displays them exactly once, persists only their SHA-256 hashes, and accepts any unused code via `X-MFA-Recovery-Code` on any mutating admin route covered by `lib/adminMfaGuard.ts`.
+
+The full lifecycle is wired end to end:
+
+- `POST /mfa/enroll` (aliased to `/api/admin/mfa/enroll`) starts a pending enrollment and returns the secret + `otpauth://` URI exactly once.
+- `POST /mfa/confirm` verifies a 6-digit code, marks the enrollment confirmed, and returns the initial batch of recovery codes. Until confirm succeeds, the MFA guard treats the key as not enrolled so a half-finished enrollment cannot lock you out.
+- `POST /mfa/recovery-codes/regenerate` requires a fresh TOTP code (a stolen recovery `.txt` cannot self-perpetuate) and atomically replaces the whole batch; previously saved codes stop working immediately.
+- `POST /mfa/disable` accepts either a fresh TOTP code or one unused recovery code as proof of possession before clearing the enrollment.
+- `GET  /mfa/status` reports `enrolled`, `pending`, and `recovery_codes_remaining` so the Security page can warn when only a few codes are left.
+
+Every codepath writes to the tamper-evident audit chain: enrollment, confirm, regenerate, each consumed recovery code with the remaining count, and every rejection (`mfa_invalid:recovery_rejected`, `recovery-regen-reject:*`, `mfa-disable-recovery-reject`). The frontend at `/settings/security` shows the codes once with copy / download / acknowledgement gating, surfaces a running counter, and exposes a one-shot "queue a recovery code for the next admin call" panel that sets `X-MFA-Recovery-Code` exactly once and then clears the buffer.
+
+Try it locally: `cd web && npm run dev`, then open http://localhost:7430/settings/security, scan the QR, enter a code to confirm, and save the ten recovery codes shown. Or drive it from the API:
+
+```bash
+# Begin enrollment (returns secret + otpauth URI exactly once)
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/mfa/enroll | jq .
+
+# Confirm with the 6-digit code your authenticator shows. The response
+# carries the ten recovery codes; they are never shown again.
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"code":"123456"}' \
+  http://localhost:7430/mfa/confirm | jq .
+
+# Use a recovery code in place of an authenticator code on any mutating
+# admin route (the guard burns it server-side on success):
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Recovery-Code: A4F9K-PQR2X" \
+  http://localhost:7430/api/admin/freeze | jq .
+
+# Rotate the whole batch (requires a fresh TOTP code; old codes die)
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  http://localhost:7430/mfa/recovery-codes/regenerate | jq .
+```
+
+Correctness is enforced at the store: `web/tests/totpRecoveryCodes.test.mjs` proves regenerate refuses to mint until enrollment is confirmed, exactly ten canonical `XXXXX-XXXXX` codes are returned, only SHA-256 hashes ever hit `.data/totp.json`, each code burns on first use, lower-case and dash-stripped forms still match, unknown or malformed codes never decrement `recovery_codes_remaining`, and a regenerate invalidates the entire previous batch atomically with zero overlap.
+
+## Previously: per-workspace Content Security Policy with violation logging
 
 Procurement reality: every browser-based SaaS questionnaire asks how you ship `Content-Security-Policy`. "X-Frame-Options" plus `nosniff` cover a thin slice of browser threats. CSP is what blocks a malicious script injected through a stored XSS or a compromised CDN. SignalClaw now ships a CSP rollout flow built for that conversation.
 
@@ -31,7 +73,7 @@ curl -s -X POST -H 'content-type: application/csp-report' \
 
 The violation lands in the audit log alongside actor, route, request id, and a hashed source IP, exportable by the existing audit endpoints.
 
-## Previous: SIEM audit log forwarder
+## Previously: SIEM audit log forwarder
 
 Procurement reality: SOC2 CC7.2 and ISO 27001 A.12.4 both require security-relevant events to leave the system in near real time so the customer's SOC can correlate SignalClaw activity with the rest of their estate (Splunk, Datadog, Elastic, Panther). The internal append-only tamper-evident audit chain at `lib/auditStore.ts` is the source of truth. The SIEM forwarder is the optional outbound mirror: every audit event is signed with HMAC-SHA256 and POSTed fire-and-forget to a configured collector URL. A failing or slow SIEM never blocks an end-user request.
 

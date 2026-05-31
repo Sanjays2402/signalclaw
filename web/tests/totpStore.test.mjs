@@ -89,7 +89,12 @@ test("not enrolled key fails verification", async () => {
 });
 
 test("disable removes enrollment so MFA is no longer enforced", async () => {
-  await startEnrollment("key-3", "k3");
+  const init = await startEnrollment("key-3", "k3");
+  // Confirm so status reports enrolled=true (previously startEnrollment
+  // alone counted as enrolled; recovery-codes change requires confirm).
+  const now = Date.now();
+  const code = totpAtStep(init.secret_b32, currentStep(now));
+  await verifyAndMark("key-3", code, now);
   assert.equal((await statusFor("key-3")).enrolled, true);
   const removed = await disable("key-3");
   assert.equal(removed, true);

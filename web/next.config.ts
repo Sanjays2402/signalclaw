@@ -15,6 +15,8 @@ const cfg: NextConfig = {
       // Outbound webhooks management used by the in-app webhooks page.
       { source: "/webhooks/:path*", destination: "/api/webhooks/:path*" },
       { source: "/webhooks", destination: "/api/webhooks" },
+      // MFA management surface used by /settings/security.
+      { source: "/mfa/:path*", destination: "/api/admin/mfa/:path*" },
     ];
   },
 };

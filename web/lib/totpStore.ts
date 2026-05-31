@@ -31,9 +31,36 @@ export type TotpRecord = {
   key_id: string;
   secret_b32: string;        // shared secret, base32, no padding
   created_at: string;
+  confirmed_at: string | null; // null until a valid code completes enrollment
   last_verified_at: string | null;
   last_step: number | null;  // last accepted step counter, for replay defence
+  // SHA-256 hex hashes of single-use recovery codes. Plaintext codes are
+  // shown to the user exactly once at generation time and never persisted.
+  recovery_code_hashes: string[];
 };
+
+export const RECOVERY_CODE_COUNT = 10;
+// 10 alphanumeric chars in two groups of 5, e.g. "A4F9K-PQR2X". 32^10
+// possibilities, plenty of entropy for a one-shot escape hatch.
+const RECOVERY_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I
+
+function sha256Hex(s: string): string {
+  return crypto.createHash("sha256").update(s, "utf8").digest("hex");
+}
+
+function randomRecoveryCode(): string {
+  const buf = crypto.randomBytes(10);
+  let out = "";
+  for (let i = 0; i < 10; i++) {
+    out += RECOVERY_ALPHA[buf[i] % RECOVERY_ALPHA.length];
+    if (i === 4) out += "-";
+  }
+  return out;
+}
+
+export function normalizeRecoveryCode(s: string): string {
+  return (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
 
 type Store = { records: TotpRecord[] };
 
@@ -194,9 +221,13 @@ export async function startEnrollment(
     key_id: keyId,
     secret_b32: secret,
     created_at: new Date().toISOString(),
+    confirmed_at: null,
     last_verified_at: null,
     last_step: null,
+    recovery_code_hashes: [],
   };
+  // Preserve previously generated (but not yet confirmed) recovery codes:
+  // we only mint them at confirm-time, so always start empty here.
   if (idx >= 0) s.records[idx] = record;
   else s.records.push(record);
   await writeStore(s);
@@ -228,9 +259,67 @@ export async function verifyAndMark(
   if (result.ok && rec) {
     rec.last_step = result.step;
     rec.last_verified_at = new Date(nowMs).toISOString();
+    if (!rec.confirmed_at) rec.confirmed_at = rec.last_verified_at;
     await writeStore(s);
   }
   return result;
+}
+
+// Generate (or regenerate) recovery codes. Returns the plaintext codes to
+// show the user exactly once; only SHA-256 hashes are persisted. Any
+// previously stored recovery codes are invalidated atomically.
+export async function regenerateRecoveryCodes(
+  keyId: string,
+): Promise<{ codes: string[]; remaining: number } | null> {
+  const s = await readStore();
+  const rec = s.records.find((r) => r.key_id === keyId) ?? null;
+  if (!rec || !rec.confirmed_at) return null;
+  const codes: string[] = [];
+  const seen = new Set<string>();
+  while (codes.length < RECOVERY_CODE_COUNT) {
+    const c = randomRecoveryCode();
+    if (seen.has(c)) continue;
+    seen.add(c);
+    codes.push(c);
+  }
+  rec.recovery_code_hashes = codes.map(sha256Hex);
+  await writeStore(s);
+  return { codes, remaining: rec.recovery_code_hashes.length };
+}
+
+// Consume one recovery code (case-insensitive, dash-insensitive match).
+// Removes the matching hash on success. Returns true if a code was burned.
+export async function consumeRecoveryCode(
+  keyId: string,
+  candidate: string,
+): Promise<{ ok: boolean; remaining: number }> {
+  const s = await readStore();
+  const rec = s.records.find((r) => r.key_id === keyId) ?? null;
+  if (!rec) return { ok: false, remaining: 0 };
+  const norm = normalizeRecoveryCode(candidate);
+  if (norm.length !== 10) return { ok: false, remaining: rec.recovery_code_hashes.length };
+  // Reconstruct the canonical dashed form for hashing.
+  const dashed = `${norm.slice(0, 5)}-${norm.slice(5)}`;
+  const wanted = sha256Hex(dashed);
+  // Constant-time scan: do not early-exit on first miss to avoid timing leaks.
+  let hitIdx = -1;
+  for (let i = 0; i < rec.recovery_code_hashes.length; i++) {
+    const stored = rec.recovery_code_hashes[i];
+    if (stored.length === wanted.length) {
+      const eq = crypto.timingSafeEqual(Buffer.from(stored), Buffer.from(wanted));
+      if (eq && hitIdx === -1) hitIdx = i;
+    }
+  }
+  if (hitIdx === -1) return { ok: false, remaining: rec.recovery_code_hashes.length };
+  rec.recovery_code_hashes.splice(hitIdx, 1);
+  rec.last_verified_at = new Date().toISOString();
+  await writeStore(s);
+  return { ok: true, remaining: rec.recovery_code_hashes.length };
+}
+
+export async function recoveryCodesRemaining(keyId: string): Promise<number> {
+  const r = await getRecord(keyId);
+  return r?.recovery_code_hashes.length ?? 0;
 }
 
 export async function disable(keyId: string): Promise<boolean> {
@@ -246,19 +335,37 @@ export async function disable(keyId: string): Promise<boolean> {
 export type TotpStatus = {
   key_id: string;
   enrolled: boolean;
+  pending: boolean;
   last_verified_at: string | null;
   created_at: string | null;
+  recovery_codes_remaining: number;
 };
 
 export async function statusFor(keyId: string): Promise<TotpStatus> {
   const r = await getRecord(keyId);
   if (!r) {
-    return { key_id: keyId, enrolled: false, last_verified_at: null, created_at: null };
+    return {
+      key_id: keyId,
+      enrolled: false,
+      pending: false,
+      last_verified_at: null,
+      created_at: null,
+      recovery_codes_remaining: 0,
+    };
   }
   return {
     key_id: keyId,
-    enrolled: true,
+    enrolled: r.confirmed_at !== null,
+    pending: r.confirmed_at === null,
     last_verified_at: r.last_verified_at,
     created_at: r.created_at,
+    recovery_codes_remaining: r.recovery_code_hashes.length,
   };
+}
+
+// Used by the MFA guard to know whether a key has actually completed
+// enrollment. A half-finished enrollment must not lock an admin out.
+export async function isFullyEnrolled(keyId: string): Promise<boolean> {
+  const r = await getRecord(keyId);
+  return r !== null && r.confirmed_at !== null;
 }
