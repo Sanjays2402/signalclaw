@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createRun, listRuns } from "@/lib/runStore";
+import { createRun, queryRuns } from "@/lib/runStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,9 +8,28 @@ function err(status: number, code: string, message: string) {
   return NextResponse.json({ error: { code, message } }, { status });
 }
 
-export async function GET() {
-  const runs = await listRuns();
-  // Strip heavy payload in list view.
+function parseIntParam(v: string | null, fallback: number): number {
+  if (v === null) return fallback;
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export async function GET(req: NextRequest) {
+  const sp = req.nextUrl.searchParams;
+  const q = sp.get("q") ?? "";
+  const regime = sp.get("regime") ?? "";
+  const ticker = sp.get("ticker") ?? "";
+  const limit = parseIntParam(sp.get("limit"), 25);
+  const offset = parseIntParam(sp.get("offset"), 0);
+
+  const { runs, total, limit: appliedLimit, offset: appliedOffset } = await queryRuns({
+    q,
+    regime,
+    ticker,
+    limit,
+    offset,
+  });
+
   const items = runs.map(({ id, label, ticker, lookback_days, created_at, payload }) => ({
     id,
     label,
@@ -19,8 +38,15 @@ export async function GET() {
     created_at,
     bars: payload.dates.length,
     regime: payload.snapshot?.label ?? null,
+    confidence: payload.snapshot?.confidence ?? null,
   }));
-  return NextResponse.json({ runs: items });
+  return NextResponse.json({
+    runs: items,
+    total,
+    limit: appliedLimit,
+    offset: appliedOffset,
+    has_more: appliedOffset + items.length < total,
+  });
 }
 
 export async function POST(req: NextRequest) {

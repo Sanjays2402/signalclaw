@@ -117,3 +117,89 @@ test("ids are unique across many runs", async () => {
   }
   assert.equal(ids.size, 25);
 });
+
+test("queryRuns: search, regime filter, pagination", async () => {
+  await store._resetForTests();
+  const mk = (label, ticker, regimeLabel) =>
+    store.createRun({
+      label,
+      ticker,
+      lookback_days: 252,
+      payload: {
+        ...samplePayload,
+        ticker,
+        snapshot: { ...samplePayload.snapshot, label: regimeLabel },
+      },
+    });
+  await mk("SPY bull run", "SPY", "bull");
+  await new Promise((r) => setTimeout(r, 2));
+  await mk("QQQ chop", "QQQ", "chop");
+  await new Promise((r) => setTimeout(r, 2));
+  await mk("BTC crash", "BTC", "crash");
+  await new Promise((r) => setTimeout(r, 2));
+  await mk("AAPL bull", "AAPL", "bull");
+
+  const all = await store.queryRuns({});
+  assert.equal(all.total, 4);
+  assert.equal(all.runs.length, 4);
+  // Newest first.
+  assert.equal(all.runs[0].label, "AAPL bull");
+
+  const bulls = await store.queryRuns({ regime: "bull" });
+  assert.equal(bulls.total, 2);
+  assert.ok(bulls.runs.every((r) => r.payload.snapshot.label === "bull"));
+
+  const search = await store.queryRuns({ q: "qqq" });
+  assert.equal(search.total, 1);
+  assert.equal(search.runs[0].ticker, "QQQ");
+
+  const labelSearch = await store.queryRuns({ q: "crash" });
+  assert.equal(labelSearch.total, 1);
+
+  const ticker = await store.queryRuns({ ticker: "aapl" });
+  assert.equal(ticker.total, 1);
+  assert.equal(ticker.runs[0].ticker, "AAPL");
+
+  const page1 = await store.queryRuns({ limit: 2, offset: 0 });
+  assert.equal(page1.runs.length, 2);
+  assert.equal(page1.total, 4);
+  const page2 = await store.queryRuns({ limit: 2, offset: 2 });
+  assert.equal(page2.runs.length, 2);
+  assert.equal(page2.runs[0].id !== page1.runs[0].id, true);
+
+  const none = await store.queryRuns({ q: "zzz-no-match" });
+  assert.equal(none.total, 0);
+  assert.equal(none.runs.length, 0);
+
+  // Bounds: limit is clamped to >=1 and <=200.
+  const clamped = await store.queryRuns({ limit: 0, offset: -5 });
+  assert.equal(clamped.limit, 1);
+  assert.equal(clamped.offset, 0);
+});
+
+test("runsToCSV: header + one row per bar + escaping", async () => {
+  await store._resetForTests();
+  const created = await store.createRun({
+    label: 'has "quotes" and, comma',
+    ticker: "SPY",
+    lookback_days: 504,
+    payload: samplePayload,
+  });
+  const csv = store.runsToCSV([created]);
+  const lines = csv.trim().split("\n");
+  // Header + 2 bars.
+  assert.equal(lines.length, 3);
+  assert.ok(lines[0].startsWith("run_id,label,ticker,"));
+  assert.ok(lines[0].endsWith(",bar_regime"));
+  // Quoted/escaped label appears.
+  assert.ok(lines[1].includes('"has ""quotes"" and, comma"'));
+  // First bar row contains the first date and close.
+  assert.ok(lines[1].includes("2024-01-02"));
+  assert.ok(lines[1].includes("470.1"));
+  // Second bar row contains the second date.
+  assert.ok(lines[2].includes("2024-01-03"));
+
+  // Empty input still returns a header.
+  const empty = store.runsToCSV([]);
+  assert.equal(empty.trim().split("\n").length, 1);
+});

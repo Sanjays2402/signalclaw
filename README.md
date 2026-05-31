@@ -135,7 +135,7 @@ curl "http://localhost:7431/public/regime/demo?ticker=SPY&lookback_days=504" | j
 
 ## Try it: save and share a regime run
 
-Hit **Save & share** on `/demo` to snapshot the chart, stats, and regime mix to a permanent, public URL. Anyone can open the link without signing in, and the data is frozen at save time so the chart never drifts. Manage your saves at `/history`: rename, re-run with the same parameters, copy the share link, or delete.
+Hit **Save & share** on `/demo` to snapshot the chart, stats, and regime mix to a permanent, public URL. Anyone can open the link without signing in, and the data is frozen at save time so the chart never drifts. Manage your saves at `/history`: search by label, ticker, or id, filter by regime, paginate, rename, re-run with the same parameters, copy the share link, export to CSV or JSON, or delete.
 
 Web: http://localhost:7430/history
 
@@ -156,8 +156,8 @@ curl -X POST http://localhost:7430/api/runs \
 # Open share page
 open http://localhost:7430/r/abc1234567
 
-# List saved runs
-curl http://localhost:7430/api/runs
+# List saved runs (paginated, filtered)
+curl 'http://localhost:7430/api/runs?q=spy&regime=bull&limit=25&offset=0'
 
 # Rename
 curl -X PATCH http://localhost:7430/api/runs/abc1234567 \
@@ -165,6 +165,13 @@ curl -X PATCH http://localhost:7430/api/runs/abc1234567 \
 
 # Delete
 curl -X DELETE http://localhost:7430/api/runs/abc1234567
+
+# Export a single run as CSV (one row per bar)
+curl -OJ 'http://localhost:7430/api/runs/abc1234567/export?format=csv'
+
+# Bulk export all matching runs as CSV or JSON
+curl -OJ 'http://localhost:7430/api/runs/export?regime=bull&format=csv'
+curl -OJ 'http://localhost:7430/api/runs/export?q=spy&format=json'
 ```
 
 ## Try it: mint a scoped API key
