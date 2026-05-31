@@ -53,6 +53,15 @@ export type Regime = {
   risk_scale: number;
 };
 
+export type RegimeSeries = {
+  ticker: string;
+  dates: string[];
+  close: number[];
+  regime: (string | null)[];
+  counts: Record<string, number>;
+  snapshot: Regime | null;
+};
+
 export type Position = {
   ticker: string;
   quantity: number;

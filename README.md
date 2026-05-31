@@ -97,6 +97,19 @@ docker compose -f docker-compose.dev.yml up --build
 
 No external broker is required. The execution simulator is offline and yfinance covers data. Optional notifier credentials (Telegram / Discord / Slack / NewsAPI) can be added to `.env`.
 
+## Try it: regime classifier
+
+Classify any ticker into bull, chop, bear, or crash from realized vol, 60d trend slope, and 252d drawdown. Used by the picks engine to scale position sizes (crash 0.25x, bear 0.5x, chop 0.75x, bull 1.25x).
+
+Web: http://localhost:7430/regime — sample selector (SPY, QQQ, IWM, TLT, GLD, BTC-USD), 6M/1Y/2Y/5Y windows, price chart with per-bar regime markers, snapshot stats, and a time-in-regime breakdown.
+
+API:
+
+```bash
+curl -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  "http://localhost:7431/regime/series?ticker=SPY&lookback_days=504" | jq '.snapshot, .counts'
+```
+
 ## Configuration
 
 | Var | Purpose |

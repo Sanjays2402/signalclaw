@@ -75,7 +75,7 @@ from ..news_events import NewsEvent, NewsEventStore, event_study
 from ..history import ReportArchive
 from ..webhooks import (WebhookStore, WebhookSubscription, diff_picks,
                          deliver_events, EVENT_KINDS)
-from ..regime import detect_regime
+from ..regime import detect_regime, regime_series
 from ..earnings import EarningsStore, EarningsDate
 from ..quality import detect_anomalies, DetectorConfig
 
@@ -814,6 +814,51 @@ def create_app() -> FastAPI:
         if snap is None:
             raise HTTPException(422, "insufficient history")
         return snap.to_dict()
+
+    @app.get("/regime/series", dependencies=[Depends(require_api_key)])
+    def regime_series_endpoint(ticker: str = "SPY", lookback_days: int = 504):
+        """Per-bar regime classification for charting.
+
+        Returns aligned arrays of dates, close prices, and regime labels for the
+        most recent `lookback_days` trading days, plus the current snapshot and
+        a summary of bars per regime.
+        """
+        t = ticker.upper().strip()
+        if not t or len(t) > 12:
+            raise HTTPException(400, "invalid ticker")
+        try:
+            lookback_days = max(60, min(int(lookback_days), 2520))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "lookback_days must be an integer")
+        df = load_ohlcv(t)
+        if df.empty:
+            df = fetch_ohlcv(t, period="5y")
+            if not df.empty:
+                save_ohlcv(t, df)
+        if df.empty or "close" not in df.columns:
+            raise HTTPException(404, "no data")
+        close = df["close"].dropna()
+        if len(close) < 260:
+            raise HTTPException(422, "insufficient history")
+        labels = regime_series(close)
+        tail = close.tail(lookback_days)
+        tail_labels = labels.reindex(tail.index)
+        dates = [str(d.date() if hasattr(d, "date") else d) for d in tail.index]
+        closes = [float(v) for v in tail.values]
+        regs = [str(v) if v == v and v is not None else None for v in tail_labels.values]
+        counts: dict[str, int] = {}
+        for r in regs:
+            if r:
+                counts[r] = counts.get(r, 0) + 1
+        snap = detect_regime(close)
+        return {
+            "ticker": t,
+            "dates": dates,
+            "close": closes,
+            "regime": regs,
+            "counts": counts,
+            "snapshot": snap.to_dict() if snap else None,
+        }
 
     @app.get("/earnings", response_model=EarningsListOut, dependencies=[Depends(require_api_key)])
     def earnings_list(within_days: int | None = None):
