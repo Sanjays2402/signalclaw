@@ -6,6 +6,25 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Strict workspace CORS allowlist, replacing `allow_origins=["*"]`.** Procurement reviews flag any FastAPI service that ships a wildcard CORS default; combined with an exposed dashboard it lets any web page in the world drive the API from a victim browser. The signalclaw API now defaults to CORS **off** (no `Access-Control-Allow-*` headers, same-origin only) and exposes an audited admin surface for adding explicit origins. Origins are strictly validated (`https://host[:port]`, with `http://` only for loopback), wildcards and `null` are refused, and turning the policy on with an empty allowlist is rejected so an operator cannot accidentally regress to a permissive default. The store is JSON-backed under `<data_dir>/cors_policy.json`, threadsafe, and seeded from `SIGNALCLAW_CORS_ORIGINS` on first boot. Preflights from unlisted origins return 403 with no ACAO header, and the middleware reflects only request headers from a tight safe-list. Covered by `tests/test_cors_policy.py`: wildcard rejection, zero-headers on fresh deploys, evil-origin denial, allowed-origin round trip with `Vary: Origin`, and header filtering.
+
+  Try it locally:
+  ```bash
+  uvicorn signalclaw.api:app --port 7431 &
+  # Inspect the current policy (defaults to disabled)
+  curl -s -H "x-api-key: $SIGNALCLAW_API_KEY" \
+       http://127.0.0.1:7431/admin/cors-policy | jq
+  # Enable for a specific dashboard origin
+  curl -s -X PUT -H "x-api-key: $SIGNALCLAW_API_KEY" \
+       -H "content-type: application/json" \
+       -d '{"enabled":true,"origins":["https://app.example.com"]}' \
+       http://127.0.0.1:7431/admin/cors-policy | jq
+  # Preflight from an unlisted origin is rejected (403, no ACAO)
+  curl -i -X OPTIONS http://127.0.0.1:7431/watchlist \
+       -H "Origin: https://evil.example.com" \
+       -H "Access-Control-Request-Method: GET"
+  ```
+
 - **Forensic last-use fingerprint on every API key.** Procurement and SOC2 incident response need to answer "who used this credential, from where, with what client?" without trawling raw logs. Every successful authentication now lazily stamps `last_used_ip` and `last_used_user_agent` (UA truncated to 256 chars) onto the stored key alongside the existing `last_used_at`, persisted in the JSON store and surfaced on `GET /admin/keys` and the `/settings/keys` page. Threading is wired through both `require_api_key` (per-route dependency) and the scope-enforcing middleware, so admin, member, and viewer keys are all covered. Bookkeeping is best-effort and never blocks auth. Covered by `tests/test_api_keys_last_used_fingerprint.py`: a fresh key has no fingerprint, a single authed call populates IP + UA + timestamp, and a 4 KiB User-Agent is capped at 256 bytes so a hostile caller cannot bloat the store.
 
   Try it locally:

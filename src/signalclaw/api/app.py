@@ -5,7 +5,9 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Header
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware  # noqa: F401  (kept for compat)
+from ..cors_policy import get_store as get_cors_store, normalise_origin, MAX_ORIGINS
+from ..cors_policy.middleware import StrictCorsMiddleware
 
 from ..config import get_settings
 from ..logging_ import configure_logging, get_logger
@@ -126,11 +128,17 @@ def create_app() -> FastAPI:
     # auth + audit. Excluded URLs (health/ready/metrics) are configured
     # inside instrument_fastapi to keep span volume bounded.
     instrument_fastapi(app)
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    # Strict, dynamic CORS. Defaults to disabled (same-origin only) so a
+    # fresh deploy never exposes the API to arbitrary web origins; admins
+    # opt in by adding origins via PUT /admin/cors-policy or by setting
+    # SIGNALCLAW_CORS_ORIGINS. No wildcards are ever emitted.
     # (SecurityHeadersMiddleware is added last, see below, so it sits at
     # the outer edge and stamps headers on responses produced by any
     # short-circuiting middleware further in the chain, e.g. an auth
     # 401 or a rate-limit 429.)
+    cors_policy_store = get_cors_store(settings.data_dir)
+    app.state.cors_policy_store = cors_policy_store
+    app.add_middleware(StrictCorsMiddleware, store=cors_policy_store)
     app.add_middleware(AccessLogMiddleware)
     # Request context: binds request_id (and optional correlation_id)
     # into structlog contextvars so every downstream log line carries
@@ -951,6 +959,63 @@ def create_app() -> FastAPI:
             "updated_at": p.updated_at,
             "updated_by": p.updated_by,
         }
+
+    # --- Workspace CORS policy (browser-origin allowlist) ---------------
+    # Procurement reviews block any API that ships allow_origins=["*"].
+    # This is the admin surface that controls which web origins the
+    # dashboard accepts. Mutations are audited by AuditMiddleware.
+    @app.get("/admin/cors-policy",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_cors_policy_get():
+        p = cors_policy_store.get()
+        d = p.to_public()
+        return d
+
+    @app.put("/admin/cors-policy",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_cors_policy_put(
+        body: dict,
+        x_api_key: str | None = Header(default=None),
+    ):
+        """Replace the CORS policy.
+
+        Body shape: ``{"enabled": bool, "origins": ["https://app.x.com"],
+        "allow_credentials": bool}``. Refuses ``enabled=true`` with an
+        empty allowlist so the workspace cannot accidentally regress to
+        a permissive default.
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        enabled = body.get("enabled", None)
+        origins = body.get("origins", None)
+        allow_credentials = body.get("allow_credentials", None)
+        if origins is not None:
+            if not isinstance(origins, list):
+                raise HTTPException(400, "origins must be a list of strings")
+            try:
+                for o in origins:
+                    if not isinstance(o, str):
+                        raise ValueError("origins entries must be strings")
+                    normalise_origin(o)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+        actor = (x_api_key or "")[:12] or "admin"
+        try:
+            p = cors_policy_store.set_policy(
+                enabled=None if enabled is None else bool(enabled),
+                origins=origins,
+                allow_credentials=(
+                    None if allow_credentials is None
+                    else bool(allow_credentials)
+                ),
+                actor=actor,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        log.info("cors_policy.updated",
+                 enabled=p.enabled, origin_count=len(p.origins),
+                 allow_credentials=p.allow_credentials)
+        return p.to_public()
 
     @app.get("/disclaimer")
     def disclaimer():
