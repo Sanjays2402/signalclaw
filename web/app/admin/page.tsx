@@ -198,6 +198,13 @@ export default function AdminConsole() {
                 href="/settings/sso"
               />
               <Tile
+                icon={<LinkSimple size={14} weight="duotone" />}
+                label="SCIM provisioning"
+                value="/scim/v2"
+                hint="Okta, Azure AD, Google Workspace lifecycle sync"
+                href="/settings/scim"
+              />
+              <Tile
                 icon={<Gauge size={14} weight="duotone" />}
                 label="Denied 24h"
                 value={data.audit_window.denied_24h}

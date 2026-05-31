@@ -2,7 +2,80 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-workspace concurrent request limit
+## New: per-run RBAC ownership on /api/v1/runs
+
+Procurement reality: any team that issues more than one API key for SignalClaw eventually asks the obvious question: can a `trade`-scoped key delete or rename a run that a different `trade`-scoped key created? Until now the answer was yes, which fails the SOC2 "least privilege" review the first time a buyer asks. SignalClaw now stamps every run created through `POST /api/v1/runs` with the api key id and label of its creator, and mutating routes under `/api/v1/runs/:id` enforce per-key ownership. A `trade` key can only delete or modify runs it created. The `admin` scope still bypasses ownership for operational recovery, and legacy unowned runs (created before this shipped, or via the local dashboard) remain mutable for back-compat.
+
+- `POST /api/v1/runs` stamps `created_by_key_id` and `created_by_key_label` on the new row.
+- `GET /api/v1/runs` and `GET /api/v1/runs/:id` return an `owner` object so callers and the dashboard can render attribution.
+- `DELETE /api/v1/runs/:id` returns `403 forbidden:not_owner` when a different `trade` key tries to delete an owned run. The denial is appended to the tamper-evident audit chain with the actor key id, the target run id, and the real owner key id, so an admin can reconstruct who tried to touch what.
+- The history page (`/history`) renders the owning api key label next to each run so an operator can spot cross-key writes at a glance.
+- `tests/runAcl.test.mjs` pins the policy: owner allowed, cross-key denied, admin bypasses, legacy unowned mutable.
+
+### Try it
+
+```bash
+# Two trade-scoped keys minted from /settings/keys.
+export ALICE=sk_live_alice...
+export BOB=sk_live_bob...
+
+# Alice creates a run.
+RUN_ID=$(curl -s -X POST http://localhost:7430/api/v1/runs \
+  -H "Authorization: Bearer $ALICE" \
+  -H "content-type: application/json" \
+  -d '{"ticker":"SPY","close":[470,471,472,473,474,475,476,477,478,479,480,481,482,483,484,486,487,488,489,490,491,492,493,494,495,496,497,498,499,500,501,502]}' | jq -r .id)
+
+# Bob tries to delete it: 403 forbidden:not_owner.
+curl -s -X DELETE -H "Authorization: Bearer $BOB" \
+  http://localhost:7430/api/v1/runs/$RUN_ID | jq .
+
+# Alice deletes her own run: 200.
+curl -s -X DELETE -H "Authorization: Bearer $ALICE" \
+  http://localhost:7430/api/v1/runs/$RUN_ID | jq .
+```
+
+UI: visit http://localhost:7430/history to see the `api: <key-label>` attribution under each row.
+
+## Previously: SCIM 2.0 lifecycle provisioning for Okta, Azure AD, and Google Workspace
+
+Procurement reality: any enterprise above a few dozen seats refuses to manage dashboard access by hand. Once SSO works, the buyer's IT team asks for SCIM 2.0 so Okta or Azure AD can push joiners and pull leavers automatically. Without `/scim/v2` the procurement review stalls on "how do we deprovision a terminated employee in under five minutes?". SignalClaw now ships an RFC 7644 subset that covers what those IdPs actually exercise: bearer-token auth, `ServiceProviderConfig` discovery, full User CRUD, PATCH with both Okta path-based and Azure AD value-shape semantics, and `userName eq` filtering.
+
+- `GET /scim/v2/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas` advertise the surface so an IdP can introspect before the first push.
+- `GET|POST /scim/v2/Users` and `GET|PUT|PATCH|DELETE /scim/v2/Users/{id}` cover the full lifecycle. PATCH accepts both `{ op: "replace", path: "active", value: false }` (Okta) and `{ op: "Replace", value: { active: false } }` (Azure AD).
+- Auth is a single workspace-wide bearer minted from Settings, hashed at rest, with `last_used_at` stamped on every accepted call so an operator can detect a stale IdP connector.
+- `GET|POST|DELETE /api/admin/scim` lets an admin inspect, rotate, or revoke the bearer. The plaintext is shown exactly once at rotation; rotating invalidates the previous token immediately. Every mutation is appended to the tamper-evident audit chain.
+- Settings UI at `/settings/scim` shows the token status, the IdP endpoint base URL, and a read-only table of every provisioned user with active flag and last-modified timestamp. The admin console landing page links into it.
+- `tests/scimStore.test.mjs` pins the security properties: an unconfigured store rejects every token, rotation invalidates prior credentials, duplicate `userName` is refused with `scimType: uniqueness`, and PATCH handles both IdP dialects.
+
+### Try it
+
+```bash
+# Mint the bearer token (returned once).
+curl -s -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/scim | jq .
+
+# Use the bearer the IdP would use.
+export SCIM_TOKEN=scim_live_...
+
+# Discovery (no auth required).
+curl -s http://localhost:7430/scim/v2/ServiceProviderConfig | jq .
+
+# Push a user (Okta-style POST).
+curl -s -X POST -H "Authorization: Bearer $SCIM_TOKEN" \
+  -H "content-type: application/scim+json" \
+  -d '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"alice@example.com","name":{"givenName":"Alice","familyName":"Lee"},"active":true}' \
+  http://localhost:7430/scim/v2/Users | jq .
+
+# Suspend (Azure AD value-shape).
+curl -s -X PATCH -H "Authorization: Bearer $SCIM_TOKEN" \
+  -H "content-type: application/scim+json" \
+  -d '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","value":{"active":false}}]}' \
+  http://localhost:7430/scim/v2/Users/<id> | jq .
+```
+
+UI: visit http://localhost:7430/settings/scim to mint the bearer and audit who has been provisioned.
+
+## Previously: per-workspace concurrent request limit
 
 Procurement reality: per-minute rate limits and monthly quotas do not stop a single misbehaving client from opening dozens of long-running inference requests at once and starving every other service that shares the workspace key. SOC2 capacity-planning reviewers ask for a noisy-neighbour control specifically. SignalClaw now ships a workspace-wide cap on the number of in-flight `/api/v1/*` requests, enforced inside `v1Guard` after rate limits and quotas. When the cap is hit, new requests are rejected with `HTTP 429 workspace_concurrency_exceeded`, `Retry-After: 1`, and `x-concurrency-limit` / `x-concurrency-in-flight` headers so well-behaved clients self-throttle. Every successful v1 response also carries those headers so dashboards can graph utilisation in real time.
 

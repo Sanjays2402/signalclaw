@@ -17,6 +17,9 @@ const cfg: NextConfig = {
       { source: "/webhooks", destination: "/api/webhooks" },
       // MFA management surface used by /settings/security.
       { source: "/mfa/:path*", destination: "/api/admin/mfa/:path*" },
+      // SCIM 2.0 IdP-facing endpoints (Okta / Azure AD / Google Workspace).
+      // The provisioning bearer is minted from /settings/scim.
+      { source: "/scim/v2/:path*", destination: "/api/scim/v2/:path*" },
     ];
   },
 };
