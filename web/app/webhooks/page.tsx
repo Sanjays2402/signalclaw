@@ -261,6 +261,15 @@ function Webhooks() {
                     </div>
                     <div className="mt-1 text-xs muted flex flex-wrap gap-3">
                       <span>created {new Date(s.created_at).toLocaleString()}</span>
+                      {s.owner_key_id ? (
+                        <span title="API key that owns this webhook">
+                          owner key {s.owner_key_id.slice(0, 8)}
+                        </span>
+                      ) : (
+                        <span title="Legacy or admin-owned subscription">
+                          owner admin
+                        </span>
+                      )}
                       {s.last_delivered_at && (
                         <span>last {new Date(s.last_delivered_at).toLocaleString()}</span>
                       )}
