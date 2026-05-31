@@ -12,6 +12,8 @@ import {
   Lightning,
   Lock,
   ArrowSquareOut,
+  FileCode,
+  Download,
 } from "@phosphor-icons/react/dist/ssr";
 import { Card, Badge, Loading, ErrorBox } from "@/components/ui";
 
@@ -549,6 +551,43 @@ export default function DocsPage() {
           </p>
         </Card>
       </div>
+
+      <Card
+        title={
+          <span className="flex items-center gap-2">
+            <FileCode size={12} weight="duotone" />
+            openapi 3.1 spec
+          </span>
+        }
+        className="mb-5"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-[12px] muted leading-relaxed max-w-xl">
+            The full v1 surface is published as an OpenAPI 3.1 document. Pipe it
+            into Postman, Stoplight, openapi-generator, or your security team
+            for review. The spec itself is public; per-operation auth and
+            scopes are described inside it.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href="/api/v1/openapi.json"
+              download="signalclaw-openapi.json"
+              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 dark:border-neutral-800 px-3 py-1.5 text-[11px] mono uppercase tracking-widest hover:bg-neutral-50 dark:hover:bg-neutral-900"
+            >
+              <Download size={12} weight="duotone" />
+              openapi.json
+            </a>
+            <Link
+              href="/api/v1/openapi.json"
+              target="_blank"
+              className="inline-flex items-center gap-1.5 text-[11px] mono uppercase tracking-widest text-[var(--amber)] hover:underline"
+            >
+              view raw
+              <ArrowSquareOut size={11} weight="bold" />
+            </Link>
+          </div>
+        </div>
+      </Card>
 
       <Card
         title={
