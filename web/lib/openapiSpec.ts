@@ -267,6 +267,52 @@ export const PATHS: PathSpec[] = [
       },
     },
   },
+  {
+    path: "/api/v1/privacy/export",
+    ops: {
+      get: {
+        summary: "Download a GDPR Article 15 / 20 data export",
+        description:
+          "Returns the same bundle the admin console produces. Streamed as application/json with a content-disposition header so curl -O writes a sensible filename.",
+        scopes: ["read"],
+        responseSchemaRef: "PrivacyExport",
+      },
+    },
+  },
+  {
+    path: "/api/v1/privacy/erase",
+    ops: {
+      get: {
+        summary: "Preview a GDPR Article 17 erase as a dry run",
+        description: "Returns the file plan without mutating state.",
+        scopes: ["admin"],
+        parameters: [
+          { name: "wipe_compliance", in: "query", required: false, description: "Include compliance stores (api keys, retention) in the plan.", schema: { type: "boolean" } },
+          { name: "wipe_audit", in: "query", required: false, description: "Include the audit log in the plan.", schema: { type: "boolean" } },
+        ],
+        responseSchemaRef: "PrivacyErasePlan",
+      },
+      post: {
+        summary: "Execute a GDPR Article 17 erase",
+        description: "Dry run by default. To execute, send {\"confirm\":\"DELETE\",\"dry_run\":false}. Returns 409 with the active matters if a legal hold blocks the request.",
+        scopes: ["admin"],
+        requestBody: {
+          description: "Erase options. dry_run defaults to true.",
+          required: false,
+          schema: {
+            type: "object",
+            properties: {
+              confirm: { type: "string", enum: ["DELETE"], description: "Required when dry_run is false." },
+              dry_run: { type: "boolean", default: true },
+              wipe_compliance: { type: "boolean", default: false },
+              wipe_audit: { type: "boolean", default: false },
+            },
+          },
+        },
+        responseSchemaRef: "PrivacyEraseResult",
+      },
+    },
+  },
 ];
 
 // Reusable component schemas. Kept intentionally small so the spec stays
@@ -389,6 +435,56 @@ const COMPONENT_SCHEMAS: Record<string, Record<string, unknown>> = {
     type: "object",
     properties: { deleted: { type: "boolean" }, id: { type: "string" } },
   },
+  PrivacyExport: {
+    type: "object",
+    properties: {
+      exported_at: { type: "string", format: "date-time" },
+      generator: { type: "string" },
+      stores: {
+        type: "object",
+        additionalProperties: {
+          type: "object",
+          properties: {
+            category: { type: "string", enum: ["user", "compliance"] },
+            data: {},
+          },
+        },
+      },
+    },
+  },
+  PrivacyErasePlan: {
+    type: "object",
+    properties: {
+      dry_run: { type: "boolean" },
+      options: {
+        type: "object",
+        properties: {
+          wipeCompliance: { type: "boolean" },
+          wipeAudit: { type: "boolean" },
+        },
+      },
+      plan: {
+        type: "object",
+        properties: {
+          willRemove: { type: "array", items: { type: "string" } },
+          willPreserve: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+  },
+  PrivacyEraseResult: {
+    oneOf: [
+      { $ref: "#/components/schemas/PrivacyErasePlan" },
+      {
+        type: "object",
+        properties: {
+          removed: { type: "array", items: { type: "string" } },
+          preserved: { type: "array", items: { type: "string" } },
+          bytes_freed: { type: "integer" },
+        },
+      },
+    ],
+  },
 };
 
 function scopeLine(scopes: readonly Scope[]): string {
@@ -484,6 +580,7 @@ export function buildSpec(origin?: string): Spec {
       { name: "watchlist", description: "Tracked tickers." },
       { name: "alerts", description: "Regime-change alerts." },
       { name: "audit", description: "Tamper-evident audit log." },
+      { name: "privacy", description: "GDPR data export and erasure." },
     ],
     components: {
       securitySchemes: {

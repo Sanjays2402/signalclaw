@@ -21,6 +21,7 @@ import {
   WarningOctagon,
   FileLock,
   ArrowSquareOut,
+  Terminal,
 } from "@phosphor-icons/react/dist/ssr";
 
 type Plan = {
@@ -289,6 +290,51 @@ function Inner() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      </Card>
+
+      <Card
+        title="Programmatic privacy access"
+        right={
+          <Badge tone="neutral">
+            <Terminal weight="duotone" className="mr-1 inline h-3.5 w-3.5" />
+            v1 API
+          </Badge>
+        }
+      >
+        <div className="space-y-3 text-sm">
+          <p className="text-neutral-600">
+            Wire GDPR Article 15, 20, and 17 into your own data-subject
+            pipeline. The v1 endpoints below behave identically to the
+            buttons above, are rate limited per key, and write to the audit
+            log on every call. Read scope is enough to export. Admin scope
+            is required to erase, and erase is dry-run by default.
+          </p>
+          <div className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/40 p-3 font-mono text-xs leading-relaxed overflow-x-auto">
+            <div className="text-neutral-500"># Export your workspace data</div>
+            <div>curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_KEY" \</div>
+            <div>&nbsp;&nbsp;-o signalclaw-export.json \</div>
+            <div>&nbsp;&nbsp;http://localhost:7430/api/v1/privacy/export</div>
+            <div className="mt-2 text-neutral-500"># Preview an erase (no side effects)</div>
+            <div>curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \</div>
+            <div>&nbsp;&nbsp;http://localhost:7430/api/v1/privacy/erase</div>
+            <div className="mt-2 text-neutral-500"># Execute the erase</div>
+            <div>curl -fsSL -X POST \</div>
+            <div>&nbsp;&nbsp;-H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \</div>
+            <div>&nbsp;&nbsp;-H "content-type: application/json" \</div>
+            <div>{'  -d \'{"confirm":"DELETE","dry_run":false}\' \\'}</div>
+            <div>&nbsp;&nbsp;http://localhost:7430/api/v1/privacy/erase</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500">
+            <Link
+              href="/api/v1/openapi.json"
+              className="inline-flex items-center gap-1 underline-offset-4 hover:underline"
+            >
+              OpenAPI spec
+              <ArrowSquareOut weight="duotone" className="h-3.5 w-3.5" />
+            </Link>
+            <span>Erase respects active legal holds and returns 409 with the matter list if blocked.</span>
           </div>
         </div>
       </Card>

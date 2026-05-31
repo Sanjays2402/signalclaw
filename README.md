@@ -2,7 +2,39 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: SCIM 2.0 user provisioning for Okta, Entra, and Google Workspace
+## New: GDPR self-service via the v1 API (export + erase)
+
+Procurement reality: every EU and UK customer asks how a data subject can exercise their GDPR rights without filing a ticket. Admin-only privacy buttons are not enough; reviewers want a documented programmatic surface so DSAR handling can sit inside the customer's own pipeline. SignalClaw now exposes the same export + erase machinery the admin console uses as two v1 endpoints, with the existing rate limits, audit logging, scope checks, and legal-hold respect already in place.
+
+- `GET /api/v1/privacy/export` returns a GDPR Article 15 + 20 data bundle. Any key with `read` scope is accepted, since access is a data-subject right, not an operator privilege. The bundle ships as a downloadable attachment.
+- `GET /api/v1/privacy/erase` returns the dry-run plan (`willRemove` + `willPreserve`) so a client can preview the impact before posting.
+- `POST /api/v1/privacy/erase` executes the erase. Admin scope is required, dry-run is the default, and execution needs an explicit `{ "confirm": "DELETE", "dry_run": false }`. An open legal hold returns 409 with the active matter list.
+
+Every call is rate limited per key, written to the tamper-evident audit log with `privacy.export`, `privacy.erase.preview`, `privacy.erase.executed`, or `privacy.erase.blocked_by_legal_hold`, and surfaced in the OpenAPI spec at `/api/v1/openapi.json`. The Settings → Privacy page now ships a copy-pasteable curl block alongside the existing buttons so customers can wire DSAR handling straight into their own runbooks.
+
+Try it locally:
+
+```bash
+# Export your workspace data (read scope is enough)
+curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_KEY" \
+  -o signalclaw-export.json \
+  http://localhost:7430/api/v1/privacy/export
+
+# Preview an erase, no side effects
+curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/v1/privacy/erase
+
+# Execute the erase (admin scope + confirm + dry_run:false)
+curl -fsSL -X POST \
+  -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"confirm":"DELETE","dry_run":false}' \
+  http://localhost:7430/api/v1/privacy/erase
+```
+
+The scope boundary is locked down in `tests/v1Privacy.test.mjs`: a read-only key can pull an export but cannot pass the admin gate on erase, `createKey` never grants admin scope through the public input shape, dry-run plans never mutate files, and the confirm-token truth table forces an explicit `{"confirm":"DELETE","dry_run":false}` before anything is deleted.
+
+## Previously: SCIM 2.0 user provisioning for Okta, Entra, and Google Workspace
 
 Procurement reality: every enterprise security review asks whether joiner / mover / leaver is automated against the customer's identity provider. SAML or OIDC alone solves login, not the lifecycle. SCIM 2.0 (RFC 7643 / 7644) is the wire protocol Okta, Microsoft Entra ID, Google Workspace, OneLogin and JumpCloud all speak for that lifecycle, which is why SOC2 CC6.2 and ISO 27001 A.9.2 expect it. SignalClaw now ships a real SCIM 2.0 `/Users` implementation that mints a SignalClaw API key when the IdP creates a user, hard-revokes the key the moment the IdP marks them inactive or deleted, and writes every step to the existing tamper-evident audit log.
 
