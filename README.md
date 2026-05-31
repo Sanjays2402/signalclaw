@@ -6,6 +6,22 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Workspace API key rotation policy.** Enterprise procurement and SOC2 CC6.1 both require a documented maximum age for long-lived credentials. A new `web/lib/rotationPolicy.ts` is the single source of truth: operators set `max_age_days` (0 disables, default off for back-compat) and a `warn_days` window, persisted at `.data/rotation-policy.json` with defaults from `SIGNALCLAW_MAX_KEY_AGE_DAYS` / `SIGNALCLAW_KEY_ROTATION_WARN_DAYS`. Enforcement is wired into `web/lib/v1Guard.ts` so every `/api/v1/*` request now evaluates the calling key and either passes through with `X-Key-Age-Days`, `X-Key-Rotate-By`, `X-Key-Rotation-Days-Remaining`, and (inside the warn window) `X-Key-Rotation-Status: warning` headers, or is blocked with a structured `403 { error: { code: "key_rotation_required", age_days, max_age_days, rotate_by } }` and a tamper-evident audit line so reviewers can see exactly which stale key was denied. Admins manage the policy from `/settings/security/rotation`, which shows live counts of stale and rotate-soon keys plus a per-key age table and deep-links to the existing rotation UI. Covered by `tests/rotationPolicy.test.mjs`: default-disabled behaviour, ok / warning / stale state transitions across the boundary days, persistence and negative-value rejection, and an end-to-end keyStore round-trip proving a stale key is denied while a fresh key from the same store keeps working (per-key isolation, not a global kill switch).
+
+  Try it locally: `cd web && npm run dev` then
+  ```bash
+  export SC_ADMIN=sc_live_admin_key
+  # Enable: 90-day max age, warn during the last 14 days
+  curl -s -X PUT -H "x-api-key: $SC_ADMIN" -H 'content-type: application/json' \
+    -d '{"max_age_days":90,"warn_days":14}' \
+    http://localhost:7430/api/admin/rotation-policy | jq
+  # Read policy + per-key age snapshot
+  curl -s -H "x-api-key: $SC_ADMIN" http://localhost:7430/api/admin/rotation-policy | jq
+  # Every v1 response now carries rotation headers
+  curl -s -D - -H "x-api-key: $SC_ADMIN" http://localhost:7430/api/v1/runs | grep -i '^x-key-'
+  ```
+  UI: visit http://localhost:7430/settings/security/rotation.
+
 - **Per-API-key monthly request quota.** Enterprise contracts are written against a calendar-month allowance, not a per-minute burst. The per-minute rate limit was already in place, but a steady client could quietly burn through a contract's monthly cap without anyone noticing until the invoice. A new `web/lib/monthlyQuotaStore.ts` is the single source of truth for per-key monthly request budgets (0 = unlimited, configurable per key, defaultable via `SIGNALCLAW_MONTHLY_QUOTA`). It runs inside `web/lib/v1Guard.ts` ahead of the per-minute limiter, so every `/api/v1/*` endpoint now ships standard `X-Quota-Limit`, `X-Quota-Used`, `X-Quota-Remaining`, `X-Quota-Period`, and `X-Quota-Reset` headers on every response. Once a key passes its cap the guard returns `429 { error: { code: "monthly_quota_exceeded", limit, used, period, reset_at } }`, writes a structured audit line so SOC2 reviewers can see exactly who hit the ceiling and when, and keeps blocking until the first of the next UTC month rolls the counter. Operators manage the cap with `GET/PUT /api/admin/keys/:id/monthly-quota` and from the `/settings/keys` console, which surfaces current period usage, remaining requests, and reset time inline next to the rate limit editor. Covered by `tests/monthlyQuota.test.mjs`: unlimited-by-default behaviour, override caps that 429 once exhausted, calendar-month roll-over reset, per-key isolation across tenants, header canonicalisation for both limited and unlimited keys, validation rejection of negatives and absurd values, and a concurrent-reserve stress check that proves the file-backed counter does not lose writes under load.
 
   Try it locally: `cd web && npm run dev` then

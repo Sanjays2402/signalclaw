@@ -18,3 +18,12 @@ htmlcov/
 models/artifacts/
 .DS_Store
 *.log
+
+# Runtime data artifacts
+data/alert_events.json
+data/api_keys.json
+data/network_policy.json
+data/quotas.json
+data/session_revocations.json
+data/sessions.json
+data/webhook_deliveries.json

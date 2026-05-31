@@ -33,6 +33,70 @@ import {
 } from "./ipMatch";
 import { decideKeyIpAllowed } from "./keyIpPolicy";
 import { reserve as reserveQuota, applyQuotaHeaders } from "./monthlyQuotaStore";
+import {
+  getRotationPolicy,
+  evaluateKeyRotation,
+  decideRotationBlock,
+  type RotationEvaluation,
+} from "./rotationPolicy";
+
+function applyRotationHeaders(headers: Headers, ev: RotationEvaluation): void {
+  headers.set("x-key-age-days", String(ev.age_days));
+  if (ev.status === "disabled") return;
+  if (ev.rotate_by) headers.set("x-key-rotate-by", ev.rotate_by);
+  if (ev.days_until_rotation !== null) {
+    headers.set(
+      "x-key-rotation-days-remaining",
+      String(ev.days_until_rotation),
+    );
+  }
+  if (ev.status === "warning" || ev.status === "stale") {
+    headers.set("x-key-rotation-status", ev.status);
+  }
+}
+
+async function enforceRotationPolicy(
+  req: Request,
+  key: StoredKey,
+  route: string,
+  method: string,
+  requestId: string | undefined,
+): Promise<{ block: NextResponse | null; evaluation: RotationEvaluation }> {
+  const policy = await getRotationPolicy();
+  const decision = decideRotationBlock(key, policy);
+  const evaluation = decision.evaluation;
+  if (!decision.blocked) return { block: null, evaluation };
+  const res = NextResponse.json(
+    {
+      error: {
+        code: "key_rotation_required",
+        message:
+          `API key exceeds the workspace rotation policy ` +
+          `(${evaluation.age_days}d old, max ${policy.max_age_days}d). ` +
+          `Rotate it before continuing.`,
+        age_days: evaluation.age_days,
+        max_age_days: policy.max_age_days,
+        rotate_by: evaluation.rotate_by,
+      },
+    },
+    { status: 403 },
+  );
+  applyRotationHeaders(res.headers, evaluation);
+  if (requestId) res.headers.set("x-request-id", requestId);
+  await recordAuditEvent({
+    req,
+    route,
+    method,
+    status: 403,
+    key,
+    reason: "key_rotation_required",
+    details: {
+      age_days: evaluation.age_days,
+      max_age_days: policy.max_age_days,
+    },
+  }).catch(() => {});
+  return { block: res, evaluation };
+}
 
 // Returns null when the request passes the per-key IP allowlist (including
 // the trivial "no allowlist configured" case), or a 403 NextResponse when
@@ -88,6 +152,11 @@ export async function enforceRateLimit(
     if (ipBlock) {
       observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
       return ipBlock;
+    }
+    const rotation = await enforceRotationPolicy(req, key, route, method, requestId);
+    if (rotation.block) {
+      observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+      return rotation.block;
     }
     // Monthly per-key quota check runs BEFORE the per-minute rate limit
     // so a tenant that exhausts their contract allowance is told why,
@@ -150,6 +219,7 @@ export async function enforceRateLimit(
     const res = await handler();
     applyRateHeaders(res.headers, decision);
     applyQuotaHeaders(res.headers, quota);
+    applyRotationHeaders(res.headers, rotation.evaluation);
     if (requestId && !res.headers.get("x-request-id")) {
       res.headers.set("x-request-id", requestId);
     }
