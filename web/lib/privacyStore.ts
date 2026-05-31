@@ -18,6 +18,11 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import {
+  holdsBlocking,
+  type LegalHold,
+  type LegalHoldScope,
+} from "./legalHoldStore.ts";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 
@@ -153,7 +158,27 @@ export function describeErase(opts: EraseOptions): { willRemove: string[]; willP
   return { willRemove, willPreserve };
 }
 
+// Returns the legal-hold matters that would block the requested erase.
+// Empty array means erase is allowed.
+export async function eraseBlockingHolds(
+  opts: EraseOptions,
+): Promise<LegalHold[]> {
+  const scopes: LegalHoldScope[] = ["runs", "user_data"];
+  if (opts.wipeAudit) scopes.push("audit");
+  if (opts.wipeCompliance) scopes.push("webhook_deliveries");
+  return holdsBlocking(scopes);
+}
+
 export async function eraseAll(opts: EraseOptions): Promise<EraseSummary> {
+  const blockers = await eraseBlockingHolds(opts);
+  if (blockers.length > 0) {
+    const err: any = new Error(
+      `legal_hold_active: ${blockers.map((b) => b.matter).join(", ")}`,
+    );
+    err.code = "legal_hold_active";
+    err.holds = blockers;
+    throw err;
+  }
   const plan = describeErase(opts);
   let bytes = 0;
   const removed: string[] = [];

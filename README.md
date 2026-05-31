@@ -2,7 +2,44 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: TOTP recovery codes for admin MFA lockout recovery
+## New: legal hold suspends retention and erase for in-scope data
+
+Procurement reality: every regulated buyer (financial services, healthcare, public sector) requires the vendor to be able to suspend automated deletion the moment litigation, regulatory inquiry, or eDiscovery is anticipated. SOC2 CC6.5, FRCP Rule 37(e), and most master service agreements expect this control to exist before signature. SignalClaw now ships a per-workspace legal hold register that pins data while a matter is open.
+
+An admin opens a matter at `/settings/legal-hold` with one or more scopes (`runs`, `audit`, `webhook_deliveries`, or `user_data` for everything). While the matter is active, `runRetentionSweep()` skips the held categories and reports them under `skipped`, and the privacy hard-delete at `/api/admin/privacy/delete` fails closed with `409 legal_hold_active` so no one can purge data under hold even with full admin + MFA. Opening and releasing a hold both write to the tamper-evident audit chain, and release requires a counsel reason on the record. The history view keeps every released hold so reviewers can prove exactly when each pin was in force.
+
+Try it locally: `cd web && pnpm install && pnpm dev`, then open <http://localhost:7430/settings/legal-hold>. Or drive it from the API:
+
+```bash
+# Open a hold (admin scope + MFA required in production posture)
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  -H 'content-type: application/json' \
+  -d '{"matter":"Case 24-CV-1183 (Acme v. Doe)","reason":"discovery preservation","scopes":["runs","audit"]}' \
+  http://localhost:7430/api/admin/legal-hold | jq .
+
+# List active and past holds
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/legal-hold | jq .
+
+# Attempt to hard-delete user data while a hold is active (returns 409)
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  -H 'content-type: application/json' \
+  -d '{"confirm":"DELETE"}' \
+  http://localhost:7430/api/admin/privacy/delete -i | head -1
+
+# Release the hold with a counsel reason
+curl -s -X DELETE -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  -H 'content-type: application/json' \
+  -d '{"released_reason":"matter closed, counsel cleared destruction"}' \
+  "http://localhost:7430/api/admin/legal-hold?id=<hold-id>" | jq .
+```
+
+The retention sweep result now includes a `skipped` object naming the holds that blocked each scope, so a cron-driven sweep can alert when it could not run.
+
+## Previously: TOTP recovery codes for admin MFA lockout recovery
 
 Procurement reality: every enterprise security review asks the same question about MFA — "what happens when the admin loses their phone?" Without a documented escape hatch, mandatory MFA is a self-DoS waiting to happen, which is why SOC2 CC6.1, ISO 27001 A.9.4, and NIST 800-63B all require backup authenticators alongside any TOTP factor. SignalClaw now mints ten single-use recovery codes the moment an admin completes TOTP enrollment, displays them exactly once, persists only their SHA-256 hashes, and accepts any unused code via `X-MFA-Recovery-Code` on any mutating admin route covered by `lib/adminMfaGuard.ts`.
 

@@ -12,6 +12,11 @@
 // behaviour. Values >=1 are enforced.
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import {
+  holdsBlocking,
+  type LegalHold,
+  type LegalHoldScope,
+} from "./legalHoldStore.ts";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const POLICY_FILE = path.join(DATA_DIR, "retention.json");
@@ -120,6 +125,11 @@ export type SweepResult = {
   ran_at: string;
   policy: RetentionPolicy;
   counts: { runs: number; audit: number; webhook_deliveries: number };
+  skipped: {
+    runs: LegalHold[];
+    audit: LegalHold[];
+    webhook_deliveries: LegalHold[];
+  };
 };
 
 // Apply the policy. Each field with days >= 1 deletes records older than
@@ -129,17 +139,44 @@ export async function runRetentionSweep(): Promise<SweepResult> {
   const policy = await getPolicy();
   const ran_at = new Date().toISOString();
   const counts = { runs: 0, audit: 0, webhook_deliveries: 0 };
+  const skipped: SweepResult["skipped"] = {
+    runs: [],
+    audit: [],
+    webhook_deliveries: [],
+  };
+
+  // Per-scope legal-hold check. A hold on "user_data" also pins runs.
+  const runHolds = await holdsBlocking([
+    "runs" as LegalHoldScope,
+    "user_data" as LegalHoldScope,
+  ]);
+  const auditHolds = await holdsBlocking(["audit" as LegalHoldScope]);
+  const webhookHolds = await holdsBlocking([
+    "webhook_deliveries" as LegalHoldScope,
+  ]);
 
   if (policy.runs_days > 0) {
-    counts.runs = await sweepRunsFile(policy.runs_days);
+    if (runHolds.length > 0) {
+      skipped.runs = runHolds;
+    } else {
+      counts.runs = await sweepRunsFile(policy.runs_days);
+    }
   }
   if (policy.audit_days > 0) {
-    counts.audit = await sweepAuditFiles(policy.audit_days);
+    if (auditHolds.length > 0) {
+      skipped.audit = auditHolds;
+    } else {
+      counts.audit = await sweepAuditFiles(policy.audit_days);
+    }
   }
   if (policy.webhook_deliveries_days > 0) {
-    counts.webhook_deliveries = await sweepWebhookDeliveriesFile(
-      policy.webhook_deliveries_days,
-    );
+    if (webhookHolds.length > 0) {
+      skipped.webhook_deliveries = webhookHolds;
+    } else {
+      counts.webhook_deliveries = await sweepWebhookDeliveriesFile(
+        policy.webhook_deliveries_days,
+      );
+    }
   }
 
   const persisted: RetentionPolicy = {
@@ -148,7 +185,7 @@ export async function runRetentionSweep(): Promise<SweepResult> {
     last_sweep_counts: counts,
   };
   await writeAtomic(persisted);
-  return { ran_at, policy: persisted, counts };
+  return { ran_at, policy: persisted, counts, skipped };
 }
 
 function cutoffIso(days: number): string {

@@ -82,7 +82,37 @@ export async function POST(req: NextRequest) {
     wipeCompliance: body?.wipe_compliance === true,
     wipeAudit: body?.wipe_audit === true,
   };
-  const summary = await eraseAll(opts);
+  let summary;
+  try {
+    summary = await eraseAll(opts);
+  } catch (e: any) {
+    if (e?.code === "legal_hold_active") {
+      const holds = (e.holds || []).map((h: any) => ({
+        id: h.id,
+        matter: h.matter,
+        scopes: h.scopes,
+        opened_at: h.opened_at,
+      }));
+      await recordAuditEvent({
+        req, route: ROUTE, method: "POST", status: 409,
+        key: await authenticate(extractKey(req), { req }),
+        reason: "privacy.delete.blocked_by_legal_hold",
+        details: { holds: holds.length, matters: holds.map((h: any) => h.matter) },
+      });
+      return NextResponse.json(
+        {
+          error: {
+            code: "legal_hold_active",
+            message:
+              "Erase blocked by an active legal hold. Release the matter in /settings/legal-hold first.",
+          },
+          holds,
+        },
+        { status: 409 },
+      );
+    }
+    throw e;
+  }
   await recordAuditEvent({
     req, route: ROUTE, method: "POST", status: 200,
     key: await authenticate(extractKey(req), { req }),

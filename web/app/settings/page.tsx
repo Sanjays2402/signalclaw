@@ -22,6 +22,7 @@ import {
   Key,
   Globe,
   ArchiveBox,
+  Scales,
   UserPlus,
   ArrowsClockwise,
   FileLock,
@@ -138,6 +139,12 @@ function Settings() {
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
             <ArchiveBox size={14} weight="duotone" /> Retention
+          </Link>
+          <Link
+            href="/settings/legal-hold"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Scales size={14} weight="duotone" /> Legal hold
           </Link>
           <Link
             href="/settings/invites"
