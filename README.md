@@ -2,7 +2,59 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: OIDC Single Sign-On for the dashboard (Google Workspace, Okta, Azure AD)
+## New: SSO session liveness, per-email filter, and a security-property test suite
+
+Procurement reality: SOC2 reviewers do not just want "we revoke sessions"; they want "prove the revoke worked and show me last-activity per device." SignalClaw's SSO session ledger now records `last_seen_at` and a `last_seen_ip_hash` on every successful verification (throttled to one disk write per 30s per session, so the hot path stays cheap), and the admin list endpoint accepts an `?email=` filter so an operator can answer "which devices does Alice have signed in right now?" in one request. Raw IPs are never persisted at any point in this path; only SHA-256 hashes.
+
+- `GET /api/admin/sessions?email=alice@example.com` returns just that user's rows. Combine with `?include_revoked=1` to see what was killed yesterday and by whom.
+- Every authenticated admin gate (`lib/adminGuardCore.ts`) now passes the caller IP into `verifySessionCookie`, which forwards it to the registry's throttled liveness updater. No new schema migration is required; new fields default to `null` for sessions minted before the upgrade.
+- Settings → SSO sessions (`/settings/sessions`) shows a per-row `last seen Nm ago` line next to the `signed in Nh ago` line, plus an email filter input that round-trips through the new query parameter.
+- `tests/ssoSessionRegistry.test.mjs` pins the security properties an enterprise buyer cares about: a revoked session fails verification on the very next call, an offboarding-by-email kills every other session for that address while leaving every other user untouched, a global epoch bump invalidates every existing cookie at once, and a cookie without a known jti is rejected even when its HMAC signature is valid (no forged-but-otherwise-legal token can pass).
+
+Try it locally:
+
+```bash
+# Active sessions for one user, including any revoked rows.
+curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  "http://localhost:7430/api/admin/sessions?email=alice@example.com&include_revoked=1"
+
+# Revoke one device by jti (idempotent, audited).
+curl -fsSL -X DELETE \
+  -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"reason":"lost laptop"}' \
+  http://localhost:7430/api/admin/sessions/JTI_HERE
+```
+
+## New: Admin console (single-pane workspace posture)
+
+Procurement reality: a security reviewer opening SignalClaw for the first time should be able to answer "who has access, is the audit log intact, what failed in the last 24h" in under a minute, without crawling fifteen sub-pages. SignalClaw already shipped every individual admin surface (keys, SSO, sessions, MFA, invites, webhooks, CORS, CSP, network policy, retention, legal hold, SIEM, privacy, freeze) but the workspace lacked a landing page that stitched them together. The new `/admin` console fixes that. It is a single guarded snapshot rendered from one round trip, with deep links into every surface that owns each tile.
+
+- `GET /api/admin/overview?recent=25` returns the workspace posture in one shot: API key counts (active / revoked / expired / admin-scoped / suspended), audit chain integrity (HMAC chain verified, `ok` plus the break index and reason on failure), the 24h audit window (total audited calls and denied calls), seat usage, SSO state (enabled, enforce, allowed domains), admin mode (`local` vs `production`), and the last N audit events.
+- The route is gated by the shared `requireAdmin` helper, so the same admin-key + SSO-session + admin-MFA rules that protect every other `/api/admin/*` surface apply identically here, and every call (allowed or denied) is written to the tamper-evident audit chain.
+- `/admin` is the Linear-style console page: posture tiles, audit chain status card, an admin surfaces index, and a recent audited activity table that refreshes every 30 seconds. Settings now links straight to it.
+- `tests/adminOverview.test.mjs` pins the contract: the snapshot reflects newly minted and revoked keys live, a read-scope key is denied admin with `forbidden:admin-required`, an anonymous caller is denied, and the env admin key is allowed.
+
+Try it locally:
+
+```bash
+# 1. Local mode (no SIGNALCLAW_ADMIN_KEY set): open the console directly.
+#    http://localhost:3000/admin
+
+# 2. Production posture: gate the call with the admin key.
+curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  "http://localhost:3000/api/admin/overview?recent=10" | jq '{keys, audit_chain, audit_window, seats, sso, admin_mode}'
+
+# 3. Confirm a denial is audited.
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer sc_live_not_an_admin" \
+  "http://localhost:3000/api/admin/overview"
+# 403
+curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  "http://localhost:3000/api/v1/audit?limit=5" | jq '.events[0] | {route, status, reason}'
+```
+
+## Previously: OIDC Single Sign-On for the dashboard (Google Workspace, Okta, Azure AD)
 
 Procurement reality: every enterprise buyer above ~50 seats requires the dashboard to federate sign-in against their IdP. Without it the security questionnaire stalls at "how do offboarded employees lose access?" — a per-user API key is not an answer. SignalClaw now ships a real OpenID Connect Authorization Code + PKCE flow that works with any spec-compliant IdP (Google Workspace, Okta, Microsoft Entra ID / Azure AD, Auth0, Keycloak), with a workspace email-domain allowlist and an Enforce SSO toggle for browser sessions. Machine-to-machine API keys with the `admin` scope continue to work so CI and cron never get locked out by a policy flip.
 
