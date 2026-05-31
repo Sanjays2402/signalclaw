@@ -6,6 +6,7 @@ import CommandPalette from "@/components/CommandPalette";
 import PaletteHint from "@/components/PaletteHint";
 import TickerTape from "@/components/TickerTape";
 import RegimeIndicator from "@/components/RegimeIndicator";
+import QuotaMeter from "@/components/QuotaMeter";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -40,6 +41,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </div>
           <div className="flex items-center gap-4">
             <RegimeIndicator />
+            <QuotaMeter />
             <span className="muted text-[10px] uppercase tracking-widest hidden md:inline">
               Research only. Not advice.
             </span>
@@ -80,6 +82,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <NavLink href="/notifier">Notifier</NavLink>
           <NavLink href="/webhooks">Webhooks</NavLink>
           <NavLink href="/settings/keys">Keys</NavLink>
+          <NavLink href="/usage">Usage</NavLink>
           <NavLink href="/about">About</NavLink>
         </nav>
 

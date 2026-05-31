@@ -27,6 +27,21 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - User-managed API keys with scopes (`read`, `trade`), one-time secret reveal, revocation, last-used timestamps; managed at `/settings/keys` in the dashboard or via `/admin/keys` over HTTP
 - Save & share regime runs from `/demo` to permanent public URLs at `/r/<id>`; manage saved runs at `/history` (rename, re-run, copy link, delete)
 - Batch regime scan at `/batch`: paste tickers or drop a CSV, classify up to 50 in one pass, save each as a shareable run, export the whole batch as CSV or JSON
+- Free-tier usage meter at `/usage`: real per-month quota of saved runs, daily activity chart, top tickers, regime breakdown, and upgrade CTA; live quota pill in the header that links to `/usage`
+
+## Try the usage meter
+
+1. Run the dev server: `cd web && npm install && npm run dev` (port 7430)
+2. Save a few runs from `/demo` or `/batch`.
+3. Open <http://localhost:7430/usage> to see your monthly quota, daily activity, and top tickers.
+
+Or from the command line:
+
+```bash
+curl -s http://localhost:7430/api/usage | jq '{used, limit, remaining, pct, resets_at}'
+```
+
+The free tier limit defaults to 50 saved runs per calendar month (UTC). Override with `SIGNALCLAW_FREE_TIER_LIMIT=200` in the web env.
 
 ## Try the batch scanner
 
