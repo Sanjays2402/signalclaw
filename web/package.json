@@ -10,7 +10,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "dependencies": {
-    "next": "15.5.18",
+    "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "lightweight-charts": "4.2.0",
