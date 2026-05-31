@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
 import { Card, Loading, ErrorBox, Empty, Badge } from "@/components/ui";
+import PinnedRail from "@/components/PinnedRail";
 import {
   ClockCounterClockwise,
   Trash,
@@ -20,6 +21,8 @@ import {
   Tag,
   Plus,
   NotePencil,
+  PushPin,
+  PushPinSlash,
 } from "@phosphor-icons/react/dist/ssr";
 
 type TagCount = { tag: string; count: number };
@@ -35,6 +38,8 @@ type RunListItem = {
   confidence: number | null;
   tags: string[];
   notes: string;
+  pinned: boolean;
+  pinned_at: string | null;
 };
 
 type ListResp = {
@@ -74,6 +79,7 @@ export default function HistoryPage() {
   const [q, setQ] = useState("");
   const [regime, setRegime] = useState<(typeof REGIMES)[number]>("all");
   const [tag, setTag] = useState<string>("");
+  const [pinnedOnly, setPinnedOnly] = useState(false);
   const [offset, setOffset] = useState(0);
 
   const dq = useDebounced(q, 200);
@@ -82,6 +88,7 @@ export default function HistoryPage() {
   if (dq) params.set("q", dq);
   if (regime !== "all") params.set("regime", regime);
   if (tag) params.set("tag", tag);
+  if (pinnedOnly) params.set("pinned", "1");
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
 
@@ -112,6 +119,7 @@ export default function HistoryPage() {
     setQ("");
     setRegime("all");
     setTag("");
+    setPinnedOnly(false);
     setOffset(0);
   }
 
@@ -119,7 +127,7 @@ export default function HistoryPage() {
   const page = data?.runs ?? [];
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + page.length, total);
-  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0;
+  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -134,6 +142,8 @@ export default function HistoryPage() {
           </div>
         </div>
       </section>
+
+      <PinnedRail />
 
       <Card
         title={`Saved runs${data ? ` · ${total}` : ""}`}
@@ -181,6 +191,22 @@ export default function HistoryPage() {
             />
           </label>
           <div className="flex items-center gap-1 flex-wrap">
+            <button
+              onClick={() => {
+                setPinnedOnly((v) => !v);
+                setOffset(0);
+              }}
+              aria-pressed={pinnedOnly}
+              title={pinnedOnly ? "Showing pinned only" : "Show pinned only"}
+              className={
+                "text-[10px] px-2 py-1.5 rounded-sm border uppercase tracking-widest font-semibold mono flex items-center gap-1 " +
+                (pinnedOnly
+                  ? "border-[var(--amber)]/60 bg-[var(--amber)]/10 text-[var(--amber)]"
+                  : "border-[var(--border-strong)] hover:bg-white/5 muted")
+              }
+            >
+              <PushPin size={11} weight={pinnedOnly ? "fill" : "bold"} /> Pinned
+            </button>
             {REGIMES.map((r) => {
               const active = regime === r;
               return (
@@ -415,6 +441,24 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
     }
   }
 
+  async function togglePin() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch(`/api/runs/${run.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pinned: !run.pinned }),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      onChange();
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function copyLink() {
     const url = `${window.location.origin}/r/${run.id}`;
     try {
@@ -469,6 +513,14 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
             >
               {run.label}
             </Link>
+            {run.pinned && (
+              <PushPin
+                size={11}
+                weight="fill"
+                style={{ color: "var(--amber)" }}
+                aria-label="Pinned"
+              />
+            )}
             {run.regime && <Badge tone={tone(run.regime)}>{run.regime.toUpperCase()}</Badge>}
             {run.confidence !== null && (
               <span className="text-[10px] mono uppercase tracking-widest muted">
@@ -639,6 +691,21 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
         )}
       </div>
       <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+        <button
+          onClick={togglePin}
+          disabled={busy}
+          className="p-1.5 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 disabled:opacity-40"
+          title={run.pinned ? "Unpin run" : "Pin run"}
+          aria-label={run.pinned ? "Unpin run" : "Pin run"}
+          aria-pressed={run.pinned}
+          style={run.pinned ? { color: "var(--amber)" } : undefined}
+        >
+          {run.pinned ? (
+            <PushPinSlash size={12} weight="bold" />
+          ) : (
+            <PushPin size={12} weight="bold" />
+          )}
+        </button>
         <Link
           href={`/demo?ticker=${encodeURIComponent(run.ticker)}&lookback=${run.lookback_days}`}
           className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono"

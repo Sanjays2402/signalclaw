@@ -27,6 +27,8 @@ export type SavedRun = {
   created_at: string;
   tags: string[];
   notes?: string;
+  pinned?: boolean;
+  pinned_at?: string | null;
   payload: {
     ticker: string;
     dates: string[];
@@ -72,7 +74,30 @@ export function normalizeTags(input: unknown): string[] {
 function ensureTags(r: SavedRun): SavedRun {
   if (!Array.isArray((r as any).tags)) (r as any).tags = [];
   if (typeof (r as any).notes !== "string") (r as any).notes = "";
+  if (typeof (r as any).pinned !== "boolean") (r as any).pinned = false;
+  if ((r as any).pinned_at === undefined) (r as any).pinned_at = null;
   return r;
+}
+
+export async function setRunPinned(id: string, pinned: boolean): Promise<SavedRun | null> {
+  const s = await readStore();
+  const r = s.runs.find((r) => r.id === id);
+  if (!r) return null;
+  r.pinned = !!pinned;
+  r.pinned_at = pinned ? new Date().toISOString() : null;
+  await writeStore(s);
+  return ensureTags(r);
+}
+
+export async function listPinnedRuns(limit = 6): Promise<SavedRun[]> {
+  const s = await readStore();
+  const pinned = s.runs.map(ensureTags).filter((r) => r.pinned);
+  pinned.sort((a, b) => {
+    const at = a.pinned_at ?? a.created_at;
+    const bt = b.pinned_at ?? b.created_at;
+    return at < bt ? 1 : -1;
+  });
+  return pinned.slice(0, Math.max(1, Math.min(limit, 50)));
 }
 
 async function readStore(): Promise<Store> {
@@ -187,6 +212,7 @@ export type QueryOpts = {
   regime?: string;
   ticker?: string;
   tag?: string;
+  pinned?: boolean;
   limit?: number;
   offset?: number;
 };
@@ -228,6 +254,9 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
   }
   if (tag) {
     filtered = filtered.filter((r) => (r.tags ?? []).includes(tag));
+  }
+  if (opts.pinned === true) {
+    filtered = filtered.filter((r) => r.pinned === true);
   }
   filtered = [...filtered].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   const total = filtered.length;

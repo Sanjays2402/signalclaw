@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getRun } from "@/lib/runStore";
 import RegimeChart, { REGIME_PALETTE } from "@/components/RegimeChart";
 import CopyLinkButton from "@/components/CopyLinkButton";
+import PinToggle from "@/components/PinToggle";
 import RunComments from "@/components/RunComments";
 import { Card, Stat, Badge, fmtPct } from "@/components/ui";
 import {
@@ -89,6 +90,7 @@ export default async function SharePage({ params }: Params) {
             )}
           </div>
           <div className="flex gap-2 shrink-0 flex-wrap">
+            <PinToggle runId={run.id} initialPinned={run.pinned === true} />
             <CopyLinkButton path={`/r/${run.id}`} />
             <a
               href={`/api/runs/${run.id}/pdf`}

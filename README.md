@@ -6,6 +6,27 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Pin runs** to your home rail. Click the pin on any saved run or share page (`/r/<id>`) to keep it one click away. The `/history` page gets a Pinned-only filter and a horizontal Pinned rail at the top, so your starred work shows up the moment you land. Pinned state is exposed on `/api/runs` and `/api/v1/runs` via `?pinned=1`. Toggle by `PATCH /api/runs/<id>` with `{"pinned": true|false}`.
+
+### Try pinning
+
+```bash
+# Boot the web app
+cd web && pnpm install && pnpm dev   # http://localhost:7430
+
+# Pin a saved run
+curl -X PATCH http://localhost:7430/api/runs/<RUN_ID> \
+  -H 'content-type: application/json' \
+  -d '{"pinned": true}'
+
+# List only pinned runs (UI also exposes a Pinned filter on /history)
+curl 'http://localhost:7430/api/runs?pinned=1&limit=8'
+
+# Same filter on the Bearer-auth public API
+curl -H "Authorization: Bearer $SIGNALCLAW_KEY" \
+  'http://localhost:7430/api/v1/runs?pinned=1'
+```
+
 - **Comments on shared runs** at `/r/<id>`: anyone with a share link can leave a public comment (display name optional, 1000 char body, 3-per-minute per IP rate limit, 500 per run hard cap). Comments persist to `web/.data/comments.json` with atomic writes and SHA-256 hashed IPs (never exposed). The run owner (anyone holding the local API key, or an admin-scoped key when `SIGNALCLAW_ADMIN_KEY` is set) can delete any comment in-place from the share page. Backed by `GET/POST /api/runs/<id>/comments` and `DELETE /api/runs/<id>/comments/<cid>`.
 - **Watchlist in the public API** under `/api/v1/watchlist`: list, add, update note, and remove tracked tickers from the same Bearer-key surface. Read scope can list, trade scope can mutate. Fully documented at `/docs` with copy-paste curl. Capped at 100 tickers per install.
 - **Alerts in the public API** under `/api/v1/alerts`: list, arm, and disarm price or percent alerts with the same Bearer key already used for `/api/v1/runs`. `POST /api/v1/alerts/check` evaluates every armed alert against caller-supplied prices, returns the hits, and writes them to the alert history and activity feed. Read scope can list, trade scope can mutate.

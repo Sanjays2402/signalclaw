@@ -333,3 +333,43 @@ test("notes persist across reads and survive ensureTags backfill", async () => {
   const fetched = await store.getRun(r.id);
   assert.equal(fetched.notes, "watching breakout above 440");
 });
+
+test("setRunPinned toggles pinned + pinned_at and queryRuns filters", async () => {
+  await store._resetForTests();
+  const a = await store.createRun({ label: "a", ticker: "SPY", lookback_days: 30, payload: samplePayload });
+  const b = await store.createRun({ label: "b", ticker: "QQQ", lookback_days: 30, payload: samplePayload });
+  const c = await store.createRun({ label: "c", ticker: "IWM", lookback_days: 30, payload: samplePayload });
+
+  // Default: not pinned.
+  const beforeFetch = await store.getRun(a.id);
+  assert.equal(beforeFetch.pinned, false);
+  assert.equal(beforeFetch.pinned_at, null);
+
+  // Pin a and c.
+  const pinnedA = await store.setRunPinned(a.id, true);
+  assert.equal(pinnedA.pinned, true);
+  assert.ok(typeof pinnedA.pinned_at === "string" && pinnedA.pinned_at.length > 0);
+  await store.setRunPinned(c.id, true);
+
+  // Filter pinned only.
+  const onlyPinned = await store.queryRuns({ pinned: true, limit: 50 });
+  assert.equal(onlyPinned.total, 2);
+  const ids = new Set(onlyPinned.runs.map((r) => r.id));
+  assert.ok(ids.has(a.id));
+  assert.ok(ids.has(c.id));
+  assert.ok(!ids.has(b.id));
+
+  // Unpin.
+  const unpinned = await store.setRunPinned(a.id, false);
+  assert.equal(unpinned.pinned, false);
+  assert.equal(unpinned.pinned_at, null);
+
+  // listPinnedRuns sorts by pinned_at desc.
+  const list = await store.listPinnedRuns(5);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, c.id);
+
+  // Missing id returns null.
+  const miss = await store.setRunPinned("zzzzzzzzzz", true);
+  assert.equal(miss, null);
+});

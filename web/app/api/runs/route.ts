@@ -21,6 +21,8 @@ export async function GET(req: NextRequest) {
   const regime = sp.get("regime") ?? "";
   const ticker = sp.get("ticker") ?? "";
   const tag = sp.get("tag") ?? "";
+  const pinnedParam = sp.get("pinned");
+  const pinnedOnly = pinnedParam === "1" || pinnedParam === "true";
   const limit = parseIntParam(sp.get("limit"), 25);
   const offset = parseIntParam(sp.get("offset"), 0);
 
@@ -29,11 +31,12 @@ export async function GET(req: NextRequest) {
     regime,
     ticker,
     tag,
+    pinned: pinnedOnly ? true : undefined,
     limit,
     offset,
   });
 
-  const items = runs.map(({ id, label, ticker, lookback_days, created_at, tags, notes, payload }) => ({
+  const items = runs.map(({ id, label, ticker, lookback_days, created_at, tags, notes, pinned, pinned_at, payload }) => ({
     id,
     label,
     ticker,
@@ -41,6 +44,8 @@ export async function GET(req: NextRequest) {
     created_at,
     tags: tags ?? [],
     notes: notes ?? "",
+    pinned: pinned === true,
+    pinned_at: pinned_at ?? null,
     bars: payload.dates.length,
     regime: payload.snapshot?.label ?? null,
     confidence: payload.snapshot?.confidence ?? null,

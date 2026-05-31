@@ -32,11 +32,13 @@ export async function GET(req: NextRequest) {
   const q = sp.get("q") ?? "";
   const ticker = sp.get("ticker") ?? "";
   const regime = sp.get("regime") ?? "";
+  const pinnedParam = sp.get("pinned");
+  const pinnedOnly = pinnedParam === "1" || pinnedParam === "true";
   const limit = Math.min(parseIntParam(sp.get("limit"), 25), 200);
   const offset = Math.max(parseIntParam(sp.get("offset"), 0), 0);
 
   const { runs, total, limit: appliedLimit, offset: appliedOffset } =
-    await queryRuns({ q, ticker, regime, limit, offset });
+    await queryRuns({ q, ticker, regime, pinned: pinnedOnly ? true : undefined, limit, offset });
 
   const items = runs.map((r) => ({
     id: r.id,
@@ -47,6 +49,7 @@ export async function GET(req: NextRequest) {
     bars: r.payload.dates.length,
     regime: r.payload.snapshot?.label ?? null,
     confidence: r.payload.snapshot?.confidence ?? null,
+    pinned: r.pinned === true,
     share_url: `/r/${r.id}`,
   }));
 

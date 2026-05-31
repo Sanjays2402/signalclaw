@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRun, deleteRun, renameRun, setRunTags, setRunNotes, MAX_NOTES_LEN } from "@/lib/runStore";
+import { getRun, deleteRun, renameRun, setRunTags, setRunNotes, setRunPinned, MAX_NOTES_LEN } from "@/lib/runStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,9 +34,10 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   const hasLabel = Object.prototype.hasOwnProperty.call(body ?? {}, "label");
   const hasTags = Object.prototype.hasOwnProperty.call(body ?? {}, "tags");
   const hasNotes = Object.prototype.hasOwnProperty.call(body ?? {}, "notes");
+  const hasPinned = Object.prototype.hasOwnProperty.call(body ?? {}, "pinned");
 
-  if (!hasLabel && !hasTags && !hasNotes) {
-    return err(400, "no_fields", "provide label, tags, or notes");
+  if (!hasLabel && !hasTags && !hasNotes && !hasPinned) {
+    return err(400, "no_fields", "provide label, tags, notes, or pinned");
   }
 
   let current = await getRun(id);
@@ -69,10 +70,20 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (!current) return err(404, "not_found", "run not found");
   }
 
+  if (hasPinned) {
+    if (typeof body.pinned !== "boolean") {
+      return err(400, "bad_pinned", "pinned must be a boolean");
+    }
+    current = await setRunPinned(id, body.pinned);
+    if (!current) return err(404, "not_found", "run not found");
+  }
+
   return NextResponse.json({
     id: current.id,
     label: current.label,
     tags: current.tags,
     notes: current.notes ?? "",
+    pinned: current.pinned === true,
+    pinned_at: current.pinned_at ?? null,
   });
 }
