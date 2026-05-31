@@ -30,6 +30,12 @@ export type SavedRun = {
   notes?: string;
   pinned?: boolean;
   pinned_at?: string | null;
+  // RBAC ownership: the API key id (and its label snapshot) that created this run
+  // through /api/v1/runs. Older rows (pre-RBAC) and runs created via the local
+  // dashboard leave this undefined; those are treated as unowned and remain
+  // mutable by any trade-scoped caller for back-compat.
+  created_by_key_id?: string | null;
+  created_by_key_label?: string | null;
   payload: {
     ticker: string;
     dates: string[];
@@ -149,6 +155,8 @@ export async function createRun(
   const run: SavedRun = {
     ...input,
     tags: normalizeTags(input.tags ?? []),
+    created_by_key_id: input.created_by_key_id ?? null,
+    created_by_key_label: input.created_by_key_label ?? null,
     id: genId(),
     created_at: new Date().toISOString(),
   };

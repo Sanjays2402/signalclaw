@@ -61,6 +61,7 @@ export async function GET(req: NextRequest) {
     confidence: r.payload.snapshot?.confidence ?? null,
     pinned: r.pinned === true,
     share_url: `/r/${r.id}`,
+    owner: { key_id: r.created_by_key_id ?? null, key_label: r.created_by_key_label ?? null },
   }));
 
   return NextResponse.json({
@@ -139,6 +140,9 @@ export async function POST(req: NextRequest) {
     lookback_days: lb,
     payload,
     tags: normalizeTags(tags),
+    // Stamp ownership so /v1/runs/:id mutations can enforce per-key RBAC.
+    created_by_key_id: key.id,
+    created_by_key_label: key.label,
   });
 
   await recordSafe({
@@ -174,6 +178,7 @@ export async function POST(req: NextRequest) {
       snapshot: payload.snapshot,
       tags: run.tags,
       share_url: `/r/${run.id}`,
+      owner: { key_id: run.created_by_key_id ?? null, key_label: run.created_by_key_label ?? null },
     },
     { status: 201 },
   );

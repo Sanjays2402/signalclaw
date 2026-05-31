@@ -3,6 +3,7 @@ import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { deleteRun, getRun } from "@/lib/runStore";
+import { decideRunMutation } from "@/lib/runAcl";
 import { recordSafe } from "@/lib/activityStore";
 import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 import { withIdempotency } from "@/lib/idempotency";
@@ -42,6 +43,7 @@ export async function GET(
     created_at: run.created_at,
     payload: run.payload,
     share_url: `/r/${run.id}`,
+    owner: { key_id: run.created_by_key_id ?? null, key_label: run.created_by_key_label ?? null },
   });
 
   });
@@ -68,6 +70,19 @@ export async function DELETE(
   const { id } = await ctx.params;
   const existing = await getRun(id);
   if (!existing) return err(404, "not_found", "run not found");
+  const acl = decideRunMutation(existing, key);
+  if (!acl.allowed) {
+    await recordAuditEvent({
+      req,
+      route: "/api/v1/runs/[id]",
+      method: req.method,
+      status: 403,
+      key,
+      reason: "forbidden:not_owner",
+      details: { run_id: id, owner_key_id: acl.ownerKeyId },
+    });
+    return err(403, "forbidden", "run is owned by a different api key");
+  }
   if (isDryRun(req)) {
     const effect = {
       action: "delete",

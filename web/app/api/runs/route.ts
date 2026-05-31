@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
     offset,
   });
 
-  const items = runs.map(({ id, label, ticker, lookback_days, created_at, tags, notes, pinned, pinned_at, payload }) => ({
+  const items = runs.map(({ id, label, ticker, lookback_days, created_at, tags, notes, pinned, pinned_at, payload, created_by_key_id, created_by_key_label }) => ({
     id,
     label,
     ticker,
@@ -49,6 +49,9 @@ export async function GET(req: NextRequest) {
     bars: payload.dates.length,
     regime: payload.snapshot?.label ?? null,
     confidence: payload.snapshot?.confidence ?? null,
+    owner: created_by_key_id
+      ? { key_id: created_by_key_id, key_label: created_by_key_label ?? null }
+      : null,
   }));
   return NextResponse.json({
     runs: items,

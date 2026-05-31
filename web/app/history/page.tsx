@@ -40,6 +40,7 @@ type RunListItem = {
   notes: string;
   pinned: boolean;
   pinned_at: string | null;
+  owner?: { key_id: string; key_label: string | null } | null;
 };
 
 type ListResp = {
@@ -797,6 +798,14 @@ function Row({
         )}
         <div className="muted text-[10px] mono uppercase tracking-widest mt-1">
           {run.ticker} · {run.lookback_days}d · {run.bars} bars · {when}
+          {run.owner && (
+            <span
+              className="ml-2 normal-case tracking-normal"
+              title={`Owned by API key ${run.owner.key_label ?? run.owner.key_id}. Only that key or an admin key can delete or rename this run via /v1.`}
+            >
+              · api: {(run.owner.key_label ?? run.owner.key_id).slice(0, 18)}
+            </span>
+          )}
         </div>
         <div className="mt-1.5">
           {editingTags ? (
