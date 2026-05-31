@@ -219,6 +219,14 @@ class StoredKey:
     # this field keep working with read+trade access (matches the old
     # implicit behaviour). ``owner``/``admin`` carry the ``admin`` scope.
     role: str = DEFAULT_ROLE
+    # Forensic last-use fingerprint. Enterprise procurement and SOC2
+    # incident response need to answer "who used this credential, from
+    # where, with what client?" without trawling raw logs. We persist the
+    # most recent client IP and a truncated User-Agent alongside
+    # ``last_used_at`` and surface them in /admin/keys + the settings UI.
+    # Both default to ``None`` so legacy rows on disk keep deserialising.
+    last_used_ip: Optional[str] = None
+    last_used_user_agent: Optional[str] = None
 
     def to_public(self) -> Dict:
         d = asdict(self)
@@ -283,6 +291,8 @@ class ApiKeyStore:
                 rotated_at=r.get("rotated_at") or None,
                 expires_at=r.get("expires_at") or None,
                 role=normalise_role(r.get("role")),
+                last_used_ip=r.get("last_used_ip") or None,
+                last_used_user_agent=r.get("last_used_user_agent") or None,
             ))
         return out
 
@@ -465,7 +475,8 @@ class ApiKeyStore:
                 self._reload_index()
             return found
 
-    def lookup(self, secret: str) -> Optional[StoredKey]:
+    def lookup(self, secret: str, *, client_ip: Optional[str] = None,
+               user_agent: Optional[str] = None) -> Optional[StoredKey]:
         """Resolve a raw secret to a stored key (or None).
 
         Honors the rotation grace window: a recently-rotated key's
@@ -495,17 +506,35 @@ class ApiKeyStore:
             with self._lock:
                 self._reload_index()
             return None
-        # record last_used_at lazily; only persist when it advances by >60s
+        # record last_used_at + forensic fingerprint lazily; only persist
+        # when the timestamp advances or the IP/UA changed, so the JSON
+        # file does not get rewritten on every request.
         try:
             now = _now_iso()
             last = rec.last_used_at or ""
-            if not last or last < now:
-                rec.last_used_at = now
+            # Truncate UA so a pathological client cannot bloat the store.
+            ua_clean = (user_agent or "").strip()[:256] or None
+            ip_clean = (client_ip or "").strip()[:64] or None
+            ip_changed = ip_clean is not None and ip_clean != (rec.last_used_ip or None)
+            ua_changed = ua_clean is not None and ua_clean != (rec.last_used_user_agent or None)
+            ts_advanced = (not last) or last < now
+            if ts_advanced or ip_changed or ua_changed:
+                if ts_advanced:
+                    rec.last_used_at = now
+                if ip_clean is not None:
+                    rec.last_used_ip = ip_clean
+                if ua_clean is not None:
+                    rec.last_used_user_agent = ua_clean
                 with self._lock:
                     rows = self._read()
                     for r in rows:
                         if r.id == rec.id:
-                            r.last_used_at = now
+                            if ts_advanced:
+                                r.last_used_at = now
+                            if ip_clean is not None:
+                                r.last_used_ip = ip_clean
+                            if ua_clean is not None:
+                                r.last_used_user_agent = ua_clean
                             break
                     self._write(rows)
         except Exception:  # pragma: no cover - never block auth on bookkeeping

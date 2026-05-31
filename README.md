@@ -6,6 +6,23 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Forensic last-use fingerprint on every API key.** Procurement and SOC2 incident response need to answer "who used this credential, from where, with what client?" without trawling raw logs. Every successful authentication now lazily stamps `last_used_ip` and `last_used_user_agent` (UA truncated to 256 chars) onto the stored key alongside the existing `last_used_at`, persisted in the JSON store and surfaced on `GET /admin/keys` and the `/settings/keys` page. Threading is wired through both `require_api_key` (per-route dependency) and the scope-enforcing middleware, so admin, member, and viewer keys are all covered. Bookkeeping is best-effort and never blocks auth. Covered by `tests/test_api_keys_last_used_fingerprint.py`: a fresh key has no fingerprint, a single authed call populates IP + UA + timestamp, and a 4 KiB User-Agent is capped at 256 bytes so a hostile caller cannot bloat the store.
+
+  Try it locally:
+  ```bash
+  uvicorn signalclaw.api:app --port 7431 &
+  # Mint a key (admin scope required)
+  curl -s -X POST http://127.0.0.1:7431/admin/keys \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"label":"forensic-probe","scopes":["read"]}'
+  # Use the returned secret; the next /admin/keys listing shows where it was last used.
+  curl -s -H "x-api-key: $NEW_SECRET" -A 'my-bot/1.0' http://127.0.0.1:7431/watchlist
+  curl -s -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" http://127.0.0.1:7431/admin/keys \
+    | jq '.keys[] | {label, last_used_at, last_used_ip, last_used_user_agent}'
+  ```
+  Or open `http://localhost:3000/settings/keys` and read the new `from <ip> · <user-agent>` line under each key.
+
 - **HTTP security headers stamped on every API and dashboard response.** Procurement and pentest checklists (SOC2, ISO 27001, OWASP ASVS L2) all ask for the same short list: `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a locked-down `Permissions-Policy`, `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-site`, and a strict `Content-Security-Policy` (`default-src 'none'; frame-ancestors 'none'; base-uri 'none'` for the JSON API). A new `SecurityHeadersMiddleware` sits at the outer edge of the FastAPI middleware chain so the headers also flow back through auth 401s, scope 403s, rate-limit 429s, and readiness 503s, not just happy-path 200s. The Next edge middleware mirrors the same baseline so a browser hitting either surface gets identical guarantees. Knobs (env): `SIGNALCLAW_SECURITY_HEADERS_ENABLED` (set `0` for plain-HTTP staging), `SIGNALCLAW_HSTS_MAX_AGE` (default `31536000`, `0` suppresses HSTS), `SIGNALCLAW_HSTS_INCLUDE_SUBDOMAINS` (default `1`), `SIGNALCLAW_HSTS_PRELOAD` (default `0`), and `SIGNALCLAW_CSP` to override the API CSP. A public `/.well-known/security.txt` (RFC 9116) ships disclosure contact, policy URL, and expiry (overridable via `SIGNALCLAW_SECURITY_CONTACT`, `SIGNALCLAW_SECURITY_POLICY_URL`, `SIGNALCLAW_SECURITY_TXT_EXPIRES`). A new admin endpoint `GET /admin/security-headers` (admin scope + MFA) returns the effective policy byte-identical to what the middleware stamps, so a procurement reviewer can point a scanner at one URL and confirm the configuration. The `/settings/security` page renders the live policy in a per-header table with `on`/`missing` badges and the resolved values. Covered by `tests/test_security_headers.py`: baseline headers present on `/healthz`, `/metrics`, 404s, and anonymous 401/403s; HSTS preload + subdomains overrides take effect; HSTS suppressed when `MAX_AGE=0`; CSP override applied; the `setdefault` contract preserves a handler-set CSP; `/.well-known/security.txt` returns `Contact:`, `Expires:`, `Policy:`; `/admin/security-headers` reflects the same dict.
 
   Try it locally:

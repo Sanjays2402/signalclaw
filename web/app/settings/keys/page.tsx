@@ -26,6 +26,8 @@ type StoredKey = {
   role?: string;
   created_at: string;
   last_used_at: string | null;
+  last_used_ip?: string | null;
+  last_used_user_agent?: string | null;
   revoked: boolean;
   ip_allowlist?: string[];
   expires_at?: string | null;
@@ -439,6 +441,20 @@ export default function ApiKeysPage() {
                     {k.last_used_at ? ` · last used ${fmtDate(k.last_used_at)}` : " · never used"}
                     {k.expires_at ? ` · expires ${fmtDate(k.expires_at)}` : " · no expiry"}
                   </div>
+                  {(k.last_used_ip || k.last_used_user_agent) && (
+                    <div
+                      className="text-[11px] muted mono mt-0.5 truncate"
+                      title={k.last_used_user_agent || undefined}
+                    >
+                      {k.last_used_ip ? `from ${k.last_used_ip}` : ""}
+                      {k.last_used_ip && k.last_used_user_agent ? " · " : ""}
+                      {k.last_used_user_agent
+                        ? k.last_used_user_agent.length > 80
+                          ? k.last_used_user_agent.slice(0, 80) + "…"
+                          : k.last_used_user_agent
+                        : ""}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button

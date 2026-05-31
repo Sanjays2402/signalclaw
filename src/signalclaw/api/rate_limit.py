@@ -150,13 +150,13 @@ def set_user_key_store(store) -> None:
     _USER_STORE = store
 
 
-def _resolve_key(api_key):
+def _resolve_key(api_key, *, client_ip=None, user_agent=None):
     rec = get_registry().get(api_key)
     if rec is not None:
         return rec
     store = _USER_STORE
     if store is not None and api_key:
-        stored = store.lookup(api_key)
+        stored = store.lookup(api_key, client_ip=client_ip, user_agent=user_agent)
         if stored is not None:
             # RBAC: the role caps what the key can do. Intersect the
             # stored scope list with the role's allowed set so an older
@@ -205,7 +205,9 @@ class ScopeEnforcementMiddleware(BaseHTTPMiddleware):
         if required == "read":
             return await call_next(request)
         api_key = request.headers.get("x-api-key")
-        rec = _resolve_key(api_key)
+        ip = (request.client.host if request.client else None)
+        ua = request.headers.get("user-agent")
+        rec = _resolve_key(api_key, client_ip=ip, user_agent=ua)
         if rec is None:
             # Defer to the per-route 401 from require_api_key. For
             # routes that lack that dependency (admin-only ones), still
