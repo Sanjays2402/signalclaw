@@ -109,6 +109,12 @@ function Settings() {
             <ArrowsClockwise size={14} weight="duotone" /> Rotation
           </Link>
           <Link
+            href="/settings/security/residency"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Globe size={14} weight="duotone" /> Residency
+          </Link>
+          <Link
             href="/settings/network"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >

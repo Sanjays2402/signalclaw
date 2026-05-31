@@ -6,6 +6,21 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Per-workspace data residency policy.** Enterprise procurement and GDPR Article 44 both require that customers pin where their workspace is allowed to be written from. A new `web/lib/residencyStore.ts` is the single source of truth: operators choose a pinned region (`us`, `eu`, `ap`, or `global`) and a mode (`off`, `monitor`, `enforce`), persisted at `.data/residency-policy.json` with defaults from `SIGNALCLAW_DATA_REGION` / `SIGNALCLAW_RESIDENCY_MODE` so existing installs are unaffected. Enforcement is wired into `web/lib/v1Guard.ts` ahead of the quota and rate-limit steps so every `/api/v1/*` request now resolves a region from `x-data-region` (explicit) or `x-vercel-ip-country` / `cf-ipcountry` (edge), passes through with `X-Data-Region`, `X-Data-Region-Resolved`, and `X-Data-Region-Source` headers, and either records a `residency_warn` audit line on mismatch (monitor mode) or blocks the mutating request with `451 { error: { code: "residency_violation", policy_region, request_region, request_source } }` and a tamper-evident audit line (enforce mode). Reads are never blocked. Admins manage the policy from `/settings/security/residency`, which shows the live request region and warns before saving a configuration that would lock the operator out. Covered by `tests/residencyPolicy.test.mjs`: defaults, explicit region wins over edge country header, EEA country buckets resolve to `eu`, off mode always allows, enforce + match allows, enforce + mismatch on `POST` blocks (cross-region isolation), enforce + mismatch on `GET` passes with warn, monitor + mismatch passes with warn even on `POST`, persistence and invalid input rejection.
+
+  Try it locally: `cd web && npm run dev` then
+  ```bash
+  export SC_ADMIN=sc_live_admin_key
+  # Pin this workspace to EU and enforce on writes
+  curl -s -X PUT -H "x-api-key: $SC_ADMIN" -H 'content-type: application/json' \
+    -d '{"region":"eu","mode":"enforce"}' \
+    http://localhost:7430/api/admin/residency | jq
+  # A US-origin write is now blocked with HTTP 451
+  curl -s -D - -X POST -H "x-api-key: $SC_ADMIN" -H 'x-data-region: us' \
+    http://localhost:7430/api/v1/runs
+  ```
+  UI: visit http://localhost:7430/settings/security/residency.
+
 - **Workspace API key rotation policy.** Enterprise procurement and SOC2 CC6.1 both require a documented maximum age for long-lived credentials. A new `web/lib/rotationPolicy.ts` is the single source of truth: operators set `max_age_days` (0 disables, default off for back-compat) and a `warn_days` window, persisted at `.data/rotation-policy.json` with defaults from `SIGNALCLAW_MAX_KEY_AGE_DAYS` / `SIGNALCLAW_KEY_ROTATION_WARN_DAYS`. Enforcement is wired into `web/lib/v1Guard.ts` so every `/api/v1/*` request now evaluates the calling key and either passes through with `X-Key-Age-Days`, `X-Key-Rotate-By`, `X-Key-Rotation-Days-Remaining`, and (inside the warn window) `X-Key-Rotation-Status: warning` headers, or is blocked with a structured `403 { error: { code: "key_rotation_required", age_days, max_age_days, rotate_by } }` and a tamper-evident audit line so reviewers can see exactly which stale key was denied. Admins manage the policy from `/settings/security/rotation`, which shows live counts of stale and rotate-soon keys plus a per-key age table and deep-links to the existing rotation UI. Covered by `tests/rotationPolicy.test.mjs`: default-disabled behaviour, ok / warning / stale state transitions across the boundary days, persistence and negative-value rejection, and an end-to-end keyStore round-trip proving a stale key is denied while a fresh key from the same store keeps working (per-key isolation, not a global kill switch).
 
   Try it locally: `cd web && npm run dev` then

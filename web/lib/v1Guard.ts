@@ -39,6 +39,11 @@ import {
   decideRotationBlock,
   type RotationEvaluation,
 } from "./rotationPolicy";
+import {
+  getResidencyPolicy,
+  decideResidency,
+  type ResidencyDecision,
+} from "./residencyStore";
 
 function applyRotationHeaders(headers: Headers, ev: RotationEvaluation): void {
   headers.set("x-key-age-days", String(ev.age_days));
@@ -136,6 +141,76 @@ async function enforceKeyIpAllowlist(
   return res;
 }
 
+function applyResidencyHeaders(headers: Headers, d: ResidencyDecision): void {
+  if (d.mode === "off") return;
+  headers.set("x-data-region", d.policy_region);
+  headers.set("x-data-region-resolved", d.request_region);
+  headers.set("x-data-region-source", d.request_source);
+  if (d.status !== "ok") headers.set("x-data-region-status", d.status);
+}
+
+// Returns null when the request passes residency (off, matching region,
+// monitor-mode mismatch, or read-only mismatch), or a 451 NextResponse
+// when an enforce-mode mutating request comes from the wrong region.
+async function enforceDataResidency(
+  req: Request,
+  key: StoredKey,
+  route: string,
+  method: string,
+  requestId: string | undefined,
+): Promise<{ block: NextResponse | null; decision: ResidencyDecision }> {
+  const policy = await getResidencyPolicy();
+  const decision = decideResidency(req, policy, method);
+  if (decision.allowed) {
+    if (decision.status === "warn") {
+      await recordAuditEvent({
+        req,
+        route,
+        method,
+        status: 200,
+        key,
+        reason: "residency_warn",
+        details: {
+          policy_region: decision.policy_region,
+          request_region: decision.request_region,
+          source: decision.request_source,
+        },
+      }).catch(() => {});
+    }
+    return { block: null, decision };
+  }
+  const res = NextResponse.json(
+    {
+      error: {
+        code: "residency_violation",
+        message:
+          `data residency policy blocks this request: workspace pinned to ` +
+          `${decision.policy_region}, request resolved to ${decision.request_region}`,
+        policy_region: decision.policy_region,
+        request_region: decision.request_region,
+        request_source: decision.request_source,
+      },
+    },
+    { status: 451 },
+  );
+  applyResidencyHeaders(res.headers, decision);
+  if (requestId) res.headers.set("x-request-id", requestId);
+  await recordAuditEvent({
+    req,
+    route,
+    method,
+    status: 451,
+    key,
+    reason: "residency_violation",
+    details: {
+      policy_region: decision.policy_region,
+      request_region: decision.request_region,
+      source: decision.request_source,
+    },
+  }).catch(() => {});
+  return { block: res, decision };
+}
+
 export async function enforceRateLimit(
   req: Request,
   key: StoredKey,
@@ -157,6 +232,11 @@ export async function enforceRateLimit(
     if (rotation.block) {
       observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
       return rotation.block;
+    }
+    const residency = await enforceDataResidency(req, key, route, method, requestId);
+    if (residency.block) {
+      observeRequest({ method, status: 451, route_class, durationMs: Date.now() - t0 });
+      return residency.block;
     }
     // Monthly per-key quota check runs BEFORE the per-minute rate limit
     // so a tenant that exhausts their contract allowance is told why,
@@ -220,6 +300,7 @@ export async function enforceRateLimit(
     applyRateHeaders(res.headers, decision);
     applyQuotaHeaders(res.headers, quota);
     applyRotationHeaders(res.headers, rotation.evaluation);
+    applyResidencyHeaders(res.headers, residency.decision);
     if (requestId && !res.headers.get("x-request-id")) {
       res.headers.set("x-request-id", requestId);
     }
