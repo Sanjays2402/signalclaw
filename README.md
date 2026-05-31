@@ -110,6 +110,18 @@ curl -H "x-api-key: $SIGNALCLAW_API_KEY" \
   "http://localhost:7431/explain/SPY?lookback_days=120" | jq '{label, score, expected_return, proba, rationale, risk_flags}'
 ```
 
+## Try it: public demo (no signup)
+
+For a first look at SignalClaw without setup, open the public demo. It calls a rate-limited, unauthenticated endpoint locked to a small allowlist of liquid tickers (SPY, QQQ, IWM, TLT, GLD, BTC-USD), runs the real regime classifier, and shows a live price chart with bull / chop / bear / crash overlay plus a snapshot of realized vol, trend slope, and drawdown.
+
+Web: http://localhost:7430/demo
+
+API:
+
+```bash
+curl "http://localhost:7431/public/regime/demo?ticker=SPY&lookback_days=504" | jq '.snapshot, .counts'
+```
+
 ## Try it: regime classifier
 
 Classify any ticker into bull, chop, bear, or crash from realized vol, 60d trend slope, and 252d drawdown. Used by the picks engine to scale position sizes (crash 0.25x, bear 0.5x, chop 0.75x, bull 1.25x).

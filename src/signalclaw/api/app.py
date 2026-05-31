@@ -238,6 +238,58 @@ def create_app() -> FastAPI:
     def disclaimer():
         return {"text": "SignalClaw is NOT financial advice. See FINANCIAL_DISCLAIMER.md."}
 
+    # Public, unauthenticated demo of the regime classifier. Locked to a
+    # small allowlist of well-known liquid tickers so a first-time visitor
+    # can see real model output without setup. Per-IP rate limiting still
+    # applies via PerIPRateLimitMiddleware.
+    PUBLIC_DEMO_TICKERS = {"SPY", "QQQ", "IWM", "TLT", "GLD", "BTC-USD"}
+
+    @app.get("/public/regime/demo")
+    def public_regime_demo(ticker: str = "SPY", lookback_days: int = 504):
+        """Public regime classification for a fixed allowlist of tickers.
+
+        Returns the same shape as /regime/series but without auth so the
+        landing page can show a live demo to first-time visitors.
+        """
+        t = (ticker or "").upper().strip()
+        if t not in PUBLIC_DEMO_TICKERS:
+            raise HTTPException(400, f"ticker must be one of: {sorted(PUBLIC_DEMO_TICKERS)}")
+        try:
+            lookback_days = max(120, min(int(lookback_days), 1260))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "lookback_days must be an integer")
+        df = load_ohlcv(t)
+        if df.empty:
+            df = fetch_ohlcv(t, period="5y")
+            if not df.empty:
+                save_ohlcv(t, df)
+        if df.empty or "close" not in df.columns:
+            raise HTTPException(404, "no data")
+        close = df["close"].dropna()
+        if len(close) < 260:
+            raise HTTPException(422, "insufficient history")
+        labels = regime_series(close)
+        tail = close.tail(lookback_days)
+        tail_labels = labels.reindex(tail.index)
+        dates = [str(d.date() if hasattr(d, "date") else d) for d in tail.index]
+        closes = [float(v) for v in tail.values]
+        regs = [str(v) if v == v and v is not None else None for v in tail_labels.values]
+        counts: dict[str, int] = {}
+        for r in regs:
+            if r:
+                counts[r] = counts.get(r, 0) + 1
+        snap = detect_regime(close)
+        return {
+            "ticker": t,
+            "dates": dates,
+            "close": closes,
+            "regime": regs,
+            "counts": counts,
+            "snapshot": snap.to_dict() if snap else None,
+            "allowlist": sorted(PUBLIC_DEMO_TICKERS),
+            "disclaimer": "SignalClaw is NOT financial advice. Educational demo only.",
+        }
+
     @app.get("/watchlist", response_model=WatchlistOut, dependencies=[Depends(require_api_key)])
     def get_watchlist():
         return WatchlistOut(tickers=store.list())

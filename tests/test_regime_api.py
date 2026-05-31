@@ -60,3 +60,32 @@ def test_regime_series_endpoint(tmp_path, monkeypatch):
     # at least one labelled bar
     assert sum(1 for r in body["regime"] if r) > 0
     assert sum(body["counts"].values()) > 0
+
+
+def test_public_regime_demo_no_auth(tmp_path, monkeypatch):
+    """Public demo endpoint must work without an api key, and only allow
+    tickers in the fixed allowlist."""
+    rng = np.random.default_rng(2)
+    rets = rng.normal(0.0005, 0.011, 600)
+    prices = 100 * np.exp(np.cumsum(rets))
+    idx = pd.date_range("2020-01-01", periods=len(prices), freq="B")
+    df = pd.DataFrame({
+        "open": prices, "high": prices * 1.01, "low": prices * 0.99,
+        "close": prices, "volume": 1_000_000,
+    }, index=idx)
+    monkeypatch.setattr(app_mod, "load_ohlcv", lambda t: df)
+    client = TestClient(create_app())
+
+    # No x-api-key header at all.
+    r = client.get("/public/regime/demo?ticker=SPY&lookback_days=300")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ticker"] == "SPY"
+    assert len(body["dates"]) == len(body["close"]) == 300
+    assert body["snapshot"]["label"] in ("bull", "chop", "bear", "crash")
+    assert "SPY" in body["allowlist"]
+    assert sum(body["counts"].values()) > 0
+
+    # Off-allowlist ticker is rejected.
+    r2 = client.get("/public/regime/demo?ticker=AAPL")
+    assert r2.status_code == 400
