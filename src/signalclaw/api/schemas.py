@@ -26,6 +26,13 @@ class WatchlistIn(BaseModel):
     ticker: str
 
 
+class BacktestTrade(BaseModel):
+    entry_date: str
+    exit_date: str
+    bars: int
+    return_pct: float
+
+
 class BacktestOut(BaseModel):
     ticker: str
     sharpe: float
@@ -36,6 +43,14 @@ class BacktestOut(BaseModel):
     n_trades: int
     equity_curve: List[float]
     dates: List[str]
+    # optional, populated by /backtest/{ticker}
+    buy_hold_curve: Optional[List[float]] = None
+    drawdown_curve: Optional[List[float]] = None
+    position: Optional[List[float]] = None
+    trades: Optional[List[BacktestTrade]] = None
+    benchmark_cagr: Optional[float] = None
+    benchmark_max_drawdown: Optional[float] = None
+    exposure: Optional[float] = None  # fraction of bars in market
 
 
 class AlertIn(BaseModel):

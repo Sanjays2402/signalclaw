@@ -110,6 +110,19 @@ curl -H "x-api-key: $SIGNALCLAW_API_KEY" \
   "http://localhost:7431/regime/series?ticker=SPY&lookback_days=504" | jq '.snapshot, .counts'
 ```
 
+## Try it: walk-forward backtest
+
+Run a real walk-forward backtest on any ticker. The model trains on a rolling 252-day window, steps forward 21 bars at a time, and takes long-only positions when its watch/hold/skip classifier is confident. No look-ahead. Costs and slippage applied per turnover.
+
+Web: http://localhost:7430/backtest — sample selector (SPY, QQQ, AAPL, NVDA, TLT, BTC-USD), equity vs buy-and-hold overlay with entry/exit markers, drawdown pane, trade table, and an alpha summary.
+
+API:
+
+```bash
+curl -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  http://localhost:7431/backtest/SPY | jq '{cagr, benchmark_cagr, sharpe, max_drawdown, exposure, n_trades}'
+```
+
 ## Configuration
 
 | Var | Purpose |

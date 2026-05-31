@@ -11,7 +11,7 @@ from ..observability import init_sentry, is_enabled as sentry_enabled
 from ..data import WatchlistStore, load_ohlcv, fetch_ohlcv, save_ohlcv
 from ..engine import run_daily, render_markdown
 from ..backtest import WalkForwardBacktest, walk_forward_optimize
-from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut,
+from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestOut, BacktestTrade,
                        AlertIn, AlertOut, AlertListOut, AlertHitOut, AlertCheckOut,
                        TradeIn, TradeOut, TradeListOut, PortfolioSnapshotOut,
                        SizingOut, SizingRequest,
@@ -257,20 +257,100 @@ def create_app() -> FastAPI:
 
     @app.get("/backtest/{ticker}", response_model=BacktestOut, dependencies=[Depends(require_api_key)])
     def backtest(ticker: str, refresh: bool = False):
-        df = load_ohlcv(ticker)
+        t = ticker.upper().strip()
+        if not t or len(t) > 12:
+            raise HTTPException(400, "invalid ticker")
+        df = load_ohlcv(t)
         if df.empty or refresh:
-            df = fetch_ohlcv(ticker, period="3y")
+            df = fetch_ohlcv(t, period="3y")
             if not df.empty:
-                save_ohlcv(ticker, df)
+                save_ohlcv(t, df)
         if df.empty:
             raise HTTPException(404, "no data")
         bt = WalkForwardBacktest().run(df)
+        if bt.equity.empty:
+            raise HTTPException(422, "insufficient history for walk-forward backtest")
+
+        import math
+        import numpy as _np
+
+        equity = bt.equity
+        dates = [d.strftime("%Y-%m-%d") for d in equity.index]
+        equity_curve = [float(x) for x in equity.tolist()]
+
+        # Buy and hold benchmark aligned to backtest window
+        close = df["close"].reindex(equity.index).ffill()
+        first = float(close.iloc[0]) if len(close) and close.iloc[0] else 1.0
+        bh_curve = [float(v / first) if first else 1.0 for v in close.tolist()]
+
+        # Strategy drawdown curve
+        roll_max = equity.cummax()
+        dd_curve = [float(v) for v in ((equity / roll_max) - 1.0).tolist()]
+
+        # Position vector aligned to equity dates
+        pos = bt.positions.reindex(equity.index).fillna(0.0)
+        position = [float(x) for x in pos.tolist()]
+        exposure = float(pos.gt(0).mean()) if len(pos) else 0.0
+
+        # Reconstruct trades from position transitions (long-only 0/1)
+        trades: list[dict] = []
+        in_pos = False
+        entry_idx: int | None = None
+        entry_eq: float = 1.0
+        for i, p in enumerate(position):
+            on = p > 0.5
+            if on and not in_pos:
+                in_pos = True
+                entry_idx = i
+                entry_eq = equity_curve[i]
+            elif not on and in_pos and entry_idx is not None:
+                exit_eq = equity_curve[i]
+                trades.append({
+                    "entry_date": dates[entry_idx],
+                    "exit_date": dates[i],
+                    "bars": i - entry_idx,
+                    "return_pct": float(exit_eq / entry_eq - 1.0) if entry_eq else 0.0,
+                })
+                in_pos = False
+                entry_idx = None
+        if in_pos and entry_idx is not None:
+            trades.append({
+                "entry_date": dates[entry_idx],
+                "exit_date": dates[-1],
+                "bars": len(dates) - 1 - entry_idx,
+                "return_pct": float(equity_curve[-1] / entry_eq - 1.0) if entry_eq else 0.0,
+            })
+
+        # Benchmark metrics
+        bh_series = _np.asarray(bh_curve, dtype=float)
+        if len(bh_series) >= 2 and bh_series[0] > 0:
+            years = max(len(bh_series) / 252.0, 1e-9)
+            bench_cagr = float(bh_series[-1] ** (1.0 / years) - 1.0)
+            bh_dd = float((bh_series / _np.maximum.accumulate(bh_series) - 1.0).min())
+        else:
+            bench_cagr = 0.0
+            bh_dd = 0.0
+
+        def _safe(x: float) -> float:
+            return 0.0 if (x is None or math.isnan(x) or math.isinf(x)) else float(x)
+
         return BacktestOut(
-            ticker=ticker, sharpe=bt.sharpe, sortino=bt.sortino,
-            max_drawdown=bt.max_drawdown, hit_rate=bt.hit_rate, cagr=bt.cagr,
+            ticker=t,
+            sharpe=_safe(bt.sharpe),
+            sortino=_safe(bt.sortino),
+            max_drawdown=_safe(bt.max_drawdown),
+            hit_rate=_safe(bt.hit_rate),
+            cagr=_safe(bt.cagr),
             n_trades=bt.n_trades,
-            equity_curve=[float(x) for x in bt.equity.tolist()],
-            dates=[d.strftime("%Y-%m-%d") for d in bt.equity.index],
+            equity_curve=equity_curve,
+            dates=dates,
+            buy_hold_curve=bh_curve,
+            drawdown_curve=dd_curve,
+            position=position,
+            trades=[BacktestTrade(**t_) for t_ in trades],
+            benchmark_cagr=_safe(bench_cagr),
+            benchmark_max_drawdown=_safe(bh_dd),
+            exposure=_safe(exposure),
         )
 
     @app.get("/alerts", response_model=AlertListOut, dependencies=[Depends(require_api_key)])

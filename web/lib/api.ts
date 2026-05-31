@@ -572,6 +572,12 @@ export type ExecReport = {
 
 // Back-compat aliases
 export type Report = DailyReport;
+export type BacktestTrade = {
+  entry_date: string;
+  exit_date: string;
+  bars: number;
+  return_pct: number;
+};
 export type Backtest = {
   ticker: string;
   sharpe: number;
@@ -582,4 +588,11 @@ export type Backtest = {
   n_trades: number;
   equity_curve: number[];
   dates: string[];
+  buy_hold_curve?: number[] | null;
+  drawdown_curve?: number[] | null;
+  position?: number[] | null;
+  trades?: BacktestTrade[] | null;
+  benchmark_cagr?: number | null;
+  benchmark_max_drawdown?: number | null;
+  exposure?: number | null;
 };
