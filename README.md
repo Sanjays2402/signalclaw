@@ -56,26 +56,6 @@ curl -fsSL -X DELETE \
   http://localhost:7430/api/admin/sessions/JTI_HERE
 ```
 
-- `GET /api/admin/sessions?email=alice@example.com` returns just that user's rows. Combine with `?include_revoked=1` to see what was killed yesterday and by whom.
-- Every authenticated admin gate (`lib/adminGuardCore.ts`) now passes the caller IP into `verifySessionCookie`, which forwards it to the registry's throttled liveness updater. No new schema migration is required; new fields default to `null` for sessions minted before the upgrade.
-- Settings → SSO sessions (`/settings/sessions`) shows a per-row `last seen Nm ago` line next to the `signed in Nh ago` line, plus an email filter input that round-trips through the new query parameter.
-- `tests/ssoSessionRegistry.test.mjs` pins the security properties an enterprise buyer cares about: a revoked session fails verification on the very next call, an offboarding-by-email kills every other session for that address while leaving every other user untouched, a global epoch bump invalidates every existing cookie at once, and a cookie without a known jti is rejected even when its HMAC signature is valid (no forged-but-otherwise-legal token can pass).
-
-Try it locally:
-
-```bash
-# Active sessions for one user, including any revoked rows.
-curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
-  "http://localhost:7430/api/admin/sessions?email=alice@example.com&include_revoked=1"
-
-# Revoke one device by jti (idempotent, audited).
-curl -fsSL -X DELETE \
-  -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
-  -H "content-type: application/json" \
-  -d '{"reason":"lost laptop"}' \
-  http://localhost:7430/api/admin/sessions/JTI_HERE
-```
-
 ## Previously: Admin console (single-pane workspace posture)
 
 Procurement reality: a security reviewer opening SignalClaw for the first time should be able to answer "who has access, is the audit log intact, what failed in the last 24h" in under a minute, without crawling fifteen sub-pages. SignalClaw already shipped every individual admin surface (keys, SSO, sessions, MFA, invites, webhooks, CORS, CSP, network policy, retention, legal hold, SIEM, privacy, freeze) but the workspace lacked a landing page that stitched them together. The new `/admin` console fixes that. It is a single guarded snapshot rendered from one round trip, with deep links into every surface that owns each tile.
