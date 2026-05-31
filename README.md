@@ -2,7 +2,25 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-source-IP failed authentication lockout
+## New: per-API-key usage analytics
+
+Procurement reality: enterprise buyers will not approve a credential model they cannot meter. Every security review asks for per-key request volume, success rate, and route mix so abuse, runaway integrations, and seat-level billing disputes can be triaged from a single screen. SignalClaw now writes a counter on every authenticated `/api/v1/*` request, bucketed by `(key_id, UTC day, route_class, status_class)`, with a 35 day ring buffer. The counter is dropped at the single terminal `observeRequest` point inside `web/lib/v1Guard.ts`, so every existing v1 route is covered with no per-route edits. Owners can read the analytics via a new admin endpoint and a dedicated admin console page, including a dense daily series suitable for sparklines and a per-route breakdown.
+
+Try it locally: `cd web && npm run dev`, then open http://localhost:7430/settings/keys/usage and pick a key. Or drive it from the API:
+
+```bash
+# Get usage for one key over the last 14 days (default).
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/keys/$KEY_ID/usage | jq .
+
+# Narrow the window. `days` is clamped to [1, 35].
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  "http://localhost:7430/api/admin/keys/$KEY_ID/usage?days=7" | jq .
+```
+
+Isolation is enforced at the store: `tests/keyUsageStore.test.mjs` proves one key's traffic never bleeds into another key's summary, the dense daily axis is the exact requested length, the unknown-key path returns an empty (but well-formed) payload with no secret-shaped fields, and the per-key bucket history is bounded by the 35 day ring buffer.
+
+## Previously: per-source-IP failed authentication lockout
 
 Procurement reality: every enterprise security questionnaire asks how the product defends against credential stuffing and brute-force token guessing. SignalClaw now tracks failed API key attempts per client IP and locks that source out of `authenticate()` for a configurable cooldown once a configurable threshold of failures is hit inside a configurable window. The chokepoint is the single `authenticate()` function in `web/lib/keyStore.ts`, so every existing route (42 v1 and admin endpoints, no sweep required at call sites) inherits the protection. Successful authentication from the same IP clears the counter, and missing credentials never count toward lockout so unauthenticated browser probes do not trip it. Locked IPs, the active config, and every config change are surfaced in the audit chain and in a dedicated admin settings page.
 

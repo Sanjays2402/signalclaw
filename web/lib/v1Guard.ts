@@ -25,6 +25,7 @@ import {
   incInFlight,
   decInFlight,
 } from "./metricsStore";
+import { recordRequest as recordKeyUsage } from "./keyUsageStore";
 import {
   clientIpFromRequest,
   ipMatchesAny,
@@ -228,6 +229,21 @@ export async function enforceRateLimit(
   const method = (req as any).method ?? "GET";
   const route_class = classifyRoute(route);
   const requestId = req.headers.get("x-request-id") || undefined;
+  // Wrap observeRequest so every terminal status here also lands in the
+  // per-key usage store. Failures inside the usage store must never fail
+  // a real request; swallow and log.
+  const obs = (args: { method: string; status: number; route_class: typeof route_class; durationMs: number }) => {
+    observeRequest(args);
+    if (key && key.id) {
+      recordKeyUsage({
+        key_id: key.id,
+        route_class: args.route_class,
+        status: args.status,
+      }).catch((e) => {
+        try { console.error("keyUsage record failed", e); } catch {}
+      });
+    }
+  };
   try {
     // Break-glass workspace freeze runs first: if an admin has flipped
     // the kill switch, every authenticated v1 call returns 503 immediately
@@ -258,7 +274,7 @@ export async function enforceRateLimit(
         reason: "workspace_frozen",
         details: { frozen_at: freeze.frozen_at, frozen_by: freeze.frozen_by },
       }).catch(() => {});
-      observeRequest({ method, status: 503, route_class, durationMs: Date.now() - t0 });
+      obs({ method, status: 503, route_class, durationMs: Date.now() - t0 });
       return res;
     }
     const netPolicy = await getNetworkPolicy();
@@ -285,12 +301,12 @@ export async function enforceRateLimit(
         key,
         reason: `network_policy_block:${netDecision.reason}`,
       }).catch(() => {});
-      observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+      obs({ method, status: 403, route_class, durationMs: Date.now() - t0 });
       return res;
     }
     const ipBlock = await enforceKeyIpAllowlist(req, key, route, method, requestId);
     if (ipBlock) {
-      observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+      obs({ method, status: 403, route_class, durationMs: Date.now() - t0 });
       return ipBlock;
     }
     if (!isRouteAllowed(route, key.route_allowlist)) {
@@ -319,17 +335,17 @@ export async function enforceRateLimit(
             : 0,
         },
       }).catch(() => {});
-      observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+      obs({ method, status: 403, route_class, durationMs: Date.now() - t0 });
       return res;
     }
     const rotation = await enforceRotationPolicy(req, key, route, method, requestId);
     if (rotation.block) {
-      observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+      obs({ method, status: 403, route_class, durationMs: Date.now() - t0 });
       return rotation.block;
     }
     const residency = await enforceDataResidency(req, key, route, method, requestId);
     if (residency.block) {
-      observeRequest({ method, status: 451, route_class, durationMs: Date.now() - t0 });
+      obs({ method, status: 451, route_class, durationMs: Date.now() - t0 });
       return residency.block;
     }
     // Monthly per-key quota check runs BEFORE the per-minute rate limit
@@ -360,7 +376,7 @@ export async function enforceRateLimit(
         key,
         reason: "monthly_quota_exceeded",
       }).catch(() => {});
-      observeRequest({ method, status: 429, route_class, durationMs: Date.now() - t0 });
+      obs({ method, status: 429, route_class, durationMs: Date.now() - t0 });
       return res;
     }
     const decision = await consume(key);
@@ -387,7 +403,7 @@ export async function enforceRateLimit(
         key,
         reason: "rate_limited",
       }).catch(() => {});
-      observeRequest({ method, status: 429, route_class, durationMs: Date.now() - t0 });
+      obs({ method, status: 429, route_class, durationMs: Date.now() - t0 });
       return res;
     }
     const res = await handler();
@@ -398,10 +414,10 @@ export async function enforceRateLimit(
     if (requestId && !res.headers.get("x-request-id")) {
       res.headers.set("x-request-id", requestId);
     }
-    observeRequest({ method, status: res.status, route_class, durationMs: Date.now() - t0 });
+    obs({ method, status: res.status, route_class, durationMs: Date.now() - t0 });
     return res;
   } catch (e) {
-    observeRequest({ method, status: 500, route_class, durationMs: Date.now() - t0 });
+    obs({ method, status: 500, route_class, durationMs: Date.now() - t0 });
     throw e;
   } finally {
     decInFlight();
