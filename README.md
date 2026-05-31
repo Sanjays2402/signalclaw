@@ -6,6 +6,30 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Bulk actions in run history**. Select runs on `/history` with row checkboxes (or the page-level select-all), then pin, unpin, tag, untag, export as CSV/JSON, or delete in one step. Backed by a single `POST /api/runs/bulk` endpoint that takes `{ ids, action, tags?, format? }` and returns `{ matched, affected, ids }`. Capped at 200 ids per request, idempotent for pin/unpin/tag ops.
+
+### Try bulk actions
+
+```bash
+# UI
+open http://localhost:7430/history
+
+# Tag two runs at once
+curl -sS -X POST http://localhost:7430/api/runs/bulk \
+  -H 'content-type: application/json' \
+  -d '{"ids":["<id1>","<id2>"],"action":"add_tags","tags":["review"]}'
+
+# Export a hand-picked selection as CSV
+curl -sS -X POST http://localhost:7430/api/runs/bulk \
+  -H 'content-type: application/json' \
+  -d '{"ids":["<id1>","<id2>"],"action":"export","format":"csv"}' -o selected.csv
+
+# Delete a batch
+curl -sS -X POST http://localhost:7430/api/runs/bulk \
+  -H 'content-type: application/json' \
+  -d '{"ids":["<id1>","<id2>"],"action":"delete"}'
+```
+
 - **Bulk export, single-run export, usage meter, and delete in the public API**. `GET /api/v1/runs/export?format=csv|json` streams every matching run as a downloadable file (same `q`, `ticker`, `regime`, `limit` filters as `GET /api/v1/runs`). `GET /api/v1/runs/<id>/export?format=csv|json` exports one run. `GET /api/v1/usage` returns the same free-tier meter shown in the UI so integrations can warn users before they hit the cap. `DELETE /api/v1/runs/<id>` removes a saved run (trade scope). The keys page on `/settings/keys` now ships these curl examples next to the existing ones.
 - **Scheduled watches** at `/watches`: pick a ticker, lookback, and cadence (hourly through weekly). Each tick classifies the regime, saves a tagged run to history, and raises an activity event on regime change. Wire any cron (Vercel scheduled function, GitHub Actions, your own box) to `POST /api/watches/run`; protect it with `WATCH_CRON_TOKEN` when set. Watches persist to `web/.data/watches.json` with atomic writes, capped at 50, deduped on (ticker, lookback, cadence). Auto-saved runs land under the `watch` tag in `/history`.
 - **Pin runs** to your home rail. Click the pin on any saved run or share page (`/r/<id>`) to keep it one click away. The `/history` page gets a Pinned-only filter and a horizontal Pinned rail at the top, so your starred work shows up the moment you land. Pinned state is exposed on `/api/runs` and `/api/v1/runs` via `?pinned=1`. Toggle by `PATCH /api/runs/<id>` with `{"pinned": true|false}`.

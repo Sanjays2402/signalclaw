@@ -81,6 +81,11 @@ export default function HistoryPage() {
   const [tag, setTag] = useState<string>("");
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkErr, setBulkErr] = useState<string | null>(null);
+  const [bulkTagDraft, setBulkTagDraft] = useState("");
+  const [bulkTagMode, setBulkTagMode] = useState<null | "add" | "remove">(null);
 
   const dq = useDebounced(q, 200);
 
@@ -113,6 +118,93 @@ export default function HistoryPage() {
   function go(delta: number) {
     const next = Math.max(0, offset + delta * PAGE_SIZE);
     setOffset(next);
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+    setBulkTagMode(null);
+    setBulkTagDraft("");
+    setBulkErr(null);
+  }
+
+  async function runBulk(
+    action: "delete" | "pin" | "unpin" | "add_tags" | "remove_tags",
+    tags?: string[],
+  ) {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (action === "delete" && !confirm(`Delete ${ids.length} run(s)? This cannot be undone.`)) return;
+    setBulkBusy(true);
+    setBulkErr(null);
+    try {
+      const body: Record<string, unknown> = { ids, action };
+      if (tags) body.tags = tags;
+      const r = await fetch(`/api/runs/bulk`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => null);
+        throw new Error(j?.error?.message ?? `${r.status}`);
+      }
+      clearSelection();
+      refreshAll();
+    } catch (e: any) {
+      setBulkErr(String(e?.message || e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkExport(format: "csv" | "json") {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    setBulkErr(null);
+    try {
+      const r = await fetch(`/api/runs/bulk`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids, action: "export", format }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => null);
+        throw new Error(j?.error?.message ?? `${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      a.download = `signalclaw-runs-selected-${stamp}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setBulkErr(String(e?.message || e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function submitBulkTags() {
+    const tags = bulkTagDraft
+      .split(/[\s,]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    if (tags.length === 0 || !bulkTagMode) return;
+    runBulk(bulkTagMode === "add" ? "add_tags" : "remove_tags", tags);
   }
 
   function resetFilters() {
@@ -318,9 +410,157 @@ export default function HistoryPage() {
           )
         ) : (
           <>
+            {(() => {
+              const pageIds = page.map((r) => r.id);
+              const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
+              const allOnPage = pageIds.length > 0 && selectedOnPage === pageIds.length;
+              const someOnPage = selectedOnPage > 0 && !allOnPage;
+              function toggleAllOnPage() {
+                setSelected((prev) => {
+                  const n = new Set(prev);
+                  if (allOnPage) for (const id of pageIds) n.delete(id);
+                  else for (const id of pageIds) n.add(id);
+                  return n;
+                });
+              }
+              return (
+                <div className="flex items-center justify-between gap-2 mb-2 px-1">
+                  <label className="flex items-center gap-2 text-[11px] mono uppercase tracking-widest muted cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all runs on this page"
+                      checked={allOnPage}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someOnPage;
+                      }}
+                      onChange={toggleAllOnPage}
+                      className="accent-[var(--amber)]"
+                    />
+                    {selected.size > 0 ? `${selected.size} selected` : "Select all"}
+                  </label>
+                  {selected.size > 0 && (
+                    <button
+                      onClick={clearSelection}
+                      className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+            {selected.size > 0 && (
+              <div className="sticky top-0 z-10 mb-3 panel border border-[var(--amber)]/30 bg-[var(--bg-elev)] p-2 rounded-sm">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] mono uppercase tracking-widest text-[var(--amber)] mr-2">
+                    {selected.size} run{selected.size === 1 ? "" : "s"}
+                  </span>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => runBulk("pin")}
+                    className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <PushPin size={11} weight="bold" /> Pin
+                  </button>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => runBulk("unpin")}
+                    className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <PushPinSlash size={11} weight="bold" /> Unpin
+                  </button>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => {
+                      setBulkTagMode((m) => (m === "add" ? null : "add"));
+                    }}
+                    aria-pressed={bulkTagMode === "add"}
+                    className={
+                      "text-[10px] px-2 py-1 rounded-sm border uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50 " +
+                      (bulkTagMode === "add"
+                        ? "border-[var(--amber)]/60 bg-[var(--amber)]/10 text-[var(--amber)]"
+                        : "border-[var(--border-strong)] hover:bg-white/5")
+                    }
+                  >
+                    <Plus size={11} weight="bold" /> Add tag
+                  </button>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => {
+                      setBulkTagMode((m) => (m === "remove" ? null : "remove"));
+                    }}
+                    aria-pressed={bulkTagMode === "remove"}
+                    className={
+                      "text-[10px] px-2 py-1 rounded-sm border uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50 " +
+                      (bulkTagMode === "remove"
+                        ? "border-[var(--amber)]/60 bg-[var(--amber)]/10 text-[var(--amber)]"
+                        : "border-[var(--border-strong)] hover:bg-white/5")
+                    }
+                  >
+                    <X size={11} weight="bold" /> Remove tag
+                  </button>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => bulkExport("csv")}
+                    className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <FileCsv size={11} weight="bold" /> CSV
+                  </button>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => bulkExport("json")}
+                    className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <Code size={11} weight="bold" /> JSON
+                  </button>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => runBulk("delete")}
+                    className="text-[10px] px-2 py-1 rounded-sm border border-red-500/40 text-red-400 hover:bg-red-500/10 uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <Trash size={11} weight="bold" /> Delete
+                  </button>
+                </div>
+                {bulkTagMode && (
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <input
+                      autoFocus
+                      value={bulkTagDraft}
+                      onChange={(e) => setBulkTagDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitBulkTags();
+                        if (e.key === "Escape") {
+                          setBulkTagMode(null);
+                          setBulkTagDraft("");
+                        }
+                      }}
+                      placeholder="tag1, tag2"
+                      aria-label="Tags to apply"
+                      className="flex-1 bg-[var(--bg)] border border-[var(--border-strong)] rounded-sm px-2 py-1 text-[11px] mono focus:outline-none focus:border-[var(--amber)]/60"
+                    />
+                    <button
+                      disabled={bulkBusy || !bulkTagDraft.trim()}
+                      onClick={submitBulkTags}
+                      className="text-[10px] px-2 py-1 rounded-sm border border-[var(--amber)]/40 bg-[var(--amber)]/10 text-[var(--amber)] uppercase tracking-widest font-semibold mono disabled:opacity-50"
+                    >
+                      <Check size={11} weight="bold" />
+                    </button>
+                  </div>
+                )}
+                {bulkErr && (
+                  <div className="mt-2 text-[11px] mono text-red-400">{bulkErr}</div>
+                )}
+              </div>
+            )}
             <div className="divide-y divide-[var(--border)]">
               {page.map((r) => (
-                <Row key={r.id} run={r} onChange={refreshAll} />
+                <Row
+                  key={r.id}
+                  run={r}
+                  onChange={refreshAll}
+                  selected={selected.has(r.id)}
+                  onToggleSelect={() => toggleSelect(r.id)}
+                />
               ))}
             </div>
             <div className="flex items-center justify-between mt-4 text-[10px] mono uppercase tracking-widest muted">
@@ -353,7 +593,17 @@ export default function HistoryPage() {
   );
 }
 
-function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
+function Row({
+  run,
+  onChange,
+  selected,
+  onToggleSelect,
+}: {
+  run: RunListItem;
+  onChange: () => void;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(run.label);
   const [editingTags, setEditingTags] = useState(false);
@@ -473,7 +723,23 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
   const when = new Date(run.created_at).toLocaleString();
 
   return (
-    <div className="py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+    <div
+      className={
+        "py-3 flex flex-col sm:flex-row sm:items-center gap-3 " +
+        (selected ? "bg-[var(--amber)]/5" : "")
+      }
+    >
+      {onToggleSelect && (
+        <label className="flex items-center self-start sm:self-center pt-1 sm:pt-0 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={onToggleSelect}
+            aria-label={`Select run ${run.label}`}
+            className="accent-[var(--amber)]"
+          />
+        </label>
+      )}
       <div className="flex-1 min-w-0">
         {editing ? (
           <div className="flex items-center gap-2">

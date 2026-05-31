@@ -192,6 +192,74 @@ export async function setRunNotes(id: string, notes: unknown): Promise<SavedRun 
   return ensureTags(r);
 }
 
+export type BulkResult = {
+  requested: number;
+  matched: number;
+  affected: number;
+  ids: string[];
+};
+
+// Apply an action to many runs in a single transaction.
+// Actions: "delete" | "pin" | "unpin" | "add_tags" | "remove_tags" | "set_tags".
+export async function bulkRunOp(
+  ids: string[],
+  action: "delete" | "pin" | "unpin" | "add_tags" | "remove_tags" | "set_tags",
+  tags?: unknown,
+): Promise<BulkResult> {
+  const uniq = Array.from(new Set(ids.filter((v) => typeof v === "string" && v.length > 0)));
+  const s = await readStore();
+  const present = new Set(s.runs.map((r) => r.id));
+  const matched = uniq.filter((id) => present.has(id));
+  const matchedSet = new Set(matched);
+  const affected: string[] = [];
+
+  if (action === "delete") {
+    const before = s.runs.length;
+    s.runs = s.runs.filter((r) => !matchedSet.has(r.id));
+    affected.push(...matched);
+    if (s.runs.length !== before) await writeStore(s);
+    return { requested: uniq.length, matched: matched.length, affected: affected.length, ids: affected };
+  }
+
+  const nowIso = new Date().toISOString();
+  if (action === "pin" || action === "unpin") {
+    const target = action === "pin";
+    for (const r of s.runs) {
+      if (!matchedSet.has(r.id)) continue;
+      const cur = r.pinned === true;
+      if (cur === target) continue;
+      r.pinned = target;
+      r.pinned_at = target ? nowIso : null;
+      affected.push(r.id);
+    }
+    if (affected.length > 0) await writeStore(s);
+    return { requested: uniq.length, matched: matched.length, affected: affected.length, ids: affected };
+  }
+
+  // Tag mutations.
+  const incoming = normalizeTags(tags ?? []);
+  for (const r of s.runs) {
+    if (!matchedSet.has(r.id)) continue;
+    const before = normalizeTags(r.tags ?? []);
+    let next: string[];
+    if (action === "set_tags") {
+      next = incoming;
+    } else if (action === "add_tags") {
+      next = normalizeTags([...before, ...incoming]);
+    } else {
+      const drop = new Set(incoming);
+      next = before.filter((t) => !drop.has(t));
+    }
+    const changed = before.length !== next.length || before.some((t, i) => t !== next[i]);
+    if (changed) {
+      r.tags = next;
+      affected.push(r.id);
+    }
+  }
+  if (affected.length > 0) await writeStore(s);
+  return { requested: uniq.length, matched: matched.length, affected: affected.length, ids: affected };
+}
+
 export type TagCount = { tag: string; count: number };
 
 export async function listTags(): Promise<TagCount[]> {
