@@ -8,6 +8,12 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const limit = Number.parseInt(sp.get("limit") ?? "50", 10);
   const sub = sp.get("subscription_id") ?? undefined;
-  const deliveries = await listDeliveries(Number.isFinite(limit) ? limit : 50, sub || undefined);
+  const statusRaw = sp.get("status");
+  const status = statusRaw === "ok" || statusRaw === "failed" ? statusRaw : undefined;
+  const deliveries = await listDeliveries(
+    Number.isFinite(limit) ? limit : 50,
+    sub || undefined,
+    status,
+  );
   return NextResponse.json({ deliveries });
 }

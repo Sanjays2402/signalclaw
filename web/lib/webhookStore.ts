@@ -58,6 +58,8 @@ export type DeliveryAttempt = {
   delivered_at: string;
   signature: string | null;
   event_count: number;
+  events?: PickEvent[];
+  replay_of?: string | null;
 };
 
 async function ensureDir() {
@@ -255,6 +257,7 @@ async function deliverOne(
           delivered_at: new Date().toISOString(),
           signature,
           event_count: events.length,
+          events,
         };
       }
       // non-2xx: retry on 5xx/429, give up on other 4xx
@@ -280,7 +283,45 @@ async function deliverOne(
     delivered_at: new Date().toISOString(),
     signature,
     event_count: events.length,
+    events,
   };
+}
+
+export async function getDelivery(id: string): Promise<DeliveryAttempt | null> {
+  const log = await readLog();
+  return log.find((d) => d.id === id) ?? null;
+}
+
+export async function replayDelivery(
+  id: string,
+  opts: DeliverOpts = {},
+): Promise<
+  | { ok: true; delivery: DeliveryAttempt }
+  | { ok: false; code: "not_found" | "no_events" | "subscription_missing"; message: string }
+> {
+  const prior = await getDelivery(id);
+  if (!prior) return { ok: false, code: "not_found", message: "Delivery not found." };
+  const events = prior.events;
+  if (!events || events.length === 0) {
+    return {
+      ok: false,
+      code: "no_events",
+      message: "This delivery has no replayable payload. Replay is only available for attempts recorded after replay support was added.",
+    };
+  }
+  const sub = await getWebhook(prior.subscription_id);
+  if (!sub) {
+    return { ok: false, code: "subscription_missing", message: "Subscription no longer exists." };
+  }
+  const attempt = await deliverOne(sub, events, opts);
+  attempt.replay_of = prior.id;
+  await updateWebhookStatus(sub.id, {
+    last_status: attempt.status,
+    last_error: attempt.error,
+    last_delivered_at: attempt.delivered_at,
+  });
+  await appendLog([attempt]);
+  return { ok: true, delivery: attempt };
 }
 
 export async function dispatchEvents(
@@ -304,9 +345,18 @@ export async function dispatchEvents(
   return { events, deliveries };
 }
 
-export async function listDeliveries(limit = 50, subscriptionId?: string): Promise<DeliveryAttempt[]> {
+export async function listDeliveries(
+  limit = 50,
+  subscriptionId?: string,
+  status?: "ok" | "failed",
+): Promise<DeliveryAttempt[]> {
   const log = await readLog();
-  const filtered = subscriptionId ? log.filter((d) => d.subscription_id === subscriptionId) : log;
+  let filtered = subscriptionId ? log.filter((d) => d.subscription_id === subscriptionId) : log;
+  if (status === "ok") {
+    filtered = filtered.filter((d) => d.status !== null && d.status >= 200 && d.status < 300);
+  } else if (status === "failed") {
+    filtered = filtered.filter((d) => d.status === null || d.status < 200 || d.status >= 300);
+  }
   return filtered.slice(0, Math.max(1, Math.min(500, limit)));
 }
 

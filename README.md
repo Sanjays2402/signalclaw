@@ -176,7 +176,7 @@ curl -s 'http://localhost:7430/api/runs?tag=swing' | jq '.runs | length'
 
 ## Try the webhooks
 
-Real outbound HTTP delivery for pick events with HMAC signing, retries, and a delivery log. Visit `http://localhost:7430/webhooks`, paste an https URL, choose the events you want, optionally set an HMAC secret. Hit "Fire latest" to send a synthesized `entered` event from your most recent saved run. Inspect attempts in the delivery log card.
+Real outbound HTTP delivery for pick events with HMAC signing, retries, and a delivery log. Visit `http://localhost:7430/webhooks`, paste an https URL, choose the events you want, optionally set an HMAC secret. Hit "Fire latest" to send a synthesized `entered` event from your most recent saved run. Inspect attempts in the delivery log card, filter by `all` / `ok` / `failed`, and **Replay** any failed attempt to re-deliver the exact same payload (same events, fresh HMAC timestamp and signature).
 
 ```sh
 curl -sS http://localhost:7430/webhooks \
@@ -184,7 +184,8 @@ curl -sS http://localhost:7430/webhooks \
   -d '{"url":"https://webhook.site/your-id","events":["entered","exited"],"tickers":["SPY"]}'
 
 curl -sS -X POST http://localhost:7430/webhooks/fire/latest
-curl -sS http://localhost:7430/webhooks/deliveries?limit=10
+curl -sS 'http://localhost:7430/webhooks/deliveries?limit=10&status=failed'
+curl -sS -X POST http://localhost:7430/webhooks/deliveries/<delivery-id>/replay
 ```
 
 Deliveries retry up to 3 times with exponential backoff on 5xx/429/network errors. When a secret is set, each request is signed: `x-signalclaw-signature: t=<unix>,v1=<hex hmac of "<t>.<body>">` using HMAC-SHA256.

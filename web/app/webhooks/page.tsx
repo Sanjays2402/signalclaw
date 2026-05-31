@@ -4,7 +4,7 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { api, swrFetcher, type WebhookList, type WebhookIn, type WebhookDelivery, type WebhookDeliveryLog } from "@/lib/api";
-import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt } from "@phosphor-icons/react/dist/ssr";
+import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple } from "@phosphor-icons/react/dist/ssr";
 
 const EVENT_KINDS = ["entered", "exited", "upgraded", "downgraded", "score_jump"];
 
@@ -18,11 +18,30 @@ export default function WebhooksPage() {
 
 function Webhooks() {
   const { data, error, isLoading } = useSWR<WebhookList>("/webhooks", swrFetcher);
-  const { data: logData } = useSWR<WebhookDeliveryLog>("/webhooks/deliveries?limit=25", swrFetcher, { refreshInterval: 5000 });
+  const [logFilter, setLogFilter] = useState<"all" | "ok" | "failed">("all");
+  const logKey = logFilter === "all"
+    ? "/webhooks/deliveries?limit=25"
+    : `/webhooks/deliveries?limit=25&status=${logFilter}`;
+  const { data: logData } = useSWR<WebhookDeliveryLog>(logKey, swrFetcher, { refreshInterval: 5000 });
   const [busy, setBusy] = useState<string | null>(null);
   const [formErr, setFormErr] = useState<string | null>(null);
   const [fireResult, setFireResult] = useState<WebhookDelivery | null>(null);
   const [fireErr, setFireErr] = useState<string | null>(null);
+  const [replayErr, setReplayErr] = useState<string | null>(null);
+
+  async function replay(id: string) {
+    setReplayErr(null);
+    setBusy(`replay-${id}`);
+    try {
+      await api(`/webhooks/deliveries/${encodeURIComponent(id)}/replay`, { method: "POST" });
+      await mutate(logKey);
+      await mutate("/webhooks");
+    } catch (e) {
+      setReplayErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function create(body: WebhookIn) {
     setFormErr(null);
@@ -113,12 +132,35 @@ function Webhooks() {
 
       {logData && logData.deliveries.length > 0 && (
         <Card title={`Delivery log (${logData.deliveries.length})`}>
-          <div className="text-xs muted mb-2 flex items-center gap-1">
-            <Receipt weight="duotone" size={12} /> Most recent attempts, newest first.
+          <div className="text-xs muted mb-2 flex items-center justify-between gap-2 flex-wrap">
+            <span className="flex items-center gap-1">
+              <Receipt weight="duotone" size={12} /> Most recent attempts, newest first.
+            </span>
+            <div className="flex items-center gap-1" role="tablist" aria-label="Filter delivery log">
+              <FunnelSimple weight="duotone" size={12} className="muted" />
+              {(["all", "ok", "failed"] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  role="tab"
+                  aria-selected={logFilter === f}
+                  onClick={() => setLogFilter(f)}
+                  className={`px-2 py-0.5 rounded-md text-[11px] mono border ${
+                    logFilter === f
+                      ? "border-[var(--accent)] text-[var(--accent)]"
+                      : "border-[var(--border)] muted hover:text-[var(--fg)]"
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
           </div>
+          {replayErr && <ErrorBox err={replayErr} />}
           <ul className="divide-y divide-[var(--border)]">
             {logData.deliveries.slice(0, 25).map((d) => {
               const ok = d.status !== null && d.status >= 200 && d.status < 300;
+              const canReplay = !ok && Array.isArray(d.events) && d.events.length > 0;
               return (
                 <li key={d.id} className="py-2 flex items-center gap-3 flex-wrap text-xs">
                   {ok ? (
@@ -128,15 +170,61 @@ function Webhooks() {
                   ) : (
                     <Badge tone="down">no response</Badge>
                   )}
+                  {d.replay_of && <Badge tone="info">replay</Badge>}
                   <span className="font-mono break-all flex-1 min-w-0">{d.url}</span>
                   <span className="muted">attempt {d.attempt}</span>
                   <span className="muted">{d.event_count} event(s)</span>
                   <span className="muted">{new Date(d.delivered_at).toLocaleString()}</span>
                   {d.error && <span className="down break-all">{d.error}</span>}
+                  {!ok && (
+                    <Button
+                      variant="ghost"
+                      disabled={!canReplay || busy === `replay-${d.id}`}
+                      onClick={() => replay(d.id)}
+                      title={canReplay ? "Re-deliver the same payload" : "No payload stored for this attempt"}
+                      aria-label="Replay delivery"
+                    >
+                      <ArrowClockwise weight="duotone" size={14} />
+                      <span className="ml-1">{busy === `replay-${d.id}` ? "Sending" : "Replay"}</span>
+                    </Button>
+                  )}
                 </li>
               );
             })}
           </ul>
+        </Card>
+      )}
+
+      {logData && logData.deliveries.length === 0 && logFilter !== "all" && (
+        <Card title="Delivery log">
+          <div className="text-xs muted mb-2 flex items-center justify-between gap-2 flex-wrap">
+            <span className="flex items-center gap-1">
+              <Receipt weight="duotone" size={12} /> Filter active.
+            </span>
+            <div className="flex items-center gap-1" role="tablist" aria-label="Filter delivery log">
+              <FunnelSimple weight="duotone" size={12} className="muted" />
+              {(["all", "ok", "failed"] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  role="tab"
+                  aria-selected={logFilter === f}
+                  onClick={() => setLogFilter(f)}
+                  className={`px-2 py-0.5 rounded-md text-[11px] mono border ${
+                    logFilter === f
+                      ? "border-[var(--accent)] text-[var(--accent)]"
+                      : "border-[var(--border)] muted hover:text-[var(--fg)]"
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Empty
+            title={logFilter === "failed" ? "No failed deliveries" : "No successful deliveries"}
+            hint="Switch the filter to see other attempts."
+          />
         </Card>
       )}
 

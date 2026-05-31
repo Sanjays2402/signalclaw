@@ -430,6 +430,15 @@ export type WebhookDeliveryLogItem = {
   delivered_at: string;
   signature: string | null;
   event_count: number;
+  events?: {
+    kind: string;
+    ticker: string;
+    as_of: string;
+    new_label?: string | null;
+    prior_label?: string | null;
+    score_delta?: number | null;
+  }[];
+  replay_of?: string | null;
 };
 export type WebhookDeliveryLog = { deliveries: WebhookDeliveryLogItem[] };
 
