@@ -27,6 +27,7 @@ import {
   ArrowsClockwise,
   FileLock,
   LockKey,
+  Gauge,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -121,6 +122,12 @@ function Settings() {
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
             <Globe size={14} weight="duotone" /> Network
+          </Link>
+          <Link
+            href="/settings/concurrency"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Gauge size={14} weight="duotone" /> Concurrency
           </Link>
           <Link
             href="/settings/siem"

@@ -18,6 +18,12 @@
 import { NextResponse } from "next/server";
 import type { StoredKey } from "./keyStore";
 import { consume, applyRateHeaders, WINDOW_SECONDS } from "./rateLimitStore";
+import {
+  getConcurrencyPolicy,
+  tryAcquire as tryConcurrencyAcquire,
+  release as releaseConcurrency,
+  applyConcurrencyHeaders,
+} from "./concurrencyStore";
 import { recordAuditEvent } from "./auditStore";
 import {
   classifyRoute,
@@ -406,7 +412,47 @@ export async function enforceRateLimit(
       obs({ method, status: 429, route_class, durationMs: Date.now() - t0 });
       return res;
     }
-    const res = await handler();
+    const concurrencyPolicy = await getConcurrencyPolicy();
+    const concurrencyDecision = tryConcurrencyAcquire(concurrencyPolicy);
+    if (!concurrencyDecision.allowed) {
+      const res = NextResponse.json(
+        {
+          error: {
+            code: "workspace_concurrency_exceeded",
+            message: `workspace concurrency limit exceeded: ${concurrencyDecision.limit} in-flight requests. retry after ${concurrencyDecision.retryAfter}s`,
+            limit: concurrencyDecision.limit,
+            in_flight: concurrencyDecision.inFlight,
+            retry_after: concurrencyDecision.retryAfter,
+          },
+        },
+        { status: 429 },
+      );
+      applyConcurrencyHeaders(res.headers, concurrencyDecision);
+      applyRateHeaders(res.headers, decision);
+      applyQuotaHeaders(res.headers, quota);
+      if (requestId) res.headers.set("x-request-id", requestId);
+      await recordAuditEvent({
+        req,
+        route,
+        method,
+        status: 429,
+        key,
+        reason: "workspace_concurrency_exceeded",
+        details: {
+          limit: concurrencyDecision.limit,
+          in_flight: concurrencyDecision.inFlight,
+        },
+      }).catch(() => {});
+      obs({ method, status: 429, route_class, durationMs: Date.now() - t0 });
+      return res;
+    }
+    let res: NextResponse;
+    try {
+      res = await handler();
+    } finally {
+      releaseConcurrency();
+    }
+    applyConcurrencyHeaders(res.headers, concurrencyDecision);
     applyRateHeaders(res.headers, decision);
     applyQuotaHeaders(res.headers, quota);
     applyRotationHeaders(res.headers, rotation.evaluation);

@@ -2,7 +2,37 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: SSO session liveness, per-email filter, and a security-property test suite
+## New: per-workspace concurrent request limit
+
+Procurement reality: per-minute rate limits and monthly quotas do not stop a single misbehaving client from opening dozens of long-running inference requests at once and starving every other service that shares the workspace key. SOC2 capacity-planning reviewers ask for a noisy-neighbour control specifically. SignalClaw now ships a workspace-wide cap on the number of in-flight `/api/v1/*` requests, enforced inside `v1Guard` after rate limits and quotas. When the cap is hit, new requests are rejected with `HTTP 429 workspace_concurrency_exceeded`, `Retry-After: 1`, and `x-concurrency-limit` / `x-concurrency-in-flight` headers so well-behaved clients self-throttle. Every successful v1 response also carries those headers so dashboards can graph utilisation in real time.
+
+- `GET /api/admin/concurrency` returns the live policy and the current in-flight gauge.
+- `PUT /api/admin/concurrency` with `{ "limit": <int 1..10000> }` sets the cap. Admin scope plus admin MFA. Audited with before/after.
+- `DELETE /api/admin/concurrency` removes the cap. Per-key rate limit and monthly quota still apply.
+- Enforcement lives in `lib/v1Guard.ts` and uses `tryAcquire` / `release` from `lib/concurrencyStore.ts`. A `try/finally` around the handler prevents slot leaks on thrown errors.
+- Settings UI at `/settings/concurrency` shows live in-flight, a utilisation bar, last-changed actor and timestamp, and Set / Update / Remove cap actions.
+
+### Try it
+
+```bash
+# inspect the current policy
+curl -s -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/concurrency | jq .
+
+# cap the workspace at 4 in-flight v1 requests
+curl -s -X PUT -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"limit": 4}' \
+  http://localhost:7430/api/admin/concurrency | jq .
+
+# remove the cap when the incident is over
+curl -s -X DELETE -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/concurrency | jq .
+```
+
+UI: visit http://localhost:7430/settings/concurrency for the live utilisation bar and the Set / Update / Remove cap controls.
+
+## Previously: SSO session liveness, per-email filter, and a security-property test suite
 
 Procurement reality: SOC2 reviewers do not just want "we revoke sessions"; they want "prove the revoke worked and show me last-activity per device." SignalClaw's SSO session ledger now records `last_seen_at` and a `last_seen_ip_hash` on every successful verification (throttled to one disk write per 30s per session, so the hot path stays cheap), and the admin list endpoint accepts an `?email=` filter so an operator can answer "which devices does Alice have signed in right now?" in one request. Raw IPs are never persisted at any point in this path; only SHA-256 hashes.
 
@@ -46,7 +76,7 @@ curl -fsSL -X DELETE \
   http://localhost:7430/api/admin/sessions/JTI_HERE
 ```
 
-## New: Admin console (single-pane workspace posture)
+## Previously: Admin console (single-pane workspace posture)
 
 Procurement reality: a security reviewer opening SignalClaw for the first time should be able to answer "who has access, is the audit log intact, what failed in the last 24h" in under a minute, without crawling fifteen sub-pages. SignalClaw already shipped every individual admin surface (keys, SSO, sessions, MFA, invites, webhooks, CORS, CSP, network policy, retention, legal hold, SIEM, privacy, freeze) but the workspace lacked a landing page that stitched them together. The new `/admin` console fixes that. It is a single guarded snapshot rendered from one round trip, with deep links into every surface that owns each tile.
 
