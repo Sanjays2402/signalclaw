@@ -13,6 +13,7 @@ import {
   Clock,
   LinkSimple,
   Warning,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 
 type AuditEvent = {
@@ -129,6 +130,20 @@ export default function AuditPage() {
         >
           <ArrowsClockwise size={14} weight="duotone" /> Refresh
         </button>
+        <a
+          href={`/api/audit/export.csv${qs({
+            key_id: keyId,
+            method,
+            route,
+            ok: okFilter,
+            limit: String(Math.max(limit, 1000)),
+          })}`}
+          download
+          className="btn-ghost text-[11px] uppercase tracking-wider inline-flex items-center gap-1"
+          aria-label="Download filtered audit log as CSV"
+        >
+          <DownloadSimple size={14} weight="duotone" /> Export CSV
+        </a>
       </header>
 
       <Card title="Chain Integrity">

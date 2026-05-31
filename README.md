@@ -6,6 +6,20 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Multi-day audit search and CSV export.** SOC2 and ISO 27001 reviewers expect operators to answer "show me every mutating call from key X over the past 30 days where status was 4xx or 5xx, and hand me the CSV." The existing `/audit` endpoint only tailed a single day with no filters. Two new admin-scoped routes close that gap: `GET /audit/search` accepts `actor_label`, `actor_key_hash`, `method`, `status`, `status_min`, `path_prefix`, `path_contains`, `action`, `from_ts`, `to_ts`, `days_back` (clamped 1..365), `limit`, and `offset`; it walks daily JSONL files newest-first and returns a paginated JSON page. `GET /audit/export.csv` takes the same filters and streams a CSV download (header row + matching events) so a 30-day export of a busy install never has to materialise in memory. The web UI at `/settings/audit` gets an Export CSV button that always reflects the current filter view, mirrored at `/api/audit/export.csv` against the Next.js audit store. Covered by `tests/test_audit_search_export.py`: filtering by `status_min` + `actor_label`, method + path prefix, the CSV header + escaping, admin-scope enforcement on both routes, and the `days_back` clamp.
+
+  Try it locally:
+  ```bash
+  uvicorn signalclaw.api:app --port 7431 &
+  # Last 30 days, every failure (>=400) from key labelled "ops"
+  curl -s -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    'http://127.0.0.1:7431/audit/search?status_min=400&actor_label=ops&days_back=30'
+  # Same filter, downloaded as CSV
+  curl -s -OJ -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    'http://127.0.0.1:7431/audit/export.csv?status_min=400&actor_label=ops&days_back=30'
+  ```
+  Or visit `http://127.0.0.1:3000/settings/audit` and click **Export CSV**.
+
 - **Configurable request body size limit (DoS guard).** Enterprise security reviews routinely flag APIs that accept unbounded request bodies, since an attacker can ship a multi-gigabyte payload and pin the process before any auth check runs. A new ASGI-level middleware caps every mutating request in two layers: it rejects on the declared `Content-Length` header before reading a byte, and it streams-guards clients that omit the header (chunked or broken) by tallying bytes as they arrive. Both paths return `413` with a structured `{error, message, limit_bytes, declared_bytes}` JSON envelope and an `X-Body-Limit-Bytes` response header. Rejections are written to the audit log as `body.limit.exceeded` with the observed bytes, the active cap, and which layer fired. The cap is admin-managed at runtime via `GET/PUT /admin/body-limit` (admin scope plus MFA gate), persisted to `<data_dir>/body_limit.json`, clamped to 1 KiB - 1 GiB, and seedable on boot with `SIGNALCLAW_BODY_LIMIT_BYTES`. GET/HEAD/OPTIONS are exempt. Covered by `tests/test_body_limit.py`: default cap, lowering the cap rejects oversized payloads, GET is exempt, non-admin keys cannot mutate the cap, invalid inputs return 400, and rejections land in the audit log.
 
   Try it locally:

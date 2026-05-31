@@ -19,16 +19,18 @@ Design notes:
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -124,6 +126,169 @@ class AuditLog:
             stem = p.stem  # audit-YYYY-MM-DD
             days.append(stem.removeprefix("audit-"))
         return days
+
+    # --- search / export ------------------------------------------------
+    # Procurement reviewers (SOC2 / ISO 27001) expect operators to be
+    # able to answer "show me every mutating call from key X over the
+    # past 30 days where status >= 400, and hand me a CSV." ``tail`` is
+    # too coarse for that: it only looks at a single day and accepts no
+    # filters. ``search`` walks ``days_back`` daily files newest-first
+    # and applies all filters in a single pass; ``iter_search`` is the
+    # streaming variant that backs ``/audit/export.csv`` so a 90-day
+    # export does not have to materialise in memory.
+
+    _CSV_FIELDS: tuple = (
+        "ts", "request_id", "method", "path", "status",
+        "actor_label", "actor_key_hash", "source_ip",
+        "duration_ms", "action",
+    )
+
+    @staticmethod
+    def _matches(row: dict, filters: Dict[str, object]) -> bool:
+        for k, v in filters.items():
+            if v is None or v == "":
+                continue
+            if k == "path_prefix":
+                if not str(row.get("path", "")).startswith(str(v)):
+                    return False
+            elif k == "path_contains":
+                if str(v) not in str(row.get("path", "")):
+                    return False
+            elif k == "status":
+                try:
+                    if int(row.get("status", 0)) != int(v):  # type: ignore[arg-type]
+                        return False
+                except (TypeError, ValueError):
+                    return False
+            elif k == "status_min":
+                try:
+                    if int(row.get("status", 0)) < int(v):  # type: ignore[arg-type]
+                        return False
+                except (TypeError, ValueError):
+                    return False
+            elif k == "method":
+                if str(row.get("method", "")).upper() != str(v).upper():
+                    return False
+            elif k == "from_ts":
+                if str(row.get("ts", "")) < str(v):
+                    return False
+            elif k == "to_ts":
+                if str(row.get("ts", "")) > str(v):
+                    return False
+            else:
+                if str(row.get(k, "")) != str(v):
+                    return False
+        return True
+
+    def _iter_days(self, days_back: int) -> Iterator[Path]:
+        """Yield daily audit files newest-first across ``days_back`` UTC days.
+
+        Bounded by ``days_back`` so an operator cannot accidentally
+        scan years of history in a single request. ``days_back`` is
+        clamped to a 1..365 window by callers.
+        """
+        today = datetime.now(timezone.utc).date()
+        for delta in range(int(days_back)):
+            d = today - timedelta(days=delta)
+            p = self.base / f"audit-{d.strftime('%Y-%m-%d')}.jsonl"
+            if p.exists():
+                yield p
+
+    def iter_search(
+        self,
+        filters: Optional[Dict[str, object]] = None,
+        days_back: int = 7,
+        max_rows: int = 100_000,
+    ) -> Iterator[dict]:
+        """Stream matching audit rows newest-first across daily files.
+
+        Each file is read inside the instance lock to stay consistent
+        with ``record`` writes, then released before the next file so a
+        long export does not block writers for its full duration.
+        ``max_rows`` is a hard cap to keep CSV exports bounded.
+        """
+        f = filters or {}
+        days_back = max(1, min(int(days_back), 365))
+        emitted = 0
+        for path in self._iter_days(days_back):
+            with self._lock:
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+            # Reverse per-file lines so the overall stream is newest-first.
+            for line in reversed(text.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if self._matches(row, f):
+                    yield row
+                    emitted += 1
+                    if emitted >= max_rows:
+                        return
+
+    def search(
+        self,
+        filters: Optional[Dict[str, object]] = None,
+        days_back: int = 7,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> Dict[str, object]:
+        """Filtered, paginated audit query.
+
+        Returns ``{"events": [...], "limit", "offset", "days_back",
+        "scanned", "has_more"}``. ``scanned`` is the number of matching
+        rows considered up to ``offset + limit + 1`` so the UI can show
+        a "more available" indicator without a full count scan.
+        """
+        limit = max(1, min(int(limit), 1000))
+        offset = max(0, int(offset))
+        events: List[dict] = []
+        scanned = 0
+        has_more = False
+        for row in self.iter_search(filters, days_back=days_back, max_rows=offset + limit + 1):
+            if scanned >= offset and len(events) < limit:
+                events.append(row)
+            elif len(events) >= limit:
+                has_more = True
+                scanned += 1
+                break
+            scanned += 1
+        return {
+            "events": events,
+            "limit": limit,
+            "offset": offset,
+            "days_back": days_back,
+            "scanned": scanned,
+            "has_more": has_more,
+        }
+
+    def iter_csv(
+        self,
+        filters: Optional[Dict[str, object]] = None,
+        days_back: int = 30,
+        max_rows: int = 100_000,
+    ) -> Iterator[str]:
+        """Stream a CSV export of matching rows, header first.
+
+        Yields one CSV-encoded text chunk per row plus a leading header
+        row. Uses :mod:`csv` to handle quoting/escaping for free-form
+        fields like ``actor_label`` (which may contain commas).
+        """
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=list(self._CSV_FIELDS), extrasaction="ignore")
+        writer.writeheader()
+        yield buf.getvalue()
+        for row in self.iter_search(filters, days_back=days_back, max_rows=max_rows):
+            buf.seek(0)
+            buf.truncate(0)
+            safe = {k: row.get(k, "") for k in self._CSV_FIELDS}
+            writer.writerow(safe)
+            yield buf.getvalue()
 
     def prune(self, max_age_days: int, *, now: Optional[datetime] = None) -> List[str]:
         """Delete audit JSONL files older than ``max_age_days`` UTC days.

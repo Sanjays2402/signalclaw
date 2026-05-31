@@ -492,6 +492,122 @@ def create_app() -> FastAPI:
     def audit_days():
         return {"days": audit_log.list_days()}
 
+    def _audit_filters_from_query(
+        actor_label: str | None,
+        actor_key_hash: str | None,
+        method: str | None,
+        status: int | None,
+        status_min: int | None,
+        path_prefix: str | None,
+        path_contains: str | None,
+        action: str | None,
+        from_ts: str | None,
+        to_ts: str | None,
+    ) -> dict:
+        # Centralised so /audit/search and /audit/export.csv use exactly
+        # the same filter semantics. None / empty values become no-op so
+        # callers can omit any param.
+        return {
+            "actor_label": actor_label,
+            "actor_key_hash": actor_key_hash,
+            "method": method,
+            "status": status,
+            "status_min": status_min,
+            "path_prefix": path_prefix,
+            "path_contains": path_contains,
+            "action": action,
+            "from_ts": from_ts,
+            "to_ts": to_ts,
+        }
+
+    @app.get(
+        "/audit/search",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def audit_search(
+        actor_label: str | None = None,
+        actor_key_hash: str | None = None,
+        method: str | None = None,
+        status: int | None = None,
+        status_min: int | None = None,
+        path_prefix: str | None = None,
+        path_contains: str | None = None,
+        action: str | None = None,
+        from_ts: str | None = None,
+        to_ts: str | None = None,
+        days_back: int = 7,
+        limit: int = 200,
+        offset: int = 0,
+    ):
+        """Search audit events across multiple days with filters.
+
+        Filters are AND-combined. ``days_back`` is clamped to 1..365.
+        Results are newest-first. Use ``offset`` + ``limit`` to page.
+        Procurement use case: "every 4xx/5xx from key X over 30 days."
+        """
+        if days_back is None or days_back < 1:
+            days_back = 1
+        if days_back > 365:
+            days_back = 365
+        filters = _audit_filters_from_query(
+            actor_label, actor_key_hash, method, status, status_min,
+            path_prefix, path_contains, action, from_ts, to_ts,
+        )
+        return audit_log.search(
+            filters=filters,
+            days_back=days_back,
+            limit=limit,
+            offset=offset,
+        )
+
+    @app.get(
+        "/audit/export.csv",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def audit_export_csv(
+        actor_label: str | None = None,
+        actor_key_hash: str | None = None,
+        method: str | None = None,
+        status: int | None = None,
+        status_min: int | None = None,
+        path_prefix: str | None = None,
+        path_contains: str | None = None,
+        action: str | None = None,
+        from_ts: str | None = None,
+        to_ts: str | None = None,
+        days_back: int = 30,
+        max_rows: int = 100_000,
+    ):
+        """Stream a CSV export of matching audit events.
+
+        Same filter semantics as ``/audit/search``. Streamed so a 30-day
+        export of a busy install does not materialise in memory. The
+        returned filename pins UTC date range so downloads sort.
+        """
+        if days_back is None or days_back < 1:
+            days_back = 1
+        if days_back > 365:
+            days_back = 365
+        if max_rows is None or max_rows < 1:
+            max_rows = 1
+        if max_rows > 1_000_000:
+            max_rows = 1_000_000
+        filters = _audit_filters_from_query(
+            actor_label, actor_key_hash, method, status, status_min,
+            path_prefix, path_contains, action, from_ts, to_ts,
+        )
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        filename = f"audit-export-{today}-last{int(days_back)}d.csv"
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            audit_log.iter_csv(filters=filters, days_back=int(days_back), max_rows=int(max_rows)),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "content-disposition": f'attachment; filename="{filename}"',
+                "cache-control": "no-store",
+            },
+        )
+
     # --- user-managed API keys -------------------------------------------
     # These require the ``admin`` scope so a read-only key cannot mint a
     # trade-scoped key for itself. The dev fallback key has admin; in
