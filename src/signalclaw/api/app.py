@@ -280,7 +280,18 @@ def create_app() -> FastAPI:
         scopes = [s for s in scopes_in if s in allowed]
         if not scopes:
             scopes = ["read"]
-        rec, secret = api_key_store.create(label=label, scopes=scopes)
+        expires_in = body.get("expires_in_seconds")
+        ttl: int | None = None
+        if expires_in is not None:
+            try:
+                ttl = int(expires_in)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "expires_in_seconds must be an integer")
+            if ttl < 0 or ttl > 365 * 24 * 3600:
+                raise HTTPException(
+                    400, "expires_in_seconds must be between 0 and 31536000")
+        rec, secret = api_key_store.create(
+            label=label, scopes=scopes, expires_in_seconds=ttl)
         # Optional ip_allowlist on create. Validated by the store helper;
         # invalid CIDRs return 400 without leaving a half-configured key
         # because we revoke the just-minted key on failure.
@@ -310,6 +321,31 @@ def create_app() -> FastAPI:
             updated = api_key_store.set_ip_allowlist(key_id, cidrs)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
+
+    @app.put("/admin/keys/{key_id}/expiry",
+             dependencies=[Depends(require_scope("admin"))])
+    def admin_keys_set_expiry(key_id: str, body: dict):
+        """Set or clear a key's hard expiry.
+
+        Body: ``{"expires_in_seconds": <int>}``. Use ``0`` or ``null``
+        to clear an existing expiry. Maximum is one year so a stale UI
+        value cannot mint a multi-decade credential. SOC2-style hygiene:
+        keys should not live forever.
+        """
+        raw = body.get("expires_in_seconds", None) if body else None
+        ttl: int | None = None
+        if raw is not None:
+            try:
+                ttl = int(raw)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "expires_in_seconds must be an integer")
+            if ttl < 0 or ttl > 365 * 24 * 3600:
+                raise HTTPException(
+                    400, "expires_in_seconds must be between 0 and 31536000")
+        updated = api_key_store.set_expiry(key_id, ttl)
         if updated is None:
             raise HTTPException(404, "key not found")
         return updated.to_public()

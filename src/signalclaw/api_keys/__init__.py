@@ -89,6 +89,30 @@ def normalise_cidrs(cidrs: Iterable[str]) -> List[str]:
     return out
 
 
+def is_expired(stored: "StoredKey") -> bool:
+    """Return True if ``stored`` has a populated ``expires_at`` in the past.
+
+    Keys with no expiry are never expired. Unparseable or malformed
+    timestamps fail closed (treated as expired) so a corrupted file
+    cannot accidentally keep a credential alive past its intended
+    lifetime. The expected shape is the fixed-width ISO-8601 UTC
+    string produced by ``_iso_in`` / ``_now_iso``.
+    """
+    exp = (getattr(stored, "expires_at", None) or "").strip()
+    if not exp:
+        return False
+    try:
+        # strptime guards against arbitrary strings that would otherwise
+        # lex-compare in unintuitive ways (e.g. "not-a-date" > "2026-..").
+        datetime.strptime(exp, "%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return True
+    try:
+        return exp <= _now_iso()
+    except Exception:
+        return True
+
+
 def is_ip_allowed(stored: "StoredKey", client_ip: str) -> bool:
     """Return True if ``client_ip`` matches the key's allowlist.
 
@@ -138,11 +162,17 @@ class StoredKey:
     previous_hash: Optional[str] = None
     previous_grace_until: Optional[str] = None
     rotated_at: Optional[str] = None
+    # Optional hard expiry. SOC2-style hygiene requires that credentials
+    # cannot live forever. When set, ``lookup`` rejects the key once the
+    # ISO-8601 UTC timestamp is in the past and the cache is reloaded.
+    # ``None`` (the default) means the key never expires.
+    expires_at: Optional[str] = None
 
     def to_public(self) -> Dict:
         d = asdict(self)
         d.pop("hash")
         d.pop("previous_hash", None)
+        d["expired"] = is_expired(self)
         return d
 
 
@@ -164,6 +194,11 @@ class ApiKeyStore:
         idx: Dict[str, StoredKey] = {}
         for r in rows:
             if r.revoked:
+                continue
+            if is_expired(r):
+                # Treat hard-expired keys exactly like revoked ones: never
+                # indexed, never returned by lookup. The on-disk row is
+                # preserved (audit trail) until an admin prunes it.
                 continue
             idx[r.hash] = r
             # Also index the grace-window predecessor so a still-rotating
@@ -189,6 +224,7 @@ class ApiKeyStore:
                 previous_hash=r.get("previous_hash") or None,
                 previous_grace_until=r.get("previous_grace_until") or None,
                 rotated_at=r.get("rotated_at") or None,
+                expires_at=r.get("expires_at") or None,
             ))
         return out
 
@@ -199,11 +235,18 @@ class ApiKeyStore:
     def list(self) -> List[StoredKey]:
         return self._read()
 
-    def create(self, label: str, scopes: Optional[List[str]] = None) -> tuple[StoredKey, str]:
+    def create(
+        self,
+        label: str,
+        scopes: Optional[List[str]] = None,
+        expires_in_seconds: Optional[int] = None,
+    ) -> tuple[StoredKey, str]:
         """Mint a new key. Returns (record, full_secret).
 
         The full secret is only returned here. Callers must surface it
-        to the user immediately and never log it.
+        to the user immediately and never log it. ``expires_in_seconds``
+        sets an optional hard expiry (clamped to one year) so credentials
+        cannot live forever; pass ``None`` or ``0`` for no expiry.
         """
         label = (label or "").strip()[:80] or "unnamed"
         scope_set: Set[str] = set(scopes or ["read"])
@@ -211,6 +254,11 @@ class ApiKeyStore:
         scope_set.discard("admin")
         if not scope_set:
             scope_set = {"read"}
+        expires_at: Optional[str] = None
+        if expires_in_seconds:
+            ttl = max(0, min(int(expires_in_seconds), 365 * 24 * 3600))
+            if ttl > 0:
+                expires_at = _iso_in(ttl)
         secret = _mint()
         rec = StoredKey(
             id=secrets.token_hex(8),
@@ -219,6 +267,7 @@ class ApiKeyStore:
             prefix=secret[:12],
             scopes=sorted(scope_set),
             created_at=_now_iso(),
+            expires_at=expires_at,
         )
         with self._lock:
             rows = self._read()
@@ -226,6 +275,33 @@ class ApiKeyStore:
             self._write(rows)
             self._reload_index()
         return rec, secret
+
+    def set_expiry(self, key_id: str, expires_in_seconds: Optional[int]) -> Optional[StoredKey]:
+        """Set or clear a key's hard expiry.
+
+        ``expires_in_seconds=None`` or ``0`` clears the expiry (the key
+        becomes long-lived again). Positive values are clamped to one
+        year so a stale dashboard value cannot create a multi-decade
+        credential. Returns the updated record or ``None`` if the key
+        is missing or revoked.
+        """
+        new_exp: Optional[str] = None
+        if expires_in_seconds:
+            ttl = max(0, min(int(expires_in_seconds), 365 * 24 * 3600))
+            if ttl > 0:
+                new_exp = _iso_in(ttl)
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    r.expires_at = new_exp
+                    updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
 
     def set_ip_allowlist(self, key_id: str, cidrs: Iterable[str]) -> Optional[StoredKey]:
         """Replace the IP allowlist on a key. Validates every CIDR.
@@ -321,6 +397,12 @@ class ApiKeyStore:
             with self._lock:
                 self._reload_index()
             return None
+        # Hard-expired keys fail closed. Reload the index so the now-dead
+        # hash is dropped from the cache rather than served on the next hit.
+        if is_expired(rec):
+            with self._lock:
+                self._reload_index()
+            return None
         # record last_used_at lazily; only persist when it advances by >60s
         try:
             now = _now_iso()
@@ -339,4 +421,10 @@ class ApiKeyStore:
         return rec
 
 
-__all__ = ["ApiKeyStore", "StoredKey", "normalise_cidrs", "is_ip_allowed"]
+__all__ = [
+    "ApiKeyStore",
+    "StoredKey",
+    "normalise_cidrs",
+    "is_ip_allowed",
+    "is_expired",
+]

@@ -26,6 +26,8 @@ type StoredKey = {
   last_used_at: string | null;
   revoked: boolean;
   ip_allowlist?: string[];
+  expires_at?: string | null;
+  expired?: boolean;
 };
 
 type KeyList = { keys: StoredKey[] };
@@ -42,6 +44,10 @@ export default function ApiKeysPage() {
   const [creating, setCreating] = useState(false);
   const [label, setLabel] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read"]);
+  // Hard expiry on a new key. "0" means never expires. SOC2 hygiene
+  // strongly prefers credentials with a bounded lifetime; the default
+  // here is a 90-day key so the secure path is the easy path.
+  const [expirySeconds, setExpirySeconds] = useState<number>(90 * 24 * 3600);
   const [created, setCreated] = useState<Created | null>(null);
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -136,7 +142,11 @@ export default function ApiKeysPage() {
     try {
       const out = await api<Created>("/admin/keys", {
         method: "POST",
-        body: JSON.stringify({ label: label.trim(), scopes }),
+        body: JSON.stringify({
+          label: label.trim(),
+          scopes,
+          expires_in_seconds: expirySeconds > 0 ? expirySeconds : null,
+        }),
       });
       setCreated(out);
       setLabel("");
@@ -263,6 +273,27 @@ export default function ApiKeysPage() {
                 UI. This prevents privilege escalation.
               </p>
             </fieldset>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest muted mb-1">
+                Expires
+              </label>
+              <select
+                value={String(expirySeconds)}
+                onChange={(e) => setExpirySeconds(Number(e.target.value))}
+                className="w-full bg-black/30 border border-[var(--border)] rounded-sm px-2 py-1.5 text-[13px] focus:outline-none focus:border-[var(--amber)]"
+              >
+                <option value="604800">7 days</option>
+                <option value="2592000">30 days</option>
+                <option value="7776000">90 days (recommended)</option>
+                <option value="15552000">180 days</option>
+                <option value="31536000">1 year (max)</option>
+                <option value="0">Never (not recommended)</option>
+              </select>
+              <p className="text-[11px] muted mt-1">
+                Expired keys are rejected at the gateway. Rotate before the
+                deadline to avoid downtime.
+              </p>
+            </div>
             {createErr && (
               <div className="flex items-start gap-2 p-2 border border-red-500/40 bg-red-500/10 rounded-sm text-[12px]">
                 <WarningCircle size={16} weight="duotone" className="text-red-400 shrink-0 mt-0.5" />
@@ -326,6 +357,7 @@ export default function ApiKeysPage() {
                   <div className="text-[11px] muted mono mt-0.5">
                     {k.prefix}… · created {fmtDate(k.created_at)}
                     {k.last_used_at ? ` · last used ${fmtDate(k.last_used_at)}` : " · never used"}
+                    {k.expires_at ? ` · expires ${fmtDate(k.expires_at)}` : " · no expiry"}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">

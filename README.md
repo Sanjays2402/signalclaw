@@ -6,6 +6,24 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **API key hard expiry (SOC2-style credential lifetime cap)**. Every user-managed API key can now carry an optional `expires_at` deadline so credentials cannot live forever. The dashboard create form at `/settings/keys` defaults new keys to 90 days (7 / 30 / 90 / 180 / 365 day presets, plus an explicit "Never" with a warning), and existing keys can have their expiry set or cleared via `PUT /admin/keys/{id}/expiry`. Expired keys are rejected at auth time with a 401 even if their scopes are still valid; the in-memory index drops the dead hash on the next request so a stale cache cannot keep a credential alive past its deadline. Hard-cap is one year so a forgotten dashboard value cannot mint a multi-decade key, and the helper fails closed on garbled timestamps so a corrupted JSON file cannot extend a credential by accident. Covered by `tests/test_api_keys_expiry.py` (creation with TTL, force-expire on disk + 401 on reuse, bounds validation, fail-closed helper).
+
+  ```bash
+  # mint a 30-day read key
+  curl -X POST http://localhost:7431/admin/keys \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H "content-type: application/json" \
+    -d '{"label":"laptop","scopes":["read"],"expires_in_seconds":2592000}'
+
+  # set / clear expiry on an existing key (null clears it)
+  curl -X PUT http://localhost:7431/admin/keys/<key_id>/expiry \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+    -H "content-type: application/json" \
+    -d '{"expires_in_seconds":7776000}'
+  ```
+
+  Try it locally: `make api` then open `http://localhost:3000/settings/keys` and create a key with the new "Expires" selector.
+
 - **API key rotation with grace window**. Rotate any user-managed API key in place without downtime. The new endpoint mints a fresh secret on the same key id (scopes, label, rate limit, and IP allowlist all preserved) and optionally keeps the previous secret valid for a bounded overlap so live integrations can roll over before the old credential stops working. The plaintext secret is returned exactly once and never logged; the predecessor hash is stored only for the grace window and dropped on the next index reload after it expires. Grace is clamped to 7 days so a forgotten rotation cannot turn into a long-lived dual credential. Surfaced in the dashboard at `/settings/keys` (the existing "Rotate" button now prompts for grace seconds) and via the admin API. The previous hash is never returned by `GET /admin/keys`, so an admin compromise cannot exfiltrate the still-valid old secret.
 
   ```bash
