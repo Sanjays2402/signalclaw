@@ -13,6 +13,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { maybeAutoSweep } from "./retentionStore.ts";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "audit.jsonl");
@@ -186,6 +187,9 @@ async function readAllLines(): Promise<AuditEvent[]> {
 export async function queryAudit(
   input: QueryInput = {},
 ): Promise<{ events: AuditEvent[]; total: number; limit: number; offset: number }> {
+  try {
+    await maybeAutoSweep();
+  } catch {}
   const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
   const offset = Math.max(input.offset ?? 0, 0);
   const all = await readAllLines();

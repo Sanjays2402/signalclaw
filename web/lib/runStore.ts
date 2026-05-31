@@ -4,6 +4,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { maybeAutoSweep } from "./retentionStore.ts";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "runs.json");
@@ -127,6 +128,11 @@ function genId(): string {
 }
 
 export async function listRuns(): Promise<SavedRun[]> {
+  // Best-effort retention sweep so the list never serves rows past the policy
+  // window. Throttled to once/hour inside the helper.
+  try {
+    await maybeAutoSweep();
+  } catch {}
   const s = await readStore();
   return [...s.runs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 }

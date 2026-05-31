@@ -6,6 +6,22 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Configurable data retention with on-demand sweep**. SOC2 CC6 and GDPR Article 5(1)(e) both want a documented data-minimisation control: how long does the platform keep operational data, who set the window, and when was it last enforced? SignalClaw now ships a per-deployment retention policy stored at `<data_dir>/retention.json` covering three classes of operational data: saved runs (`runs_days`), the authenticated audit log including the rotated `audit.jsonl.1` half (`audit_days`), and outbound webhook delivery attempts (`webhook_deliveries_days`). Zero on any field means retain forever, matching prior behaviour for fresh installs. The sweep is idempotent and is invoked three ways: explicitly via `POST /api/admin/retention/run`, opportunistically inside `listRuns`, `queryAudit`, and `listDeliveries` on a one-hour throttle so a long-running deployment converges without a cron, and implicitly after any `PUT /api/admin/retention` policy change. The policy update endpoint writes a before/after diff to the audit log with `reason: retention.policy.updated` so a security reviewer can prove the window did not silently shrink. Unparseable audit lines are retained (we never silently destroy data we cannot read). Subscriptions themselves are never deleted; only their delivery attempt history is pruned. The dashboard at `/settings/retention` exposes the policy with input validation (whole-number days, 0 to 3650), a confirm-gated Run sweep now button, and a Last sweep card that shows the timestamp and per-class purge counts from the most recent run. Covered by `tests/retention.test.mjs` (default is retain-forever, non-numeric clamps to zero, zero policy is a no-op, runs older than the window are removed and edge cases at the cutoff are kept, audit lines purge across both current and rotated files, webhook deliveries are pruned by `delivered_at`, last-sweep state persists, and `maybeAutoSweep` is throttled and short-circuits on a zero policy).
+
+  Try it locally: `pnpm --filter signalclaw-web dev` then visit http://localhost:7430/settings/retention and
+  ```bash
+  # set: keep runs 90 days, audit 180 days, webhook deliveries 30 days
+  curl -X PUT http://localhost:7430/api/admin/retention \
+    -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+    -H "content-type: application/json" \
+    -d '{"runs_days":90,"audit_days":180,"webhook_deliveries_days":30}'
+
+  # trigger an immediate sweep
+  curl -X POST http://localhost:7430/api/admin/retention/run \
+    -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY"
+  # => { "ran_at": "...", "counts": { "runs": 12, "audit": 803, "webhook_deliveries": 4 }, "policy": { ... } }
+  ```
+
 - **Per-API-key tenant isolation for webhook subscriptions**. Webhooks carry secrets and trigger downstream side effects, so cross-tenant leakage at the subscription layer is a procurement blocker. Every `WebhookSubscription` now carries an `owner_key_id` that is stamped from the calling API key's stable `StoredKey.id` at creation time and persisted to `<data_dir>/webhooks.json`. `GET /webhooks` returns only the caller's own rows, `DELETE /webhooks/{id}` returns `404` (not `403`) for a sibling tenant's id so existence does not leak, `POST /webhooks/fire/latest` fans out only to subscriptions the caller owns via a `_ScopedWebhookStore` adapter that still lets the deliverer persist last-status updates, `GET /webhooks/deliveries` filters log rows by visible subscription ids, and `POST /webhooks/deliveries/{attempt_id}/replay` rejects replay attempts whose underlying subscription the caller cannot see. Admin-role keys (user-managed `admin` scope, env-registry keys with `admin`, and the legacy operator-default `SIGNALCLAW_API_KEY`) see and act on every tenant's webhooks, matching the existing admin console expectation. Legacy rows that predate this field (`owner_key_id` is `None`) are visible only to admins, so a brand-new user key cannot inherit data created by the operator. Covered by `tests/test_webhooks_tenant_isolation.py` (Alice's webhook is invisible to Bob, Bob's `DELETE` and replay both 404 without leaking existence, admin can see and delete both, and Bob cannot list a delivery row whose subscription Alice owns).
 
   Try it locally: `make api` then

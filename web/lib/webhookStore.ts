@@ -350,6 +350,10 @@ export async function listDeliveries(
   subscriptionId?: string,
   status?: "ok" | "failed",
 ): Promise<DeliveryAttempt[]> {
+  try {
+    const { maybeAutoSweep } = await import("./retentionStore.ts");
+    await maybeAutoSweep();
+  } catch {}
   const log = await readLog();
   let filtered = subscriptionId ? log.filter((d) => d.subscription_id === subscriptionId) : log;
   if (status === "ok") {

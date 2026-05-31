@@ -21,6 +21,7 @@ import {
   CheckCircle,
   Key,
   Globe,
+  ArchiveBox,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -103,6 +104,12 @@ function Settings() {
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
             <Globe size={14} weight="duotone" /> Network
+          </Link>
+          <Link
+            href="/settings/retention"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <ArchiveBox size={14} weight="duotone" /> Retention
           </Link>
           <Link
             href="/usage"
