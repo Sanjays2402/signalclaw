@@ -81,6 +81,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <NavLink href="/fx">FX</NavLink>
           <NavLink href="/notifier">Notifier</NavLink>
           <NavLink href="/webhooks">Webhooks</NavLink>
+          <NavLink href="/settings">Settings</NavLink>
           <NavLink href="/settings/keys">Keys</NavLink>
           <NavLink href="/usage">Usage</NavLink>
           <NavLink href="/about">About</NavLink>

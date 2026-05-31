@@ -911,6 +911,34 @@ secret manager of choice. Rotating a key is a single environment-variable
 change plus a pod restart; the legacy single-key path stays compatible with
 the RBAC registry described above.
 
+## Account settings
+
+Profile, notification preferences, and GDPR-style data export/delete now live
+at `/settings`. Try it locally:
+
+```bash
+cd web && npm run dev
+# open http://localhost:7430/settings
+
+# read current settings
+curl -s http://localhost:7430/api/settings | jq
+
+# update profile
+curl -s -X PATCH http://localhost:7430/api/settings \
+  -H 'content-type: application/json' \
+  -d '{"profile":{"display_name":"Sanjay","email":"you@example.com","base_currency":"USD"}}' | jq
+
+# download an account bundle (settings + runs + journal + watchlist + alerts + webhooks + batch + quota)
+curl -s http://localhost:7430/api/settings/export -OJ
+
+# permanently delete all local account data
+curl -s -X POST http://localhost:7430/api/settings/delete \
+  -H 'content-type: application/json' -d '{"confirm":"DELETE"}'
+```
+
+State lives in `web/.data/settings.json` alongside the other local stores.
+Run the store tests with `node --experimental-strip-types --test web/tests/settingsStore.test.mjs`.
+
 ---
 
 Not investment advice. Paper-trading and research use only. See `FINANCIAL_DISCLAIMER.md`.
