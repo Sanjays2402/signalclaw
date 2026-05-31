@@ -21,6 +21,7 @@ import {
   FileText,
   ChartBar,
 } from "@phosphor-icons/react/dist/ssr";
+import DigestSubscriptions from "./DigestSubscriptions";
 
 type Digest = {
   range: { days: number; since: string; until: string };
@@ -269,6 +270,8 @@ export default function DigestPage() {
           </Card>
         </>
       )}
+
+      <DigestSubscriptions />
     </div>
   );
 }

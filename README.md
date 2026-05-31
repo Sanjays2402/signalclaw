@@ -6,6 +6,7 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Digest subscriptions** at `/digest`: subscribe any webhook URL (Slack incoming, Discord, n8n, Zapier, custom) to a daily or weekly SignalClaw activity digest. Real outbound HTTP POST signed with HMAC-SHA256 in `x-signalclaw-signature`, one automatic retry on network errors and 5xx, per-subscription delivery log with status, attempt, and byte count. Schedule by pinging `POST /api/digest/cron` (optionally protected by `DIGEST_CRON_TOKEN`) from cron, Vercel scheduled functions, or any pinger. Pause, resume, rotate the secret, and trigger a one-off send from the UI.
 - **Alerts, end to end** at `/alerts`: arm price-above / price-below / percent-change rules with cooldown windows, run `POST /api/alerts/check` to evaluate them against live or supplied prices, and browse the paginated fire history filtered by ticker. Records land in `web/.data/alerts.json` with atomic writes, and every fire posts to the activity feed.
 - **Activity digest** at `/digest`: rolling summary of saved runs, webhook deliveries, batches, and alerts over a selectable window (1 / 3 / 7 / 14 / 30 / 90 days). Renders text + HTML previews of what the email digest will contain. Backed by `GET /api/digest/preview?days=N&format=json|text|html`.
 - **Compare runs** at `/compare`: pick any two saved regime runs and overlay their normalized price series, regime mix, and window return. Backed by `GET /api/runs/compare?a=ID&b=ID`.
@@ -22,7 +23,15 @@ curl -s 'http://localhost:7430/api/digest/preview?days=7' | jq '.headline, .stat
 # 3. Or grab a renderable HTML email body
 curl -s 'http://localhost:7430/api/digest/preview?days=7&format=html' > digest.html
 
-# 4. Arm an alert and fire a check against a supplied price
+# 4. Subscribe a webhook to the digest, then fire one immediately
+curl -s -XPOST http://localhost:7430/api/digest/subscriptions \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://hooks.slack.com/services/T000/B000/XXX","label":"team","cadence":"weekly","format":"slack"}'
+curl -s 'http://localhost:7430/api/digest/subscriptions' | jq '.subscriptions[0].id' \
+  | xargs -I{} curl -s -XPOST http://localhost:7430/api/digest/subscriptions/{}/deliver | jq '.ok,.status,.attempt'
+curl -s 'http://localhost:7430/api/digest/deliveries?limit=5' | jq '.deliveries'
+
+# 5. Arm an alert and fire a check against a supplied price
 curl -s -XPOST http://localhost:7430/api/alerts \
   -H 'content-type: application/json' \
   -d '{"ticker":"NVDA","condition":"price_above","value":100,"cooldown_hours":1}'
