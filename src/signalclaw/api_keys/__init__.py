@@ -25,6 +25,54 @@ _PREFIX = "sck_"  # signalclaw key
 _SECRET_BYTES = 24  # 32 chars of url-safe b64
 
 
+# --- RBAC roles -------------------------------------------------------
+# Enterprise procurement reviewers expect classic four-tier RBAC layered
+# on top of the scope system, not just a flat scope list. A role caps
+# the maximum scopes a key can ever exercise: requested scopes are
+# intersected with the role's allowed set, and the role gets surfaced
+# in admin UIs so an owner can see who has what at a glance.
+#
+# * ``viewer``  -- read only. Cannot mutate anything.
+# * ``member``  -- read + trade. Cannot manage keys, MFA, or org settings.
+# * ``admin``   -- read + trade + admin (manage keys, members, audit).
+# * ``owner``   -- everything admin can do, plus is recorded as the
+#                  workspace owner for billing and ownership transfers.
+#                  At the API layer owner == admin scopes.
+ROLES: tuple[str, ...] = ("owner", "admin", "member", "viewer")
+ROLE_SCOPES: Dict[str, Set[str]] = {
+    "owner":  {"read", "trade", "admin"},
+    "admin":  {"read", "trade", "admin"},
+    "member": {"read", "trade"},
+    "viewer": {"read"},
+}
+DEFAULT_ROLE = "member"
+
+
+def normalise_role(role: Optional[str]) -> str:
+    """Coerce a possibly-bad role string to a valid role.
+
+    Unknown or empty roles fall through to ``DEFAULT_ROLE`` rather than
+    raising so a corrupted on-disk row can never silently escalate to a
+    higher-privilege role. The caller can still pre-validate at the API
+    boundary with ``ROLES`` for a 400 response.
+    """
+    r = (role or "").strip().lower()
+    return r if r in ROLE_SCOPES else DEFAULT_ROLE
+
+
+def cap_scopes_to_role(scopes: Iterable[str], role: Optional[str]) -> List[str]:
+    """Return the requested scopes intersected with the role's allowed set.
+
+    This is the single chokepoint that enforces RBAC: even if a stored
+    row claims ``["admin"]`` scopes, a ``viewer`` role drops it to
+    ``["read"]``. Always returns at least ``["read"]`` so an authed
+    key can still do something (typically self-introspection).
+    """
+    allowed = ROLE_SCOPES[normalise_role(role)]
+    out = sorted({s for s in (scopes or []) if s in allowed})
+    return out or ["read"]
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -167,12 +215,21 @@ class StoredKey:
     # ISO-8601 UTC timestamp is in the past and the cache is reloaded.
     # ``None`` (the default) means the key never expires.
     expires_at: Optional[str] = None
+    # RBAC role. ``member`` by default so existing rows that predate
+    # this field keep working with read+trade access (matches the old
+    # implicit behaviour). ``owner``/``admin`` carry the ``admin`` scope.
+    role: str = DEFAULT_ROLE
 
     def to_public(self) -> Dict:
         d = asdict(self)
         d.pop("hash")
         d.pop("previous_hash", None)
         d["expired"] = is_expired(self)
+        # Expose the effective scopes after the role cap so the UI and
+        # any operator script sees what the key can actually do, not
+        # what an older on-disk row happens to list.
+        d["role"] = normalise_role(self.role)
+        d["effective_scopes"] = cap_scopes_to_role(self.scopes, self.role)
         return d
 
 
@@ -225,6 +282,7 @@ class ApiKeyStore:
                 previous_grace_until=r.get("previous_grace_until") or None,
                 rotated_at=r.get("rotated_at") or None,
                 expires_at=r.get("expires_at") or None,
+                role=normalise_role(r.get("role")),
             ))
         return out
 
@@ -240,6 +298,7 @@ class ApiKeyStore:
         label: str,
         scopes: Optional[List[str]] = None,
         expires_in_seconds: Optional[int] = None,
+        role: Optional[str] = None,
     ) -> tuple[StoredKey, str]:
         """Mint a new key. Returns (record, full_secret).
 
@@ -249,9 +308,15 @@ class ApiKeyStore:
         cannot live forever; pass ``None`` or ``0`` for no expiry.
         """
         label = (label or "").strip()[:80] or "unnamed"
+        role_norm = normalise_role(role)
         scope_set: Set[str] = set(scopes or ["read"])
-        # never let users grant themselves admin via this surface
-        scope_set.discard("admin")
+        # ``admin`` may only land in the scope set when the role itself
+        # carries admin (owner / admin). For member / viewer the cap
+        # below strips it anyway, but discarding here also stops a
+        # buggy caller from persisting a misleading scope list.
+        if "admin" not in ROLE_SCOPES[role_norm]:
+            scope_set.discard("admin")
+        scope_set = set(cap_scopes_to_role(scope_set, role_norm))
         if not scope_set:
             scope_set = {"read"}
         expires_at: Optional[str] = None
@@ -268,6 +333,7 @@ class ApiKeyStore:
             scopes=sorted(scope_set),
             created_at=_now_iso(),
             expires_at=expires_at,
+            role=role_norm,
         )
         with self._lock:
             rows = self._read()
@@ -297,6 +363,32 @@ class ApiKeyStore:
                 if r.id == key_id and not r.revoked:
                     r.expires_at = new_exp
                     updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
+
+    def set_role(self, key_id: str, role: str) -> Optional[StoredKey]:
+        """Change a key's RBAC role. Re-caps scopes to the new role.
+
+        Raises ``ValueError`` for an unknown role so the API layer can
+        return a structured 400 instead of silently downgrading the
+        caller's request to ``member``. Returns ``None`` if the key is
+        missing or revoked.
+        """
+        r = (role or "").strip().lower()
+        if r not in ROLE_SCOPES:
+            raise ValueError(
+                f"invalid role {role!r}; must be one of {sorted(ROLES)}")
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for row in rows:
+                if row.id == key_id and not row.revoked:
+                    row.role = r
+                    row.scopes = cap_scopes_to_role(row.scopes, r)
+                    updated = row
                     break
             if updated is not None:
                 self._write(rows)
@@ -427,4 +519,9 @@ __all__ = [
     "normalise_cidrs",
     "is_ip_allowed",
     "is_expired",
+    "ROLES",
+    "ROLE_SCOPES",
+    "DEFAULT_ROLE",
+    "normalise_role",
+    "cap_scopes_to_role",
 ]

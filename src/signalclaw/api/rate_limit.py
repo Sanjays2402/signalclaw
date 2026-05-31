@@ -158,7 +158,19 @@ def _resolve_key(api_key):
     if store is not None and api_key:
         stored = store.lookup(api_key)
         if stored is not None:
-            return ApiKey(key=api_key, scopes=set(stored.scopes),
+            # RBAC: the role caps what the key can do. Intersect the
+            # stored scope list with the role's allowed set so an older
+            # row that lists more than its role permits cannot keep its
+            # old privileges after a downgrade. Falls back to the raw
+            # scopes if the api_keys helper is unavailable for any
+            # reason (defensive: never break auth on bookkeeping).
+            try:
+                from ..api_keys import cap_scopes_to_role  # local import
+                effective = set(cap_scopes_to_role(
+                    stored.scopes, getattr(stored, "role", None)))
+            except Exception:
+                effective = set(stored.scopes)
+            return ApiKey(key=api_key, scopes=effective,
                           label=stored.label)
     return None
 

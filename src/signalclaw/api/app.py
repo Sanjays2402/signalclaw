@@ -350,14 +350,31 @@ def create_app() -> FastAPI:
 
     @app.post("/admin/keys", dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_create(body: dict):
+        from ..api_keys import ROLES, ROLE_SCOPES, DEFAULT_ROLE
         label = str(body.get("label") or "").strip()
+        # RBAC role. Defaults to ``member`` (read+trade) so existing
+        # callers that do not pass a role keep their prior behaviour.
+        role_in = (body.get("role") or DEFAULT_ROLE)
+        if not isinstance(role_in, str) or role_in.strip().lower() not in ROLES:
+            raise HTTPException(
+                400, f"role must be one of {sorted(ROLES)}")
+        role = role_in.strip().lower()
         scopes_in = body.get("scopes") or ["read"]
         if not isinstance(scopes_in, list) or not all(isinstance(s, str) for s in scopes_in):
             raise HTTPException(400, "scopes must be a list of strings")
-        allowed = {"read", "trade"}
+        # Scope grant is capped by the role's permitted set. ``admin``
+        # scope is allowed only when the role itself carries admin
+        # (owner / admin). A viewer key can never end up with trade.
+        allowed = ROLE_SCOPES[role]
         scopes = [s for s in scopes_in if s in allowed]
+        # Roles that carry the admin scope should always have it on the
+        # minted key, even if the caller did not pass it in scopes_in.
+        # Members and viewers can never hold admin.
+        if "admin" in allowed:
+            scopes.append("admin")
         if not scopes:
-            scopes = ["read"]
+            # always grant at least read; otherwise the key is useless.
+            scopes = sorted({"read"} & allowed) or ["read"]
         expires_in = body.get("expires_in_seconds")
         ttl: int | None = None
         if expires_in is not None:
@@ -369,7 +386,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(
                     400, "expires_in_seconds must be between 0 and 31536000")
         rec, secret = api_key_store.create(
-            label=label, scopes=scopes, expires_in_seconds=ttl)
+            label=label, scopes=scopes, expires_in_seconds=ttl, role=role)
         # Optional ip_allowlist on create. Validated by the store helper;
         # invalid CIDRs return 400 without leaving a half-configured key
         # because we revoke the just-minted key on failure.
@@ -434,6 +451,26 @@ def create_app() -> FastAPI:
         if not ok:
             raise HTTPException(404, "key not found")
         return {"revoked": key_id}
+
+    @app.put("/admin/keys/{key_id}/role",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_keys_set_role(key_id: str, body: dict):
+        """Change an API key's RBAC role.
+
+        Body: ``{"role": "owner|admin|member|viewer"}``. Re-caps the
+        stored scopes to the new role, so a downgrade immediately
+        revokes any privileges the role no longer permits.
+        """
+        role = (body or {}).get("role")
+        if not isinstance(role, str):
+            raise HTTPException(400, "role must be a string")
+        try:
+            updated = api_key_store.set_role(key_id, role)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
 
     @app.post("/admin/keys/{key_id}/rotate",
               dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])

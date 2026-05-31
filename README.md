@@ -6,6 +6,17 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **RBAC roles on every API key (owner, admin, member, viewer)**. SignalClaw API keys now carry an explicit role that caps what the key can do, layered on top of the existing scope system. `owner` and `admin` carry the `admin` scope (manage keys, sessions, audit, MFA, GDPR). `member` carries `read` + `trade`. `viewer` is read only and cannot mutate anything, even if the request lists the `trade` scope. The role is the chokepoint: on every request, the resolved key's stored scopes are intersected with the role's allow list, so a downgrade from `admin` to `viewer` immediately revokes the admin scope on the next request without touching the secret. The dashboard at `/settings/keys` adds a role picker on create and a per-key Role button to change it later, both gated by `admin` scope plus MFA. The new endpoint is `PUT /admin/keys/{id}/role` with body `{"role":"owner|admin|member|viewer"}`; unknown roles return 400 and unknown keys return 404. Covered by `tests/test_api_keys_rbac.py` (viewer cannot write even when trade was requested, member cannot reach admin routes, role downgrade revokes admin on next request, unknown roles rejected at create and update). Existing keys that predate this field default to `member` so nothing breaks on upgrade.
+
+  Try it locally: `make api` then
+  ```bash
+  curl -X POST http://localhost:7431/admin/keys \
+    -H "x-api-key: $SIGNALCLAW_API_KEY" -H "content-type: application/json" \
+    -d '{"label":"analyst-readonly","role":"viewer"}'
+  # => 200 {"role":"viewer","effective_scopes":["read"],"secret":"sck_..."}
+  ```
+  Open `http://localhost:3000/settings/keys` to see the role picker and per-key role badge.
+
 - **SSRF guard on outbound webhook destinations**. Enterprise security review rejects any product that lets a user register an arbitrary webhook URL and have the server POST to it without validation. SignalClaw now refuses webhook destinations that resolve to loopback (`127.0.0.0/8`, `::1`), link-local (`169.254.0.0/16` including the EC2/GCP metadata IP, `fe80::/10`), RFC1918 private space, multicast, or reserved ranges. The check runs at subscribe time in `POST /webhooks` so bad rows never persist, and again inside `_default_http` on every delivery attempt (including retries and byte-for-byte replays) so a hostname whose A record flips to internal space after subscribe is still blocked. URLs with embedded credentials (`https://user:pass@host/...`) and non-http(s) schemes are rejected. Operators can pin destinations to a fixed set via `SIGNALCLAW_WEBHOOK_HOST_ALLOWLIST=hook.example.com,events.example.com` (suffix match against subdomains, so `a.hook.example.com` matches `hook.example.com`); when set, only listed hosts are allowed. `SIGNALCLAW_WEBHOOK_ALLOW_PRIVATE=1` opts the guard out for dev fixtures and is the only thing the test suite uses to keep the existing `*.test` fakes working. Covered by `tests/test_webhooks_ssrf.py` (loopback, EC2 metadata IP, RFC1918, credentialed URLs, non-http schemes, unresolvable hosts, allowlist allow + deny, delivery-time refusal via `_default_http`, and policy parsing).
 
   Try it locally: `make api` then

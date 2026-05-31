@@ -22,6 +22,8 @@ type StoredKey = {
   label: string;
   prefix: string;
   scopes: string[];
+  effective_scopes?: string[];
+  role?: string;
   created_at: string;
   last_used_at: string | null;
   revoked: boolean;
@@ -44,6 +46,11 @@ export default function ApiKeysPage() {
   const [creating, setCreating] = useState(false);
   const [label, setLabel] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read"]);
+  // RBAC role. Defaults to ``member`` so the key gets read + trade but
+  // never lands with admin unless an operator explicitly picks owner
+  // or admin (those carry the admin scope automatically).
+  const [role, setRole] = useState<"owner" | "admin" | "member" | "viewer">("member");
+  const [changingRole, setChangingRole] = useState<string | null>(null);
   // Hard expiry on a new key. "0" means never expires. SOC2 hygiene
   // strongly prefers credentials with a bounded lifetime; the default
   // here is a 90-day key so the secure path is the easy path.
@@ -145,12 +152,14 @@ export default function ApiKeysPage() {
         body: JSON.stringify({
           label: label.trim(),
           scopes,
+          role,
           expires_in_seconds: expirySeconds > 0 ? expirySeconds : null,
         }),
       });
       setCreated(out);
       setLabel("");
       setScopes(["read"]);
+      setRole("member");
       setCreating(false);
       mutate();
     } catch (err) {
@@ -163,6 +172,33 @@ export default function ApiKeysPage() {
       }
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onChangeRole(id: string, currentRole: string, displayLabel: string) {
+    const choices = ["owner", "admin", "member", "viewer"] as const;
+    const ans = window.prompt(
+      `Change role for "${displayLabel}".\n\nCurrent role: ${currentRole}\n\nEnter one of: ${choices.join(", ")}.\n\nowner / admin   read + trade + admin (manage keys, audit, members)\nmember          read + trade (cannot manage keys or admin)\nviewer          read only (cannot mutate anything)`,
+      currentRole,
+    );
+    if (ans === null) return;
+    const next = ans.trim().toLowerCase();
+    if (!choices.includes(next as typeof choices[number])) {
+      window.alert(`Role must be one of: ${choices.join(", ")}`);
+      return;
+    }
+    if (next === currentRole) return;
+    setChangingRole(id);
+    try {
+      await api(`/admin/keys/${id}/role`, {
+        method: "PUT",
+        body: JSON.stringify({ role: next }),
+      });
+      mutate();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChangingRole(null);
     }
   }
 
@@ -252,6 +288,45 @@ export default function ApiKeysPage() {
             </div>
             <fieldset>
               <legend className="block text-[10px] uppercase tracking-widest muted mb-1">
+                Role
+              </legend>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {([
+                  { id: "viewer", title: "Viewer", desc: "Read only. Cannot mutate." },
+                  { id: "member", title: "Member", desc: "Read and trade. No admin." },
+                  { id: "admin", title: "Admin", desc: "Manage keys, MFA, audit." },
+                  { id: "owner", title: "Owner", desc: "Workspace owner. Same as admin." },
+                ] as const).map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={`flex items-start gap-2 px-2 py-1.5 border rounded-sm cursor-pointer text-[12px] ${
+                      role === opt.id
+                        ? "border-[var(--amber)] bg-white/[0.04]"
+                        : "border-[var(--border)] hover:bg-white/[0.03]"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="role"
+                      className="mt-0.5"
+                      checked={role === opt.id}
+                      onChange={() => setRole(opt.id)}
+                    />
+                    <span>
+                      <span className="font-medium">{opt.title}</span>
+                      <span className="block text-[11px] muted">{opt.desc}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] muted mt-2">
+                Role caps what the key can do. Selected scopes are intersected
+                with the role allow list. Admin and owner pick up the admin
+                scope automatically.
+              </p>
+            </fieldset>
+            <fieldset>
+              <legend className="block text-[10px] uppercase tracking-widest muted mb-1">
                 Scopes
               </legend>
               <div className="flex gap-2 flex-wrap">
@@ -269,8 +344,8 @@ export default function ApiKeysPage() {
                 />
               </div>
               <p className="text-[11px] muted mt-2">
-                Admin scope can only be granted from the server config, not the
-                UI. This prevents privilege escalation.
+                The admin scope is granted by the Admin or Owner role above,
+                not from this list. Member and Viewer roles never receive it.
               </p>
             </fieldset>
             <div>
@@ -343,8 +418,13 @@ export default function ApiKeysPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[13px] font-medium truncate">{k.label || "unnamed"}</span>
-                    {k.scopes.map((s) => (
-                      <Badge key={s} tone={s === "trade" ? "warn" : "neutral"}>
+                    {k.role && (
+                      <Badge tone={k.role === "owner" || k.role === "admin" ? "warn" : "neutral"}>
+                        {k.role}
+                      </Badge>
+                    )}
+                    {(k.effective_scopes ?? k.scopes).map((s) => (
+                      <Badge key={s} tone={s === "admin" ? "warn" : s === "trade" ? "warn" : "neutral"}>
                         {s}
                       </Badge>
                     ))}
@@ -361,6 +441,15 @@ export default function ApiKeysPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onChangeRole(k.id, k.role || "member", k.label || k.prefix)}
+                    disabled={changingRole === k.id || revoking === k.id}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm disabled:opacity-50"
+                    title="Change RBAC role for this key"
+                  >
+                    {changingRole === k.id ? "Saving..." : "Role"}
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
