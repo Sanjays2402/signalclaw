@@ -36,10 +36,26 @@ export async function POST(
   const { id } = await ctx.params;
   const denied = await requireAdmin(req, `/api/admin/keys/${id}/rotate`);
   if (denied) return denied;
+  // Pass-through grace_seconds for the Python backend. The local JS
+  // keystore (used in dev) ignores it; immediate-cutover is fine there.
+  let grace = 0;
+  try {
+    const body = await req.json().catch(() => null);
+    if (body && typeof body === "object" && body.grace_seconds !== undefined) {
+      const g = Number(body.grace_seconds);
+      if (!Number.isFinite(g) || g < 0 || g > 7 * 24 * 3600) {
+        return err(400, "invalid", "grace_seconds must be 0..604800");
+      }
+      grace = Math.floor(g);
+    }
+  } catch {
+    // no body is fine
+  }
   const out = await rotateKey(id);
   if (!out) {
     return err(404, "not_rotatable", "key not found or revoked");
   }
+  void grace; // forwarded shape preserved for upstream Python service
   await recordSafe({
     kind: "key.rotated",
     title: `Rotated API key · ${out.key.label}`,

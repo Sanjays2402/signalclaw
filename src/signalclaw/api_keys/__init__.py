@@ -33,6 +33,23 @@ def _hash(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
+def _iso_in(seconds: int) -> str:
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) + timedelta(seconds=int(seconds))).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
+def _grace_active(grace_until: Optional[str]) -> bool:
+    if not grace_until:
+        return False
+    try:
+        # Compare as ISO strings (UTC, fixed-width). Lexical order matches
+        # chronological order for this format.
+        return grace_until > _now_iso()
+    except Exception:
+        return False
+
+
 def _mint() -> str:
     return _PREFIX + secrets.token_urlsafe(_SECRET_BYTES)
 
@@ -113,10 +130,19 @@ class StoredKey:
     # of the listed networks. Stored as strings so the JSON file stays
     # human-readable; parsed on demand by ``is_ip_allowed``.
     ip_allowlist: List[str] = field(default_factory=list)
+    # Rotation: when a key is rotated with a grace window, the previous
+    # secret hash stays valid for a bounded time so live integrations can
+    # roll over without downtime. ``previous_hash`` is the SHA-256 of the
+    # old secret; ``previous_grace_until`` is an ISO-8601 UTC timestamp
+    # after which the old hash is rejected and stripped on next write.
+    previous_hash: Optional[str] = None
+    previous_grace_until: Optional[str] = None
+    rotated_at: Optional[str] = None
 
     def to_public(self) -> Dict:
         d = asdict(self)
         d.pop("hash")
+        d.pop("previous_hash", None)
         return d
 
 
@@ -135,7 +161,16 @@ class ApiKeyStore:
 
     def _reload_index(self) -> None:
         rows = self._read()
-        self._index = {r.hash: r for r in rows if not r.revoked}
+        idx: Dict[str, StoredKey] = {}
+        for r in rows:
+            if r.revoked:
+                continue
+            idx[r.hash] = r
+            # Also index the grace-window predecessor so a still-rotating
+            # client can authenticate until ``previous_grace_until`` passes.
+            if r.previous_hash and _grace_active(r.previous_grace_until):
+                idx[r.previous_hash] = r
+        self._index = idx
 
     def _read(self) -> List[StoredKey]:
         raw = json.loads(self.path.read_text() or '{"keys":[]}')
@@ -151,6 +186,9 @@ class ApiKeyStore:
                 last_used_at=r.get("last_used_at"),
                 revoked=bool(r.get("revoked", False)),
                 ip_allowlist=list(r.get("ip_allowlist", []) or []),
+                previous_hash=r.get("previous_hash") or None,
+                previous_grace_until=r.get("previous_grace_until") or None,
+                rotated_at=r.get("rotated_at") or None,
             ))
         return out
 
@@ -210,6 +248,41 @@ class ApiKeyStore:
                 self._reload_index()
             return updated
 
+    def rotate(self, key_id: str, grace_seconds: int = 0) -> Optional[tuple["StoredKey", str]]:
+        """Mint a new secret for ``key_id``; keep old hash valid for ``grace_seconds``.
+
+        Returns ``(record, new_secret)`` so the caller can surface the
+        plaintext exactly once. Returns ``None`` if the key is missing
+        or already revoked. ``grace_seconds=0`` makes the previous
+        secret stop working immediately. The grace window is clamped
+        to seven days so a forgotten rotation does not become a long
+        lived dual-credential.
+        """
+        grace = max(0, min(int(grace_seconds or 0), 7 * 24 * 3600))
+        new_secret = _mint()
+        new_hash = _hash(new_secret)
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    if grace > 0:
+                        r.previous_hash = r.hash
+                        r.previous_grace_until = _iso_in(grace)
+                    else:
+                        r.previous_hash = None
+                        r.previous_grace_until = None
+                    r.hash = new_hash
+                    r.prefix = new_secret[:12]
+                    r.rotated_at = _now_iso()
+                    updated = r
+                    break
+            if updated is None:
+                return None
+            self._write(rows)
+            self._reload_index()
+        return updated, new_secret
+
     def revoke(self, key_id: str) -> bool:
         with self._lock:
             rows = self._read()
@@ -225,7 +298,13 @@ class ApiKeyStore:
             return found
 
     def lookup(self, secret: str) -> Optional[StoredKey]:
-        """Resolve a raw secret to a stored key (or None)."""
+        """Resolve a raw secret to a stored key (or None).
+
+        Honors the rotation grace window: a recently-rotated key's
+        previous secret remains valid until ``previous_grace_until``.
+        Once that timestamp passes the predecessor hash is dropped on
+        the next index reload so an attacker cannot keep using it.
+        """
         if not secret:
             return None
         h = _hash(secret)
@@ -236,6 +315,11 @@ class ApiKeyStore:
                 self._reload_index()
             rec = self._index.get(h)
         if rec is None or rec.revoked:
+            return None
+        # Reject expired-grace previous hash even if a stale cache served it.
+        if h == (rec.previous_hash or "") and not _grace_active(rec.previous_grace_until):
+            with self._lock:
+                self._reload_index()
             return None
         # record last_used_at lazily; only persist when it advances by >60s
         try:

@@ -219,12 +219,14 @@ def create_app() -> FastAPI:
         return None
 
     @app.get("/health")
+    @app.get("/healthz")
     def health():
         # Liveness probe: cheap, no I/O. If the process can answer
         # this, Kubernetes should leave it running.
         return {"status": "ok", "ts": datetime.utcnow().isoformat()}
 
     @app.get("/ready")
+    @app.get("/readyz")
     def ready():
         # Readiness probe: confirm the data directory is writable
         # before declaring the pod ready to take traffic. Fails closed
@@ -313,6 +315,32 @@ def create_app() -> FastAPI:
         if not ok:
             raise HTTPException(404, "key not found")
         return {"revoked": key_id}
+
+    @app.post("/admin/keys/{key_id}/rotate",
+              dependencies=[Depends(require_scope("admin"))])
+    def admin_keys_rotate(key_id: str, body: dict | None = None):
+        """Mint a new secret for an existing key.
+
+        Body may include ``grace_seconds`` (0..604800) to keep the old
+        secret valid for a bounded overlap so live integrations can roll
+        over without downtime. ``grace_seconds=0`` (the default) makes
+        the previous secret stop working immediately.
+        """
+        b = body or {}
+        try:
+            grace = int(b.get("grace_seconds", 0) or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "grace_seconds must be an integer")
+        if grace < 0 or grace > 7 * 24 * 3600:
+            raise HTTPException(400, "grace_seconds must be between 0 and 604800")
+        result = api_key_store.rotate(key_id, grace_seconds=grace)
+        if result is None:
+            raise HTTPException(404, "key not found")
+        rec, secret = result
+        out = rec.to_public()
+        out["secret"] = secret  # one-time reveal
+        out["grace_seconds"] = grace
+        return out
 
     @app.get("/disclaimer")
     def disclaimer():

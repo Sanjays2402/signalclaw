@@ -6,6 +6,24 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **API key rotation with grace window**. Rotate any user-managed API key in place without downtime. The new endpoint mints a fresh secret on the same key id (scopes, label, rate limit, and IP allowlist all preserved) and optionally keeps the previous secret valid for a bounded overlap so live integrations can roll over before the old credential stops working. The plaintext secret is returned exactly once and never logged; the predecessor hash is stored only for the grace window and dropped on the next index reload after it expires. Grace is clamped to 7 days so a forgotten rotation cannot turn into a long-lived dual credential. Surfaced in the dashboard at `/settings/keys` (the existing "Rotate" button now prompts for grace seconds) and via the admin API. The previous hash is never returned by `GET /admin/keys`, so an admin compromise cannot exfiltrate the still-valid old secret.
+
+  ```bash
+  # immediate cutover (default): old secret stops working right away
+  curl -X POST http://localhost:7431/admin/keys/<key_id>/rotate \
+    -H 'x-api-key: <admin-key>' \
+    -H 'content-type: application/json' \
+    -d '{"grace_seconds": 0}'
+
+  # graceful: keep the old secret valid for 5 minutes during cutover
+  curl -X POST http://localhost:7431/admin/keys/<key_id>/rotate \
+    -H 'x-api-key: <admin-key>' \
+    -H 'content-type: application/json' \
+    -d '{"grace_seconds": 300}'
+  ```
+
+  Audited via the standard middleware (actor key id, route, status, client IP hash). Covered by `tests/test_api_keys_rotate.py` including a real wall-clock grace expiry. The k8s-standard `/healthz` and `/readyz` aliases for the existing health and readiness probes ship in the same change.
+
 - **Per-key rate limits with standard 429 headers**. Every `/api/v1/*` call is now metered against a sliding 60-second window per API key. Allowed requests carry `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `X-RateLimit-Window`. Over-cap requests get an HTTP 429 with `Retry-After` and a structured body (`code: "rate_limited"`, `limit`, `retry_after`), and the throttle is itself written to the audit log so operators can see who tripped it. The default cap is 60 req/min, configurable via `SIGNALCLAW_RATE_LIMIT_PER_MIN`. Each key can also be raised or lowered individually from the dashboard at `/settings/keys` (the new "Rate limit" button on each row), or via the admin API:
 
   ```bash

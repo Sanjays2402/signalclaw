@@ -170,16 +170,17 @@ export default function ApiKeysPage() {
   }
 
   async function onRotate(id: string, displayLabel: string) {
-    if (
-      !window.confirm(
-        `Rotate "${displayLabel}"? The current secret stops working immediately and a new one is shown once.`,
-      )
-    )
-      return;
+    const ans = window.prompt(
+      `Rotate "${displayLabel}"?\n\nEnter grace seconds to keep the old secret valid during cutover (0..604800).\nLeave empty or 0 for immediate rotation.`,
+      "0",
+    );
+    if (ans === null) return;
+    const grace = Math.max(0, Math.min(7 * 24 * 3600, parseInt(ans || "0", 10) || 0));
     setRotating(id);
     try {
       const out = await api<Created>(`/admin/keys/${id}/rotate`, {
         method: "POST",
+        body: JSON.stringify({ grace_seconds: grace }),
       });
       setCreated(out);
       mutate();
