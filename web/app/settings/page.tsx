@@ -171,6 +171,12 @@ function Settings() {
             <ShieldWarning size={14} weight="duotone" /> Admin MFA
           </Link>
           <Link
+            href="/settings/sessions"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <ShieldWarning size={14} weight="duotone" /> SSO sessions
+          </Link>
+          <Link
             href="/settings/auth-lockout"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >

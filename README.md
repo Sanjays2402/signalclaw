@@ -2,7 +2,38 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: API key expiry watch (rotate before automation breaks)
+## New: OIDC Single Sign-On for the dashboard (Google Workspace, Okta, Azure AD)
+
+Procurement reality: every enterprise buyer above ~50 seats requires the dashboard to federate sign-in against their IdP. Without it the security questionnaire stalls at "how do offboarded employees lose access?" — a per-user API key is not an answer. SignalClaw now ships a real OpenID Connect Authorization Code + PKCE flow that works with any spec-compliant IdP (Google Workspace, Okta, Microsoft Entra ID / Azure AD, Auth0, Keycloak), with a workspace email-domain allowlist and an Enforce SSO toggle for browser sessions. Machine-to-machine API keys with the `admin` scope continue to work so CI and cron never get locked out by a policy flip.
+
+- `GET /api/admin/sso` and `PUT /api/admin/sso` (admin scope, admin MFA on write) manage the workspace policy: issuer, client id, client secret, redirect URI override, allowed email domains, enabled, enforce. PUT live-probes the OIDC Discovery document before saving so a typo cannot be persisted.
+- `GET /api/auth/sso/login?return_to=/settings` starts the flow. State, nonce, and the PKCE verifier are stashed in a short-lived HMAC-signed transaction cookie so the callback can verify them without a server-side session store.
+- `GET /api/auth/sso/callback` exchanges the code at the IdP token endpoint with PKCE, fetches the JWKS, verifies the ID token signature (RS256 or ES256) plus `iss` / `aud` / `exp` / `nonce` / `email_verified`, enforces the domain allowlist, and sets an HttpOnly + SameSite=Lax + Secure (when HTTPS) session cookie. Every branch — bad state, expired tx, IdP error, token-exchange failure, signature failure, wrong domain, success — writes a tamper-evident audit-log line.
+- `GET|POST /api/auth/sso/logout` clears the session cookie and the tx cookie.
+- The admin gate (`lib/adminGuardCore.ts`) now accepts SSO sessions as an admin identity in addition to admin keys. With Enforce SSO on, anonymous browser sessions get `403 forbidden:sso-required`; the admin API-key path stays open for CI.
+- Settings → SSO (`/settings/sso`) is the Linear-style UI for configuring the provider, allowlist, enable, enforce, plus a Test sign-in / Sign out button pair.
+
+Try it locally:
+
+```bash
+# 1. Configure the policy (Google Workspace example).
+curl -fsSL -X PUT \
+  -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"enabled":true,"enforce":false,"issuer":"https://accounts.google.com","client_id":"YOUR_CLIENT_ID.apps.googleusercontent.com","client_secret":"YOUR_SECRET","allowed_domains":["yourcompany.com"]}' \
+  http://localhost:7430/api/admin/sso
+
+# 2. Open the browser-facing login in your IdP redirect-uri allowlist:
+#    http://localhost:7430/api/auth/sso/callback
+# 3. Click Test sign-in on /settings/sso, complete the IdP prompt, land back on the dashboard.
+# 4. Inspect the audit trail.
+curl -fsSL -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  "http://localhost:7430/api/v1/audit?limit=10"
+```
+
+`tests/sso.test.mjs` pins the security properties: HMAC-signed cookies reject every single-bit tamper, tx cookies refuse session-signed bodies, `verifyIdToken` rejects wrong nonce / wrong issuer / wrong audience / expired / mutated signature, the admin gate accepts a valid session whose email domain is allowlisted, denies one outside the allowlist with `forbidden:sso-domain`, and refuses anonymous browser sessions when Enforce SSO is on.
+
+## Previously: API key expiry watch (rotate before automation breaks)
 
 Procurement reality: enterprise security policies mandate time-bound credentials, and SOC2 CC6.1 expects evidence that credentials are reviewed on a cadence. SignalClaw has supported per-key `expires_at` for a while; what was missing was a place to ask "what is about to lapse" without grepping the keys JSON. The new admin endpoint and settings banner make that visible at a glance, with the same audit and admin-key gating as the rest of `/api/admin/*`. The watch list always surfaces already-expired keys even outside the window, so a dead credential still wired into a downstream job cannot hide.
 
