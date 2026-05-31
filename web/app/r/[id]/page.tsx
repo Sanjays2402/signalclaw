@@ -62,6 +62,18 @@ export default async function SharePage({ params }: Params) {
               {run.label}
             </h1>
             <p className="muted text-[12px] mono">Saved {when}</p>
+            {(run.tags ?? []).length > 0 && (
+              <div className="flex items-center gap-1 flex-wrap pt-1">
+                {run.tags.map((t) => (
+                  <span
+                    key={t}
+                    className="text-[10px] mono px-1.5 py-0.5 rounded-sm border border-[var(--border)] muted lowercase"
+                  >
+                    #{t}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex gap-2 shrink-0">
             <Link

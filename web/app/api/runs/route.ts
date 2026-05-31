@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createRun, queryRuns } from "@/lib/runStore";
+import { createRun, queryRuns, normalizeTags } from "@/lib/runStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   const q = sp.get("q") ?? "";
   const regime = sp.get("regime") ?? "";
   const ticker = sp.get("ticker") ?? "";
+  const tag = sp.get("tag") ?? "";
   const limit = parseIntParam(sp.get("limit"), 25);
   const offset = parseIntParam(sp.get("offset"), 0);
 
@@ -26,16 +27,18 @@ export async function GET(req: NextRequest) {
     q,
     regime,
     ticker,
+    tag,
     limit,
     offset,
   });
 
-  const items = runs.map(({ id, label, ticker, lookback_days, created_at, payload }) => ({
+  const items = runs.map(({ id, label, ticker, lookback_days, created_at, tags, payload }) => ({
     id,
     label,
     ticker,
     lookback_days,
     created_at,
+    tags: tags ?? [],
     bars: payload.dates.length,
     regime: payload.snapshot?.label ?? null,
     confidence: payload.snapshot?.confidence ?? null,
@@ -56,7 +59,7 @@ export async function POST(req: NextRequest) {
   } catch {
     return err(400, "bad_json", "request body must be valid JSON");
   }
-  const { ticker, lookback_days, payload, label } = body ?? {};
+  const { ticker, lookback_days, payload, label, tags } = body ?? {};
   if (typeof ticker !== "string" || ticker.length === 0 || ticker.length > 32) {
     return err(400, "bad_ticker", "ticker must be a non-empty string up to 32 chars");
   }
@@ -88,6 +91,7 @@ export async function POST(req: NextRequest) {
     ticker,
     lookback_days,
     payload,
+    tags: normalizeTags(tags),
   });
-  return NextResponse.json({ id: run.id, label: run.label, created_at: run.created_at });
+  return NextResponse.json({ id: run.id, label: run.label, created_at: run.created_at, tags: run.tags });
 }

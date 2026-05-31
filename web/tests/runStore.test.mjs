@@ -203,3 +203,82 @@ test("runsToCSV: header + one row per bar + escaping", async () => {
   const empty = store.runsToCSV([]);
   assert.equal(empty.trim().split("\n").length, 1);
 });
+
+test("normalizeTags: lowercases, slugifies, dedups, caps at 8", async () => {
+  const out = store.normalizeTags([
+    "Swing",
+    "swing", // dup
+    "Q2 Watch", // becomes q2-watch
+    "!!!", // empty after strip
+    "with space",
+    "ok",
+    "ok2",
+    "ok3",
+    "ok4",
+    "ok5",
+    "ok6",
+    "ok7", // over the cap
+  ]);
+  assert.ok(out.includes("swing"));
+  assert.ok(out.includes("q2-watch"));
+  assert.ok(out.includes("with-space"));
+  // No duplicate swing.
+  assert.equal(out.filter((t) => t === "swing").length, 1);
+  // Capped at 8.
+  assert.ok(out.length <= 8);
+  assert.equal(store.normalizeTags(null).length, 0);
+  assert.equal(store.normalizeTags("not-array").length, 0);
+});
+
+test("createRun + setRunTags + queryRuns by tag", async () => {
+  await store._resetForTests();
+  const a = await store.createRun({
+    label: "A",
+    ticker: "SPY",
+    lookback_days: 252,
+    payload: samplePayload,
+    tags: ["Swing", "watch"],
+  });
+  assert.deepEqual(a.tags, ["swing", "watch"]);
+
+  const b = await store.createRun({
+    label: "B",
+    ticker: "QQQ",
+    lookback_days: 252,
+    payload: samplePayload,
+  });
+  assert.deepEqual(b.tags, []);
+
+  const upd = await store.setRunTags(b.id, ["Watch", "Q2"]);
+  assert.ok(upd);
+  assert.deepEqual(upd.tags.sort(), ["q2", "watch"]);
+
+  const tags = await store.listTags();
+  // watch should have count 2.
+  const watch = tags.find((t) => t.tag === "watch");
+  assert.ok(watch);
+  assert.equal(watch.count, 2);
+
+  const byTag = await store.queryRuns({ tag: "swing" });
+  assert.equal(byTag.total, 1);
+  assert.equal(byTag.runs[0].id, a.id);
+
+  // Search also matches tag substring.
+  const bySearch = await store.queryRuns({ q: "swin" });
+  assert.equal(bySearch.total, 1);
+  assert.equal(bySearch.runs[0].id, a.id);
+
+  // Unknown tag returns empty without crashing.
+  const none = await store.queryRuns({ tag: "nope" });
+  assert.equal(none.total, 0);
+
+  // Invalid tag chars get ignored as a filter (returns all).
+  const all = await store.queryRuns({ tag: "!!!" });
+  assert.equal(all.total, 2);
+});
+
+test("setRunTags returns null for missing id", async () => {
+  await store._resetForTests();
+  const res = await store.setRunTags("doesnotexs", ["x"]);
+  assert.equal(res, null);
+});

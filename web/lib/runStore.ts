@@ -15,6 +15,7 @@ export type SavedRun = {
   ticker: string;
   lookback_days: number;
   created_at: string;
+  tags: string[];
   payload: {
     ticker: string;
     dates: string[];
@@ -36,11 +37,39 @@ export type SavedRun = {
 
 type Store = { runs: SavedRun[] };
 
+// Tag rules: lowercase, [a-z0-9-], 1..24 chars, dedup, cap 8 per run.
+const TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+export const MAX_TAGS_PER_RUN = 8;
+
+export function normalizeTags(input: unknown): string[] {
+  if (input === null || input === undefined) return [];
+  const arr = Array.isArray(input) ? input : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of arr) {
+    if (typeof raw !== "string") continue;
+    const t = raw.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (!t || !TAG_RE.test(t)) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= MAX_TAGS_PER_RUN) break;
+  }
+  return out;
+}
+
+function ensureTags(r: SavedRun): SavedRun {
+  if (!Array.isArray((r as any).tags)) (r as any).tags = [];
+  return r;
+}
+
 async function readStore(): Promise<Store> {
   try {
     const raw = await fs.readFile(DATA_FILE, "utf8");
     const j = JSON.parse(raw);
     if (!j || !Array.isArray(j.runs)) return { runs: [] };
+    // Back-fill tags on older records.
+    for (const r of j.runs) ensureTags(r);
     return j as Store;
   } catch (e: any) {
     if (e?.code === "ENOENT") return { runs: [] };
@@ -71,11 +100,12 @@ export async function getRun(id: string): Promise<SavedRun | null> {
 }
 
 export async function createRun(
-  input: Omit<SavedRun, "id" | "created_at">,
+  input: Omit<SavedRun, "id" | "created_at" | "tags"> & { tags?: string[] },
 ): Promise<SavedRun> {
   const s = await readStore();
   const run: SavedRun = {
     ...input,
+    tags: normalizeTags(input.tags ?? []),
     id: genId(),
     created_at: new Date().toISOString(),
   };
@@ -104,13 +134,38 @@ export async function renameRun(id: string, label: string): Promise<SavedRun | n
   if (!r) return null;
   r.label = label;
   await writeStore(s);
+  return ensureTags(r);
+}
+
+export async function setRunTags(id: string, tags: unknown): Promise<SavedRun | null> {
+  const s = await readStore();
+  const r = s.runs.find((r) => r.id === id);
+  if (!r) return null;
+  r.tags = normalizeTags(tags);
+  await writeStore(s);
   return r;
+}
+
+export type TagCount = { tag: string; count: number };
+
+export async function listTags(): Promise<TagCount[]> {
+  const s = await readStore();
+  const counts = new Map<string, number>();
+  for (const r of s.runs) {
+    for (const t of r.tags ?? []) {
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => (b.count - a.count) || a.tag.localeCompare(b.tag));
 }
 
 export type QueryOpts = {
   q?: string;
   regime?: string;
   ticker?: string;
+  tag?: string;
   limit?: number;
   offset?: number;
 };
@@ -127,16 +182,19 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
   const q = (opts.q ?? "").trim().toLowerCase();
   const regime = (opts.regime ?? "").trim().toLowerCase();
   const ticker = (opts.ticker ?? "").trim().toUpperCase();
+  const tagRaw = (opts.tag ?? "").trim().toLowerCase();
+  const tag = tagRaw && TAG_RE.test(tagRaw) ? tagRaw : "";
   const limit = Math.min(Math.max(opts.limit ?? 25, 1), 200);
   const offset = Math.max(opts.offset ?? 0, 0);
 
-  let filtered = s.runs;
+  let filtered = s.runs.map(ensureTags);
   if (q) {
     filtered = filtered.filter(
       (r) =>
         r.label.toLowerCase().includes(q) ||
         r.ticker.toLowerCase().includes(q) ||
-        r.id.toLowerCase().includes(q),
+        r.id.toLowerCase().includes(q) ||
+        (r.tags ?? []).some((t) => t.includes(q)),
     );
   }
   if (regime && regime !== "all") {
@@ -146,6 +204,9 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
   }
   if (ticker) {
     filtered = filtered.filter((r) => r.ticker.toUpperCase() === ticker);
+  }
+  if (tag) {
+    filtered = filtered.filter((r) => (r.tags ?? []).includes(tag));
   }
   filtered = [...filtered].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   const total = filtered.length;
@@ -161,6 +222,7 @@ export function runsToCSV(runs: SavedRun[]): string {
     "ticker",
     "lookback_days",
     "created_at",
+    "tags",
     "regime_label",
     "confidence",
     "risk_scale",
@@ -180,6 +242,7 @@ export function runsToCSV(runs: SavedRun[]): string {
     const dates = r.payload.dates ?? [];
     const close = r.payload.close ?? [];
     const reg = r.payload.regime ?? [];
+    const tagStr = (r.tags ?? []).join("|");
     if (dates.length === 0) {
       lines.push(
         [
@@ -188,6 +251,7 @@ export function runsToCSV(runs: SavedRun[]): string {
           r.ticker,
           r.lookback_days,
           r.created_at,
+          tagStr,
           snap?.label ?? "",
           snap?.confidence ?? "",
           snap?.risk_scale ?? "",
@@ -208,6 +272,7 @@ export function runsToCSV(runs: SavedRun[]): string {
           r.ticker,
           r.lookback_days,
           r.created_at,
+          tagStr,
           snap?.label ?? "",
           snap?.confidence ?? "",
           snap?.risk_scale ?? "",

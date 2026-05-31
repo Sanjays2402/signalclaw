@@ -25,7 +25,7 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - Notifier with DLQ, replay, and test endpoint
 - Webhook subscriptions (events, ticker filter, HMAC secret)
 - User-managed API keys with scopes (`read`, `trade`), one-time secret reveal, revocation, last-used timestamps; managed at `/settings/keys` in the dashboard or via `/admin/keys` over HTTP
-- Save & share regime runs from `/demo` to permanent public URLs at `/r/<id>`; manage saved runs at `/history` (rename, re-run, copy link, delete)
+- Save & share regime runs from `/demo` to permanent public URLs at `/r/<id>`; manage saved runs at `/history` (rename, re-run, copy link, delete, tag)
 - Batch regime scan at `/batch`: paste tickers or drop a CSV, classify up to 50 in one pass, save each as a shareable run, export the whole batch as CSV or JSON
 - Free-tier usage meter at `/usage`: real per-month quota of saved runs, daily activity chart, top tickers, regime breakdown, and upgrade CTA; live quota pill in the header that links to `/usage`
 
@@ -58,6 +58,28 @@ curl -s -X POST http://localhost:7430/api/batch \
 ```
 
 Add `"format":"csv"` to stream a CSV download instead of JSON.
+
+## Try run tags
+
+Organize saved runs by lightweight tags (lowercase, slug-style, up to 8 per run). Tags are searchable, filterable, and round-trip through the CSV/JSON export.
+
+1. Open <http://localhost:7430/history>, click the dashed `add tag` chip on any saved run, type `swing, watch, q2`, hit Enter.
+2. The tag bar above the list shows every tag with a count. Click one to filter.
+
+Or from the command line:
+
+```bash
+# Set tags on a saved run
+curl -s -X PATCH http://localhost:7430/api/runs/<id> \
+  -H 'content-type: application/json' \
+  -d '{"tags":["swing","watch"]}'
+
+# List all tags with counts
+curl -s http://localhost:7430/api/runs/tags | jq .
+
+# Filter the history feed by tag
+curl -s 'http://localhost:7430/api/runs?tag=swing' | jq '.runs | length'
+```
 - Next.js dashboard (pages per resource) with lightweight-charts and recharts
 
 ## Try the webhooks

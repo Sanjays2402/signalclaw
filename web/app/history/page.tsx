@@ -17,7 +17,11 @@ import {
   CaretRight,
   FileCsv,
   Code,
+  Tag,
+  Plus,
 } from "@phosphor-icons/react/dist/ssr";
+
+type TagCount = { tag: string; count: number };
 
 type RunListItem = {
   id: string;
@@ -28,6 +32,7 @@ type RunListItem = {
   bars: number;
   regime: string | null;
   confidence: number | null;
+  tags: string[];
 };
 
 type ListResp = {
@@ -66,6 +71,7 @@ function useDebounced<T>(value: T, ms = 200): T {
 export default function HistoryPage() {
   const [q, setQ] = useState("");
   const [regime, setRegime] = useState<(typeof REGIMES)[number]>("all");
+  const [tag, setTag] = useState<string>("");
   const [offset, setOffset] = useState(0);
 
   const dq = useDebounced(q, 200);
@@ -73,15 +79,27 @@ export default function HistoryPage() {
   const params = new URLSearchParams();
   if (dq) params.set("q", dq);
   if (regime !== "all") params.set("regime", regime);
+  if (tag) params.set("tag", tag);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
 
   const key = `/api/runs?${params.toString()}`;
   const { data, error, isLoading, mutate } = useSWR<ListResp>(key, fetcher);
+  const { data: tagsData, mutate: mutateTags } = useSWR<{ tags: TagCount[] }>(
+    "/api/runs/tags",
+    fetcher,
+  );
+  const allTags = tagsData?.tags ?? [];
+
+  function refreshAll() {
+    mutate();
+    mutateTags();
+  }
 
   const exportParams = new URLSearchParams();
   if (dq) exportParams.set("q", dq);
   if (regime !== "all") exportParams.set("regime", regime);
+  if (tag) exportParams.set("tag", tag);
 
   function go(delta: number) {
     const next = Math.max(0, offset + delta * PAGE_SIZE);
@@ -91,6 +109,7 @@ export default function HistoryPage() {
   function resetFilters() {
     setQ("");
     setRegime("all");
+    setTag("");
     setOffset(0);
   }
 
@@ -98,7 +117,7 @@ export default function HistoryPage() {
   const page = data?.runs ?? [];
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + page.length, total);
-  const hasFilters = dq.length > 0 || regime !== "all";
+  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -133,7 +152,7 @@ export default function HistoryPage() {
               <Code size={11} weight="bold" /> JSON
             </a>
             <button
-              onClick={() => mutate()}
+              onClick={refreshAll}
               className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] muted hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
             >
               <ArrowsClockwise size={11} weight="bold" /> Refresh
@@ -193,6 +212,51 @@ export default function HistoryPage() {
           </div>
         </div>
 
+        {allTags.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap mb-4 pb-3 border-b border-[var(--border)]">
+            <Tag size={12} weight="duotone" className="muted" />
+            <span className="text-[10px] mono uppercase tracking-widest muted mr-1">Tags</span>
+            <button
+              onClick={() => {
+                setTag("");
+                setOffset(0);
+              }}
+              aria-pressed={tag === ""}
+              className={
+                "text-[10px] px-2 py-1 rounded-sm border uppercase tracking-widest font-semibold mono " +
+                (tag === ""
+                  ? "border-[var(--amber)]/60 bg-[var(--amber)]/10 text-[var(--amber)]"
+                  : "border-[var(--border-strong)] hover:bg-white/5 muted")
+              }
+            >
+              All
+            </button>
+            {allTags.map((t) => {
+              const active = tag === t.tag;
+              return (
+                <button
+                  key={t.tag}
+                  onClick={() => {
+                    setTag(active ? "" : t.tag);
+                    setOffset(0);
+                  }}
+                  aria-pressed={active}
+                  className={
+                    "text-[10px] px-2 py-1 rounded-sm border lowercase font-medium mono flex items-center gap-1 " +
+                    (active
+                      ? "border-[var(--amber)]/60 bg-[var(--amber)]/10 text-[var(--amber)]"
+                      : "border-[var(--border-strong)] hover:bg-white/5")
+                  }
+                  title={`Filter by tag ${t.tag} (${t.count})`}
+                >
+                  #{t.tag}
+                  <span className="muted text-[9px]">{t.count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {isLoading && !data ? (
           <div className="space-y-2 py-2">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -228,7 +292,7 @@ export default function HistoryPage() {
           <>
             <div className="divide-y divide-[var(--border)]">
               {page.map((r) => (
-                <Row key={r.id} run={r} onChange={() => mutate()} />
+                <Row key={r.id} run={r} onChange={refreshAll} />
               ))}
             </div>
             <div className="flex items-center justify-between mt-4 text-[10px] mono uppercase tracking-widest muted">
@@ -264,6 +328,8 @@ export default function HistoryPage() {
 function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(run.label);
+  const [editingTags, setEditingTags] = useState(false);
+  const [tagDraft, setTagDraft] = useState((run.tags ?? []).join(", "));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -294,6 +360,29 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
     try {
       const r = await fetch(`/api/runs/${run.id}`, { method: "DELETE" });
       if (!r.ok) throw new Error(`${r.status}`);
+      onChange();
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveTags() {
+    const tags = tagDraft
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch(`/api/runs/${run.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tags }),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      setEditingTags(false);
       onChange();
     } catch (e: any) {
       setErr(String(e?.message || e));
@@ -366,6 +455,76 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
         )}
         <div className="muted text-[10px] mono uppercase tracking-widest mt-1">
           {run.ticker} · {run.lookback_days}d · {run.bars} bars · {when}
+        </div>
+        <div className="mt-1.5">
+          {editingTags ? (
+            <div className="flex items-center gap-2">
+              <input
+                value={tagDraft}
+                onChange={(e) => setTagDraft(e.target.value)}
+                placeholder="comma-separated, e.g. swing, watch, q2"
+                aria-label="Edit tags"
+                maxLength={200}
+                className="flex-1 bg-[var(--bg)] border border-[var(--border-strong)] rounded-sm px-2 py-1 text-[11px] mono"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveTags();
+                  if (e.key === "Escape") {
+                    setEditingTags(false);
+                    setTagDraft((run.tags ?? []).join(", "));
+                  }
+                }}
+              />
+              <button
+                onClick={saveTags}
+                disabled={busy}
+                className="p-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 disabled:opacity-40"
+                title="Save tags"
+                aria-label="Save tags"
+              >
+                <Check size={12} weight="bold" />
+              </button>
+              <button
+                onClick={() => {
+                  setEditingTags(false);
+                  setTagDraft((run.tags ?? []).join(", "));
+                }}
+                className="p-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5"
+                title="Cancel"
+                aria-label="Cancel tag edit"
+              >
+                <X size={12} weight="bold" />
+              </button>
+            </div>
+          ) : (run.tags ?? []).length > 0 ? (
+            <div className="flex items-center gap-1 flex-wrap">
+              {run.tags.map((t) => (
+                <span
+                  key={t}
+                  className="text-[10px] mono px-1.5 py-0.5 rounded-sm border border-[var(--border)] muted lowercase"
+                >
+                  #{t}
+                </span>
+              ))}
+              <button
+                onClick={() => setEditingTags(true)}
+                className="text-[10px] mono px-1.5 py-0.5 rounded-sm border border-dashed border-[var(--border-strong)] hover:bg-white/5 muted flex items-center gap-0.5"
+                title="Edit tags"
+                aria-label="Edit tags"
+              >
+                <PencilSimple size={9} weight="bold" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setEditingTags(true)}
+              className="text-[10px] mono px-1.5 py-0.5 rounded-sm border border-dashed border-[var(--border-strong)] hover:bg-white/5 muted flex items-center gap-1"
+              title="Add tags"
+              aria-label="Add tags"
+            >
+              <Plus size={9} weight="bold" /> add tag
+            </button>
+          )}
         </div>
         {err && (
           <div className="text-[11px] mt-1" style={{ color: "var(--red)" }}>
