@@ -6,6 +6,25 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **MFA recovery codes for admin keys**. SOC2 CC6.6 expects a documented account-recovery path, and procurement reviewers fail any product where losing a phone means losing the only admin key. `POST /mfa/confirm` now mints a one-time batch of 10 single-use recovery codes (OCR-friendly `XXXXX-XXXXX` alphabet, no 0/O/1/I) and returns the plaintext exactly once; only SHA-256 hashes are persisted to `<data_dir>/mfa/enrollments.json`, so a backup leak is not enough to bypass MFA. Admins present any unused code as `x-mfa-recovery-code` to unlock any admin route covered by `require_mfa_for_admin`; the code is burned atomically inside the store lock so two concurrent requests with the same code cannot both succeed. `GET /mfa/status` reports `recovery_codes_remaining`, and `POST /mfa/recovery-codes/regenerate` (itself MFA-gated, accepts either TOTP or an unused recovery code) replaces the batch and returns the fresh plaintext exactly once. The `/settings/security` page surfaces a save-once panel with copy-all and a downloadable `.txt` backup, a remaining-count card with low/empty warnings and a Regenerate button, and a one-shot recovery-code field that queues the code on the next admin call and clears it from `sessionStorage` after a single use. Covered by `tests/test_mfa_recovery_codes.py` (confirm returns 10 well-formed codes, a code unlocks `/audit` once and is rejected on reuse, the remaining count drops by exactly one, regenerate wipes the prior batch, and a recursive scan of the on-disk MFA store proves no plaintext code ever leaks to disk).
+
+  Try it locally: `make api` then
+  ```bash
+  # Enroll, confirm, and save the recovery codes that come back
+  curl -s -X POST http://localhost:7431/mfa/enroll \
+      -H "x-api-key: $SIGNALCLAW_API_KEY" -d '{}'
+  curl -s -X POST http://localhost:7431/mfa/confirm \
+      -H "x-api-key: $SIGNALCLAW_API_KEY" \
+      -H 'content-type: application/json' \
+      -d '{"code":"123456"}' | jq .recovery_codes
+
+  # Lost your phone? Use a recovery code instead of a TOTP
+  curl -s http://localhost:7431/audit \
+      -H "x-api-key: $SIGNALCLAW_API_KEY" \
+      -H "x-mfa-recovery-code: ABCDE-FGHJK"
+  ```
+  UI: `cd web && pnpm dev` and visit http://localhost:7430/settings/security.
+
 - **Webhook signing secret rotation with a grace window**. SOC2 CC6.1 + CC6.7 want every shared secret to be rotatable on demand without a flag day, and enterprise procurement reviews score the HMAC story specifically on whether receivers can roll their verifier without missed deliveries. `POST /webhooks/{id}/rotate-secret` (tenant-scoped via the existing owner-key gate) replaces the active secret and, when `grace_seconds > 0`, retains the prior secret on the subscription record as `previous_secret` with an absolute `previous_secret_expires_at` cutoff. While the grace window is open every outbound delivery is dual-signed: `X-SignalClaw-Signature` is computed with the new secret and `X-SignalClaw-Signature-Previous` is computed with the prior secret, so receivers can flip their verifier at any point inside the window without dropping events. Once the grace elapses the prior secret is purged on the very next delivery (the record is mutated and persisted in-line) and only the new signature is emitted. Passing `secret: ""` mints a cryptographically random 32-byte hex secret server-side; secrets shorter than 16 chars are rejected at the boundary (`422`); a sibling tenant's id returns `404` (not `403`) so existence does not leak. The `/webhooks` page surfaces a per-row Rotate button, displays the last `secret_rotated_at`, an active grace badge, and a one-time copy panel for the new secret. Covered by `tests/test_webhook_secret_rotation.py` (rotate response and persisted state, blank-secret minting, too-short secret rejection, end-to-end dual signing during grace then drop-after-expiry on the next delivery, and a two-tenant isolation case where Bob's rotate attempt 404s without changing Alice's secret).
 
   Try it locally: `make api` then

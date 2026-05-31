@@ -26,6 +26,7 @@ type Status = {
   enrolled: boolean;
   pending: boolean;
   required_for_admin: boolean;
+  recovery_codes_remaining: number;
 };
 
 type Enroll = {
@@ -34,6 +35,17 @@ type Enroll = {
   algorithm: string;
   digits: number;
   period_seconds: number;
+};
+
+type ConfirmResult = {
+  enrolled: boolean;
+  recovery_codes: string[];
+  recovery_codes_remaining: number;
+};
+
+type RegenResult = {
+  recovery_codes: string[];
+  recovery_codes_remaining: number;
 };
 
 function googleQrUrl(uri: string): string {
@@ -64,6 +76,8 @@ function SecurityInner() {
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [adminCode, setAdminCode] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  const [recoveryAck, setRecoveryAck] = useState(false);
 
   // Restore any persisted MFA code so the user does not have to retype
   // it for every admin call in the same tab.
@@ -98,19 +112,59 @@ function SecurityInner() {
     setBusy(true);
     setErr(null);
     try {
-      await api("/mfa/confirm", {
+      const out = await api<ConfirmResult>("/mfa/confirm", {
         method: "POST",
         body: JSON.stringify({ code: code.trim() }),
       });
       setEnroll(null);
       setCode("");
-      setMsg("MFA enrolled. Admin actions now require a TOTP code.");
+      setMsg("MFA enrolled. Save your recovery codes before closing this page.");
+      setRecoveryCodes(out.recovery_codes || []);
+      setRecoveryAck(false);
       mutate();
     } catch (e) {
       setErr(e instanceof ApiError ? e.body : String(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function regenerateRecovery() {
+    if (!window.confirm("Replace your recovery codes? Any previously saved codes stop working immediately.")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const out = await api<RegenResult>("/mfa/recovery-codes/regenerate", {
+        method: "POST",
+      });
+      setRecoveryCodes(out.recovery_codes || []);
+      setRecoveryAck(false);
+      setMsg("New recovery codes generated. Save them before closing this page.");
+      mutate();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.body : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function downloadRecovery(codes: string[]) {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const body =
+      "SignalClaw MFA recovery codes\n" +
+      `Generated: ${new Date().toISOString()}\n` +
+      "Each code works exactly once. Keep them somewhere safe.\n\n" +
+      codes.map((c, i) => `${(i + 1).toString().padStart(2, "0")}. ${c}`).join("\n") +
+      "\n";
+    const blob = new Blob([body], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `signalclaw-recovery-${stamp}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function disable() {
@@ -300,6 +354,136 @@ function SecurityInner() {
           </div>
         </Card>
       )}
+
+      {data?.enrolled && recoveryCodes === null && (
+        <Card>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Key size={20} weight="duotone" className="text-sky-500" />
+              <h2 className="text-base font-semibold">Recovery codes</h2>
+            </div>
+            <p className="text-sm text-neutral-500">
+              Single-use backup codes for the day your authenticator is
+              unavailable. Send one as <code>x-mfa-recovery-code</code> to
+              unlock any admin route.
+            </p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm">
+                <span className="font-medium">{data.recovery_codes_remaining}</span>
+                <span className="text-neutral-500"> of 10 codes unused</span>
+                {data.recovery_codes_remaining === 0 && (
+                  <span className="ml-2 inline-block rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                    None left, regenerate now
+                  </span>
+                )}
+                {data.recovery_codes_remaining > 0 && data.recovery_codes_remaining <= 3 && (
+                  <span className="ml-2 inline-block rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                    Running low
+                  </span>
+                )}
+              </div>
+              <Button onClick={regenerateRecovery} disabled={busy}>
+                Regenerate codes
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {recoveryCodes && (
+        <Card>
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Key size={20} weight="duotone" className="text-sky-500" />
+              <h2 className="text-base font-semibold">Save these recovery codes</h2>
+            </div>
+            <p className="text-sm text-amber-700 dark:text-amber-300">
+              Shown once. Store them in a password manager or print and lock
+              away. Each code works exactly one time. We only keep their
+              SHA-256 hashes on the server.
+            </p>
+            <div className="grid grid-cols-2 gap-2 font-mono text-sm">
+              {recoveryCodes.map((c, i) => (
+                <div
+                  key={c}
+                  className="flex items-center justify-between rounded border border-neutral-200 bg-neutral-50 px-3 py-2 dark:border-neutral-800 dark:bg-neutral-900"
+                >
+                  <span className="text-neutral-400 select-none">{(i + 1).toString().padStart(2, "0")}</span>
+                  <span>{c}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={() => copy(recoveryCodes.join("\n"))}>
+                {copied ? <Check size={16} weight="duotone" /> : <Copy size={16} weight="duotone" />}
+                Copy all
+              </Button>
+              <Button onClick={() => downloadRecovery(recoveryCodes)}>
+                Download .txt
+              </Button>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={recoveryAck}
+                  onChange={(e) => setRecoveryAck(e.target.checked)}
+                />
+                I saved these somewhere safe
+              </label>
+              <Button
+                onClick={() => setRecoveryCodes(null)}
+                disabled={!recoveryAck}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {data?.enrolled && (
+        <Card>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <ShieldWarning size={20} weight="duotone" className="text-rose-500" />
+              <h2 className="text-base font-semibold">Use a recovery code</h2>
+            </div>
+            <p className="text-sm text-neutral-500">
+              Lost your authenticator? Paste one unused recovery code below.
+              It will be sent on your next admin action and burned on the
+              server.
+            </p>
+            <RecoveryOneShot onPosted={() => setMsg("Recovery code queued. The next admin action will consume it.")} />
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function RecoveryOneShot({ onPosted }: { onPosted: () => void }) {
+  const [val, setVal] = useState("");
+  function queue() {
+    const trimmed = val.trim().toUpperCase();
+    if (!trimmed) return;
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("sc_mfa_recovery_code", trimmed);
+    }
+    setVal("");
+    onPosted();
+  }
+  return (
+    <div className="flex gap-2">
+      <Input
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        placeholder="XXXXX-XXXXX"
+        autoComplete="one-time-code"
+        aria-label="Recovery code"
+        className="font-mono"
+      />
+      <Button onClick={queue} disabled={!val.trim()}>
+        Queue for next admin call
+      </Button>
     </div>
   );
 }

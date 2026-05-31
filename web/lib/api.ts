@@ -25,14 +25,26 @@ function mfaCode(): string {
   return sessionStorage.getItem("sc_mfa_code") || "";
 }
 
+function takeRecoveryCode(): string {
+  // Single-use recovery code escape hatch. The Security page writes it
+  // here right before the next admin call; we consume and clear it so
+  // the same code is never sent twice (the server also enforces this).
+  if (typeof window === "undefined") return "";
+  const v = sessionStorage.getItem("sc_mfa_recovery_code") || "";
+  if (v) sessionStorage.removeItem("sc_mfa_recovery_code");
+  return v;
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const code = mfaCode();
+  const recovery = takeRecoveryCode();
   const r = await fetch(`${BASE}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
       "x-api-key": apiKey(),
       ...(code ? { "x-mfa-code": code } : {}),
+      ...(recovery ? { "x-mfa-recovery-code": recovery } : {}),
       ...(init.headers || {}),
     },
     cache: "no-store",

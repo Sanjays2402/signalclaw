@@ -12,6 +12,12 @@ every admin call. Unenrolled keys are allowed by default and rejected
 when ``SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN=1`` so an operator can flip
 the deployment into "MFA required" mode without rewriting middleware.
 
+Single-use recovery codes back the TOTP factor: a batch of 10 codes is
+minted at confirm time, returned to the caller exactly once, and stored
+only as SHA-256 hashes. A lost-device admin can present any unused
+recovery code via ``x-mfa-recovery-code`` to unlock admin routes; the
+code is burned atomically on first use.
+
 Implementation notes:
 
 * TOTP is HMAC-SHA1, 6 digits, 30 second step, per RFC 6238. We accept
@@ -26,6 +32,9 @@ Implementation notes:
 * Replay protection: we record the last accepted step per enrollment.
   A code is rejected when it matches the most recently accepted step,
   so an attacker who shoulder-surfs a 30s code cannot reuse it.
+* Recovery codes use an OCR-friendly alphabet (no 0/O/1/I) and are
+  formatted as ``XXXXX-XXXXX`` so they're tolerable to read off a
+  printed backup card.
 """
 from __future__ import annotations
 
@@ -40,7 +49,7 @@ import threading
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 
@@ -48,9 +57,37 @@ _STEP_SECONDS = 30
 _DIGITS = 6
 _WINDOW = 1  # accept +/- one step for clock skew
 
+_RECOVERY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I
+_RECOVERY_GROUPS = 2
+_RECOVERY_GROUP_LEN = 5
+_RECOVERY_DEFAULT_COUNT = 10
+
 
 def _hash_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def _hash_recovery(code: str) -> str:
+    """Stable hash for recovery-code storage. Plain code is never persisted."""
+    norm = code.strip().upper().replace("-", "").replace(" ", "")
+    return hashlib.sha256(("sc-recovery:" + norm).encode("utf-8")).hexdigest()
+
+
+def generate_recovery_codes(n: int = _RECOVERY_DEFAULT_COUNT) -> List[str]:
+    """Return ``n`` fresh plaintext recovery codes formatted ``XXXXX-XXXXX``."""
+    out: List[str] = []
+    seen: set[str] = set()
+    while len(out) < n:
+        groups = [
+            "".join(secrets.choice(_RECOVERY_ALPHABET) for _ in range(_RECOVERY_GROUP_LEN))
+            for _ in range(_RECOVERY_GROUPS)
+        ]
+        code = "-".join(groups)
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append(code)
+    return out
 
 
 def _b32_secret(num_bytes: int = 20) -> str:
@@ -103,6 +140,11 @@ class Enrollment:
     created_at: float = field(default_factory=time.time)
     confirmed: bool = False
     last_step: int = -1  # most recent accepted step, for replay protection
+    # SHA-256 hashes of unconsumed recovery codes. Plaintext is returned
+    # to the caller exactly once (at confirm / regenerate time) and never
+    # written to disk, so a backup of the enrollments file is not enough
+    # to bypass MFA.
+    recovery_hashes: List[str] = field(default_factory=list)
 
     def to_public(self) -> dict:
         return {
@@ -110,6 +152,7 @@ class Enrollment:
             "label": self.label,
             "created_at": self.created_at,
             "confirmed": self.confirmed,
+            "recovery_codes_remaining": len(self.recovery_hashes),
         }
 
 
@@ -132,6 +175,8 @@ class MfaStore:
             return
         for raw in data.get("enrollments", []):
             try:
+                # Back-compat: older records won't have recovery_hashes.
+                raw.setdefault("recovery_hashes", [])
                 e = Enrollment(**raw)
                 self._items[e.key_hash] = e
             except TypeError:
@@ -186,6 +231,55 @@ class MfaStore:
             self._save()
         return True
 
+    def issue_recovery_codes(self, api_key: str,
+                             n: int = _RECOVERY_DEFAULT_COUNT) -> Optional[List[str]]:
+        """Generate and persist a fresh batch of recovery codes.
+
+        Returns the plaintext codes once. Replaces any unconsumed
+        codes for the key, so calling this is the only sanctioned way
+        to rotate. Returns ``None`` if the key is not yet confirmed.
+        """
+        rec = self.get(api_key)
+        if rec is None or not rec.confirmed:
+            return None
+        plain = generate_recovery_codes(n)
+        with self._lock:
+            rec.recovery_hashes = [_hash_recovery(c) for c in plain]
+            self._save()
+        return plain
+
+    def consume_recovery_code(self, api_key: str, code: str) -> bool:
+        """Verify and atomically burn a recovery code.
+
+        Returns True iff the code matched an unconsumed hash. The
+        matched hash is removed from the enrollment so the code is
+        single-use even under concurrent callers.
+        """
+        if not api_key or not code:
+            return False
+        rec = self.get(api_key)
+        if rec is None or not rec.confirmed:
+            return False
+        h = _hash_recovery(code)
+        with self._lock:
+            # Constant-time compare across every stored hash so we don't
+            # leak which slot matched via timing.
+            matched = False
+            for stored in rec.recovery_hashes:
+                if hmac.compare_digest(stored, h):
+                    matched = True
+            if not matched:
+                return False
+            rec.recovery_hashes = [s for s in rec.recovery_hashes if s != h]
+            self._save()
+            return True
+
+    def recovery_remaining(self, api_key: str) -> int:
+        rec = self.get(api_key)
+        if rec is None or not rec.confirmed:
+            return 0
+        return len(rec.recovery_hashes)
+
     def verify(self, api_key: str, code: str) -> bool:
         rec = self.get(api_key)
         if rec is None or not rec.confirmed:
@@ -232,5 +326,6 @@ __all__ = [
     "Enrollment",
     "MfaStore",
     "generate_code",
+    "generate_recovery_codes",
     "provisioning_uri",
 ]

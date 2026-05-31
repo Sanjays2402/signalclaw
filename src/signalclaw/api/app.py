@@ -304,6 +304,7 @@ def create_app() -> FastAPI:
     def require_mfa_for_admin(
         x_api_key: str | None = Header(default=None),
         x_mfa_code: str | None = Header(default=None),
+        x_mfa_recovery_code: str | None = Header(default=None),
     ) -> None:
         """Second-factor gate for admin-scoped endpoints.
 
@@ -312,7 +313,9 @@ def create_app() -> FastAPI:
         * Caller has no enrollment and MFA is not required globally:
           allowed (lets a brand-new operator enroll without being
           locked out).
-        * Caller has an enrollment: must present a valid ``x-mfa-code``.
+        * Caller has an enrollment: must present a valid ``x-mfa-code``
+          or a single-use ``x-mfa-recovery-code``. Recovery codes are
+          burned on first successful use.
         * MFA required globally and caller is not enrolled: rejected
           with a clear message pointing at ``POST /mfa/enroll``.
         """
@@ -326,6 +329,15 @@ def create_app() -> FastAPI:
                     detail="MFA required for admin actions; enroll via POST /mfa/enroll",
                 )
             return
+        # Recovery code path (single-use; preferred when both headers
+        # are sent so a lost-device admin can always recover).
+        if x_mfa_recovery_code:
+            if mfa_store.consume_recovery_code(x_api_key, x_mfa_recovery_code.strip()):
+                return
+            raise HTTPException(
+                status_code=401,
+                detail="invalid or already-used recovery code",
+            )
         if not x_mfa_code:
             raise HTTPException(
                 status_code=401,
@@ -897,6 +909,9 @@ def create_app() -> FastAPI:
             "enrolled": bool(rec and rec.confirmed),
             "pending": bool(rec and not rec.confirmed),
             "required_for_admin": _mfa_required,
+            "recovery_codes_remaining": (
+                len(rec.recovery_hashes) if (rec and rec.confirmed) else 0
+            ),
         }
 
     @app.post("/mfa/enroll", dependencies=[Depends(require_api_key)])
@@ -940,7 +955,36 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "code is required")
         if not mfa_store.confirm(x_api_key or "", code):
             raise HTTPException(400, "invalid TOTP code or no pending enrollment")
-        return {"enrolled": True}
+        # Mint the first batch of recovery codes. Plaintext is returned
+        # exactly once: the UI must surface a "save these now" screen
+        # because the server only persists their hashes.
+        recovery = mfa_store.issue_recovery_codes(x_api_key or "") or []
+        return {
+            "enrolled": True,
+            "recovery_codes": recovery,
+            "recovery_codes_remaining": len(recovery),
+        }
+
+    @app.post("/mfa/recovery-codes/regenerate",
+              dependencies=[Depends(require_scope("admin")),
+                            Depends(require_mfa_for_admin)])
+    def mfa_regenerate_recovery_codes(
+        x_api_key: str | None = Header(default=None),
+    ):
+        """Replace the caller's recovery codes with a fresh batch.
+
+        MFA-gated (TOTP or an unused recovery code) so a stolen API
+        key alone cannot burn through all recovery codes silently.
+        Returns the new plaintext codes exactly once; previous codes
+        are invalidated immediately.
+        """
+        codes = mfa_store.issue_recovery_codes(x_api_key or "")
+        if codes is None:
+            raise HTTPException(400, "MFA is not enrolled for this key")
+        return {
+            "recovery_codes": codes,
+            "recovery_codes_remaining": len(codes),
+        }
 
     @app.post("/mfa/disable",
               dependencies=[Depends(require_scope("admin")),
