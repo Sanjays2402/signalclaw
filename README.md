@@ -6,16 +6,20 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Activity digest** at `/digest`: rolling summary of saved runs, webhook deliveries, batches, and alerts over a selectable window (1 / 3 / 7 / 14 / 30 / 90 days). Renders text + HTML previews of what the email digest will contain. Backed by `GET /api/digest/preview?days=N&format=json|text|html`.
 - **Compare runs** at `/compare`: pick any two saved regime runs and overlay their normalized price series, regime mix, and window return. Backed by `GET /api/runs/compare?a=ID&b=ID`.
 
 ### Try it
 
 ```bash
 # 1. Boot the web app
-cd web && npm run dev   # http://localhost:7430/compare
+cd web && npm run dev   # http://localhost:7430/digest
 
-# 2. Save two runs from the Demo page, then compare them via the API
-curl -s 'http://localhost:7430/api/runs/compare?a=RUN_ID_A&b=RUN_ID_B' | jq .summary
+# 2. Pull the JSON digest for the last 7 days
+curl -s 'http://localhost:7430/api/digest/preview?days=7' | jq '.headline, .stats'
+
+# 3. Or grab a renderable HTML email body
+curl -s 'http://localhost:7430/api/digest/preview?days=7&format=html' > digest.html
 ```
 
 

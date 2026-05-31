@@ -34,6 +34,7 @@ const NAV: CmdItem[] = [
   { id: "nav-fx", label: "FX rates", hint: "Currency conversion", group: "Navigate", run: (r) => r.push("/fx") },
   { id: "nav-notifier", label: "Notifier", hint: "Dead letter queue", group: "Navigate", run: (r) => r.push("/notifier") },
   { id: "nav-webhooks", label: "Webhooks", group: "Navigate", run: (r) => r.push("/webhooks") },
+  { id: "nav-digest", label: "Activity digest", group: "Navigate", run: (r) => r.push("/digest") },
 ];
 
 export default function CommandPalette() {

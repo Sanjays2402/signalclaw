@@ -285,6 +285,10 @@ function NotificationsCard({
           />
           <span>Email me a digest of new picks</span>
         </label>
+        <p className="text-[11px] muted">
+          Preview what the digest will look like at{' '}
+          <a href="/digest" className="underline">/digest</a>.
+        </p>
         <div className="grid sm:grid-cols-3 gap-3">
           <Field label="Digest frequency">
             <Select
