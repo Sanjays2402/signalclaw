@@ -29,6 +29,17 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - Batch regime scan at `/batch`: paste tickers or drop a CSV, classify up to 50 in one pass, save each as a shareable run, export the whole batch as CSV or JSON
 - Free-tier usage meter at `/usage`: real per-month quota of saved runs, daily activity chart, top tickers, regime breakdown, and upgrade CTA; live quota pill in the header that links to `/usage`
 - Guided 3-step onboarding at `/welcome`: unlock the terminal, run a real regime classification on a deterministic seeded series, save it to history with the `#onboarding` tag; dismissible homepage banner points new users to it and a replay button lets anyone redo the tour
+- Installable PWA with offline shell: Chrome/Edge/Android show an "Install SignalClaw" prompt, iOS supports Add to Home Screen, and a service worker caches the app shell so cached pages keep loading without a network. See `/manifest.webmanifest` and `/offline`.
+
+## Install as a desktop or mobile app
+
+The web app ships as a PWA. After `pnpm build && pnpm start` (or any production deploy), Chrome and Edge surface a built-in install button in the URL bar and SignalClaw also pops a small "Install" pill in the bottom right corner the first time `beforeinstallprompt` fires. iOS Safari users can pick Share, then "Add to Home Screen". Once installed it runs in its own window with no browser chrome.
+
+A service worker (`public/sw.js`) precaches the app shell and falls back to `/offline` when the network is unreachable. API traffic (`/api/*`, `/v1/*`, `/admin/*`, `/webhooks/*`) is never cached. Inspect the manifest at:
+
+```bash
+curl -s http://localhost:7430/manifest.webmanifest | head
+```
 
 ## Try the welcome flow
 

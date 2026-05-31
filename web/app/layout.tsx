@@ -7,6 +7,7 @@ import PaletteHint from "@/components/PaletteHint";
 import TickerTape from "@/components/TickerTape";
 import RegimeIndicator from "@/components/RegimeIndicator";
 import QuotaMeter from "@/components/QuotaMeter";
+import InstallPrompt from "@/components/InstallPrompt";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -24,6 +25,26 @@ const mono = IBM_Plex_Mono({
 export const metadata = {
   title: "SignalClaw Terminal",
   description: "Quant signal terminal. Personal research tool. Not financial advice.",
+  applicationName: "SignalClaw",
+  appleWebApp: {
+    capable: true,
+    title: "SignalClaw",
+    statusBarStyle: "black-translucent" as const,
+  },
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+  },
+};
+
+export const viewport = {
+  themeColor: "#0a0a0a",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -90,6 +111,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
         <main className="p-4 md:p-5">{children}</main>
         <CommandPalette />
+        <InstallPrompt />
         <footer className="border-t border-[var(--border)] px-4 py-2 text-[10px] muted uppercase tracking-widest">
           Not financial advice. Personal research tool. Outputs may be wrong.
         </footer>
