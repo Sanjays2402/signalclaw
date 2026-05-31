@@ -24,6 +24,6 @@ export async function POST(req: NextRequest) {
     return err(400, "missing_url", "URL is required.");
   }
   const result = await createWebhook(body);
-  if (!result.ok) return err(400, "invalid_input", result.error);
+  if (!result.ok) return err(400, result.code || "invalid_input", result.error);
   return NextResponse.json(result.webhook, { status: 201 });
 }

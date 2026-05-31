@@ -1,10 +1,10 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { api, swrFetcher, type WebhookList, type WebhookIn, type WebhookDelivery, type WebhookDeliveryLog } from "@/lib/api";
-import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple } from "@phosphor-icons/react/dist/ssr";
+import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple, ShieldCheck, ShieldWarning, Globe, Lock, LockOpen } from "@phosphor-icons/react/dist/ssr";
 
 const EVENT_KINDS = ["entered", "exited", "upgraded", "downgraded", "score_jump"];
 
@@ -104,6 +104,8 @@ function Webhooks() {
         <CreateForm onSubmit={create} busy={busy === "create"} />
         {formErr && <div className="mt-3 text-xs down">{formErr}</div>}
       </Card>
+
+      <EgressPolicyCard />
 
       {fireErr && <ErrorBox err={fireErr} />}
       {fireResult && (
@@ -382,5 +384,161 @@ function CreateForm({
         </span>
       </Button>
     </form>
+  );
+}
+
+type EgressPolicyView = {
+  allow_private: boolean;
+  cidrs: string[];
+  updated_at: string | null;
+  updated_by: string | null;
+  max_cidrs: number;
+};
+
+function EgressPolicyCard() {
+  const { data, error, isLoading, mutate: refresh } = useSWR<EgressPolicyView>(
+    "/admin/webhooks/egress-policy",
+    swrFetcher,
+  );
+  const [cidrText, setCidrText] = useState<string>("");
+  const [allowPrivate, setAllowPrivate] = useState<boolean>(false);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  // Hydrate the form when the server payload first arrives or after a save,
+  // but only when the user has not started editing.
+  useEffect(() => {
+    if (!data || dirty) return;
+    setCidrText(data.cidrs.join("\n"));
+    setAllowPrivate(data.allow_private);
+  }, [data, dirty]);
+
+  async function save() {
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      const cidrs = cidrText
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      const next = await api<EgressPolicyView>("/admin/webhooks/egress-policy", {
+        method: "PUT",
+        body: JSON.stringify({ allow_private: allowPrivate, cidrs }),
+      });
+      setSavedAt(next.updated_at);
+      setDirty(false);
+      setCidrText(next.cidrs.join("\n"));
+      await refresh();
+    } catch (e) {
+      setSaveErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const lastSaved = data?.updated_at || savedAt;
+  const cidrCount = cidrText
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0).length;
+
+  return (
+    <Card
+      title={
+        <span className="inline-flex items-center gap-2">
+          <Globe weight="duotone" size={14} /> Outbound egress policy
+        </span>
+      }
+    >
+      {isLoading && <Loading label="Loading policy" />}
+      {error && <ErrorBox err={error} />}
+      {data && (
+        <div className="space-y-3 text-xs">
+          <p className="muted leading-relaxed">
+            Blocks webhook destinations that resolve to private, loopback, link-local,
+            or multicast ranges (including cloud metadata endpoints) so a misconfigured
+            URL cannot be used to probe internal networks. Hostnames are re-resolved
+            immediately before every delivery attempt to defeat DNS rebinding. When the
+            allowlist below is non-empty, every resolved IP must also fall inside one
+            of its CIDRs.
+          </p>
+
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={allowPrivate}
+              onChange={(e) => {
+                setAllowPrivate(e.target.checked);
+                setDirty(true);
+              }}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="inline-flex items-center gap-1">
+                {allowPrivate ? (
+                  <LockOpen weight="duotone" size={12} />
+                ) : (
+                  <Lock weight="duotone" size={12} />
+                )}
+                Allow private destinations
+              </span>
+              <div className="muted">
+                Off by default. Turn this on only for self-hosted dev loops where the
+                webhook target lives on the same host or private network.
+              </div>
+            </span>
+          </label>
+
+          <div>
+            <div className="muted text-[10px] mb-1 uppercase tracking-widest flex items-center justify-between">
+              <span>Outbound CIDR allowlist</span>
+              <span className="normal-case tracking-normal">
+                {cidrCount} of {data.max_cidrs}
+              </span>
+            </div>
+            <textarea
+              value={cidrText}
+              onChange={(e) => {
+                setCidrText(e.target.value);
+                setDirty(true);
+              }}
+              rows={4}
+              spellCheck={false}
+              placeholder={"203.0.113.0/24\n2001:db8::/32"}
+              className="w-full font-mono text-[11px] px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] focus:border-[var(--accent)] focus:outline-none"
+            />
+            <div className="muted text-[10px] mt-1">
+              One CIDR per line. Leave empty to allow any public IP.
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 text-[11px]">
+              {allowPrivate ? (
+                <span className="inline-flex items-center gap-1 warn">
+                  <ShieldWarning weight="duotone" size={12} /> Private destinations allowed
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 up">
+                  <ShieldCheck weight="duotone" size={12} /> Private destinations blocked
+                </span>
+              )}
+              {lastSaved && (
+                <span className="mono muted">
+                  Updated {new Date(lastSaved).toLocaleString()}
+                  {data.updated_by ? ` by ${data.updated_by.slice(0, 8)}` : ""}
+                </span>
+              )}
+            </div>
+            <Button onClick={save} disabled={saving || !dirty}>
+              {saving ? "Saving" : dirty ? "Save policy" : "Saved"}
+            </Button>
+          </div>
+          {saveErr && <ErrorBox err={saveErr} />}
+        </div>
+      )}
+    </Card>
   );
 }

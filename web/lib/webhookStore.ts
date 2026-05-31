@@ -4,6 +4,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { evaluateUrl, getPolicy, type ResolveFn } from "./egressPolicy.ts";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const SUBS_FILE = path.join(DATA_DIR, "webhooks.json");
@@ -105,16 +106,31 @@ async function appendLog(attempts: DeliveryAttempt[]) {
   await fs.rename(tmp, LOG_FILE);
 }
 
-function validateUrl(u: string): string | null {
+async function validateUrl(
+  u: string,
+  opts: { resolve?: ResolveFn } = {},
+): Promise<{ code: string; reason: string } | null> {
+  // Cheap shape check first so an obviously-bad URL never even hits DNS.
   try {
     const parsed = new URL(u);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return "URL must be http(s)";
+      return { code: "bad_scheme", reason: "URL must be http(s)" };
     }
-    return null;
   } catch {
-    return "URL is not valid";
+    return { code: "bad_url", reason: "URL is not valid" };
   }
+  const policy = await getPolicy();
+  const ev = await evaluateUrl(u, policy, { resolve: opts.resolve });
+  if (!ev.ok) {
+    // DNS hiccups should not block subscription creation: the same check
+    // runs again immediately before every delivery, and a failed lookup
+    // there is recorded as a normal failed attempt the operator can retry.
+    // Refuse only definitive policy violations (literal IP block, private
+    // resolution, allowlist miss, bad scheme, userinfo, etc).
+    if (ev.code === "dns_failed" || ev.code === "no_addresses") return null;
+    return { code: ev.code, reason: ev.reason };
+  }
+  return null;
 }
 
 function sanitizeEvents(events: string[] | undefined): string[] {
@@ -139,12 +155,15 @@ export async function getWebhook(id: string): Promise<Webhook | null> {
   return subs.find((s) => s.id === id) ?? null;
 }
 
-export async function createWebhook(input: WebhookIn): Promise<{
+export async function createWebhook(
+  input: WebhookIn,
+  opts: { resolve?: ResolveFn } = {},
+): Promise<{
   ok: true;
   webhook: Webhook;
-} | { ok: false; error: string }> {
-  const urlErr = validateUrl(input.url);
-  if (urlErr) return { ok: false, error: urlErr };
+} | { ok: false; error: string; code?: string }> {
+  const urlErr = await validateUrl(input.url, opts);
+  if (urlErr) return { ok: false, error: urlErr.reason, code: urlErr.code };
 
   const wh: Webhook = {
     id: crypto.randomUUID(),
@@ -206,6 +225,9 @@ export type DeliverOpts = {
   maxAttempts?: number;
   backoffMs?: number;
   timeoutMs?: number;
+  // Test seam: inject a fake DNS resolver for the egress policy check that
+  // runs immediately before the outbound fetch.
+  resolve?: ResolveFn;
 };
 
 async function deliverOne(
@@ -235,6 +257,27 @@ async function deliverOne(
   const backoffMs = opts.backoffMs ?? 250;
   const timeoutMs = opts.timeoutMs ?? 5000;
   const fetchImpl = (opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike));
+
+  // Re-evaluate the egress policy immediately before the outbound call so a
+  // DNS rebind between save-time and send-time cannot smuggle the request to
+  // a private destination. A blocked attempt is recorded just like any other
+  // failed delivery, so it shows up in /webhooks delivery log + replay UI.
+  const policy = await getPolicy();
+  const ev = await evaluateUrl(sub.url, policy, { resolve: opts.resolve });
+  if (!ev.ok) {
+    return {
+      id: crypto.randomUUID(),
+      subscription_id: sub.id,
+      url: sub.url,
+      status: null,
+      error: `egress_blocked:${ev.code}: ${ev.reason}`,
+      attempt: 0,
+      delivered_at: new Date().toISOString(),
+      signature,
+      event_count: events.length,
+      events,
+    };
+  }
 
   let lastStatus: number | null = null;
   let lastError: string | null = null;
