@@ -410,6 +410,9 @@ export type Webhook = {
   last_status: number | null;
   last_error: string | null;
   last_delivered_at: string | null;
+  previous_secret?: string;
+  previous_secret_expires_at?: string | null;
+  secret_rotated_at?: string | null;
   owner_key_id: string | null;
 };
 export type WebhookIn = {
@@ -418,6 +421,16 @@ export type WebhookIn = {
   tickers?: string[];
   secret?: string;
   enabled?: boolean;
+};
+export type WebhookRotateSecretIn = {
+  secret?: string;
+  grace_seconds?: number;
+};
+export type WebhookRotateSecretOut = {
+  id: string;
+  secret_rotated_at: string | null;
+  previous_secret_expires_at: string | null;
+  grace_seconds: number;
 };
 export type WebhookList = { subscriptions: Webhook[] };
 export type WebhookDelivery = {

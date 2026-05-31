@@ -147,6 +147,17 @@ class WebhookSubscription:
     last_status: Optional[int] = None
     last_error: Optional[str] = None
     last_delivered_at: Optional[str] = None
+    # Webhook signing secret rotation. When an operator rotates the
+    # signing secret we keep the prior secret for a grace window so
+    # downstream receivers can roll their verifier without missing
+    # deliveries. During the grace window we sign with the current
+    # secret AND emit an ``X-SignalClaw-Signature-Previous`` header
+    # signed by the prior secret. Receivers MUST accept either
+    # signature during rotation; once the grace expires only the
+    # current secret signs. ISO-8601 UTC, ``Z`` suffix.
+    previous_secret: str = ""
+    previous_secret_expires_at: Optional[str] = None
+    secret_rotated_at: Optional[str] = None
     # Tenant-isolation field. Holds the ``StoredKey.id`` of the API key
     # that created the subscription. ``None`` is the legacy / admin
     # bucket: rows that predate this field, or that were created by the
@@ -172,8 +183,38 @@ class WebhookSubscription:
             last_status=d.get("last_status"),
             last_error=d.get("last_error"),
             last_delivered_at=d.get("last_delivered_at"),
+            previous_secret=str(d.get("previous_secret", "") or ""),
+            previous_secret_expires_at=d.get("previous_secret_expires_at"),
+            secret_rotated_at=d.get("secret_rotated_at"),
             owner_key_id=d.get("owner_key_id"),
         )
+
+    def previous_secret_active(self, now: Optional[float] = None) -> bool:
+        """True when the grace-window previous secret should still sign."""
+        if not self.previous_secret or not self.previous_secret_expires_at:
+            return False
+        try:
+            exp = time.strptime(self.previous_secret_expires_at,
+                                "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            return False
+        cur = now if now is not None else time.time()
+        return cur < time.mktime(exp) - time.timezone
+
+    def expire_previous_secret_if_due(self,
+                                      now: Optional[float] = None) -> bool:
+        """Clear the prior secret in-place when the grace has elapsed.
+
+        Returns True iff the record was mutated. Callers are expected
+        to persist via :meth:`WebhookStore.update`.
+        """
+        if not self.previous_secret:
+            return False
+        if self.previous_secret_active(now=now):
+            return False
+        self.previous_secret = ""
+        self.previous_secret_expires_at = None
+        return True
 
     def is_visible_to(self, owner_key_id: Optional[str],
                       is_admin: bool = False) -> bool:
@@ -443,9 +484,14 @@ def deliver_events(
         headers = {"content-type": "application/json",
                    "user-agent": "signalclaw-webhook/1"}
         signature = None
+        if sub.expire_previous_secret_if_due():
+            store.update(sub)
         if sub.secret:
             signature = "sha256=" + _sign(sub.secret, body)
             headers["x-signalclaw-signature"] = signature
+        if sub.previous_secret and sub.previous_secret_active():
+            headers["x-signalclaw-signature-previous"] = (
+                "sha256=" + _sign(sub.previous_secret, body))
         status, err, attempts = _attempt_http(
             http, sub.url, body, headers, timeout, max_attempts, sleep)
         sub.last_status = int(status)

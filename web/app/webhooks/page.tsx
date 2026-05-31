@@ -4,7 +4,7 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { api, swrFetcher, type WebhookList, type WebhookIn, type WebhookDelivery, type WebhookDeliveryLog } from "@/lib/api";
-import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple, ShieldCheck, ShieldWarning, Globe, Lock, LockOpen } from "@phosphor-icons/react/dist/ssr";
+import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple, ShieldCheck, ShieldWarning, Globe, Lock, LockOpen, Key } from "@phosphor-icons/react/dist/ssr";
 
 const EVENT_KINDS = ["entered", "exited", "upgraded", "downgraded", "score_jump"];
 
@@ -28,6 +28,41 @@ function Webhooks() {
   const [fireResult, setFireResult] = useState<WebhookDelivery | null>(null);
   const [fireErr, setFireErr] = useState<string | null>(null);
   const [replayErr, setReplayErr] = useState<string | null>(null);
+  const [rotateErr, setRotateErr] = useState<string | null>(null);
+  const [rotateResult, setRotateResult] = useState<{
+    id: string; secret: string; expires_at: string | null;
+  } | null>(null);
+
+  async function rotateSecret(id: string) {
+    setRotateErr(null);
+    setBusy(`rotate-${id}`);
+    try {
+      // Server mints a random 32-byte hex secret when none is passed.
+      // Default 1-hour grace lets receivers roll their verifier.
+      const res = await api<{
+        id: string;
+        secret_rotated_at: string | null;
+        previous_secret_expires_at: string | null;
+        grace_seconds: number;
+      }>(`/webhooks/${encodeURIComponent(id)}/rotate-secret`, {
+        method: "POST",
+        body: JSON.stringify({ secret: "", grace_seconds: 3600 }),
+      });
+      // Re-read so we can surface the new secret one time.
+      const refreshed = await api<WebhookList>("/webhooks");
+      const row = refreshed.subscriptions.find((s) => s.id === id);
+      setRotateResult({
+        id,
+        secret: row?.secret ?? "",
+        expires_at: res.previous_secret_expires_at,
+      });
+      await mutate("/webhooks");
+    } catch (e) {
+      setRotateErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function replay(id: string) {
     setReplayErr(null);
@@ -108,6 +143,23 @@ function Webhooks() {
       <EgressPolicyCard />
 
       {fireErr && <ErrorBox err={fireErr} />}
+      {rotateErr && <ErrorBox err={rotateErr} />}
+      {rotateResult && (
+        <Card title="New signing secret">
+          <p className="text-xs muted mb-2">
+            Copy this once. The prior secret keeps signing as
+            {" "}<code className="font-mono">x-signalclaw-signature-previous</code>{" "}
+            until
+            {" "}{rotateResult.expires_at
+              ? new Date(rotateResult.expires_at).toLocaleString()
+              : "immediately"}.
+          </p>
+          <pre className="font-mono text-xs break-all whitespace-pre-wrap p-2 rounded bg-[var(--surface-2)] border border-[var(--border)]">{rotateResult.secret}</pre>
+          <div className="mt-2">
+            <Button variant="ghost" onClick={() => setRotateResult(null)}>Dismiss</Button>
+          </div>
+        </Card>
+      )}
       {fireResult && (
         <Card title="Last delivery">
           <div className="text-xs muted mb-2">
@@ -286,11 +338,32 @@ function Webhooks() {
                         </span>
                       )}
                       {s.last_error && <span className="down">{s.last_error}</span>}
+                      {s.secret_rotated_at && (
+                        <span title="Last rotation timestamp">
+                          rotated {new Date(s.secret_rotated_at).toLocaleString()}
+                        </span>
+                      )}
+                      {s.previous_secret_expires_at && (
+                        <Badge tone="info">
+                          grace until {new Date(s.previous_secret_expires_at).toLocaleString()}
+                        </Badge>
+                      )}
                     </div>
                   </div>
-                  <Button variant="danger" disabled={busy === s.id} onClick={() => remove(s.id)}>
-                    <Trash weight="duotone" size={14} />
-                  </Button>
+                  <div className="flex flex-col gap-1">
+                    <Button
+                      variant="ghost"
+                      disabled={busy === `rotate-${s.id}`}
+                      onClick={() => rotateSecret(s.id)}
+                      title="Rotate the HMAC signing secret with a 1 hour grace window"
+                    >
+                      <Key weight="duotone" size={14} />
+                      <span className="ml-1 text-xs">Rotate</span>
+                    </Button>
+                    <Button variant="danger" disabled={busy === s.id} onClick={() => remove(s.id)}>
+                      <Trash weight="duotone" size={14} />
+                    </Button>
+                  </div>
                 </div>
               </li>
             ))}

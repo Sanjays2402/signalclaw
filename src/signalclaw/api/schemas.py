@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import List, Optional, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Pick(BaseModel):
@@ -382,7 +382,28 @@ class WebhookOut(BaseModel):
     last_status: Optional[int] = None
     last_error: Optional[str] = None
     last_delivered_at: Optional[str] = None
+    previous_secret: str = ""
+    previous_secret_expires_at: Optional[str] = None
+    secret_rotated_at: Optional[str] = None
     owner_key_id: Optional[str] = None
+
+
+class WebhookRotateSecretIn(BaseModel):
+    """Rotate a webhook signing secret with an optional grace window.
+
+    ``grace_seconds`` keeps the prior secret valid for at most
+    ``grace_seconds`` so receivers can roll their verifier without
+    missing deliveries. ``0`` cuts the prior secret immediately.
+    """
+    secret: str = Field(default="", min_length=0, max_length=512)
+    grace_seconds: int = Field(default=3600, ge=0, le=7 * 24 * 3600)
+
+
+class WebhookRotateSecretOut(BaseModel):
+    id: str
+    secret_rotated_at: Optional[str] = None
+    previous_secret_expires_at: Optional[str] = None
+    grace_seconds: int = 0
 
 
 class WebhookListOut(BaseModel):

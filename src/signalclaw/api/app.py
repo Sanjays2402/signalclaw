@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import time
 from dataclasses import asdict
 from datetime import datetime
 from typing import Optional
@@ -30,6 +31,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        ConcentrationOut, TaxReportOut,
                        OptResultOut,
                        WebhookIn, WebhookOut, WebhookListOut,
+                       WebhookRotateSecretIn, WebhookRotateSecretOut,
                        PickEventOut, WebhookDeliveryOut,
                        WebhookDeliveryLogItemOut, WebhookDeliveryLogOut,
                        DrawdownReportOut, JournalEntryIn, JournalEntryOut, JournalListOut,
@@ -2044,6 +2046,53 @@ def create_app() -> FastAPI:
         if not webhooks_store.remove(sub_id):
             raise HTTPException(404, "subscription not found")
         return {"removed": sub_id}
+
+    @app.post("/webhooks/{sub_id}/rotate-secret",
+              response_model=WebhookRotateSecretOut,
+              dependencies=[Depends(require_api_key)])
+    def webhooks_rotate_secret(sub_id: str, body: WebhookRotateSecretIn,
+                               x_api_key: str | None = Header(default=None)):
+        """Rotate the HMAC signing secret with a grace window.
+
+        The prior secret is retained for ``grace_seconds`` so receivers
+        can verify with either secret while they roll their verifier.
+        During grace, deliveries emit ``X-SignalClaw-Signature`` (new
+        secret) AND ``X-SignalClaw-Signature-Previous`` (prior secret).
+        After grace, only the new secret signs. ``secret=""`` mints a
+        cryptographically random 32-byte hex secret.
+        """
+        import secrets as _secrets
+        sub = webhooks_store.get(sub_id)
+        if sub is None:
+            raise HTTPException(404, "subscription not found")
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        if not sub.is_visible_to(owner_id, is_admin=is_admin):
+            # Tenant isolation: do not reveal existence to non-owners.
+            raise HTTPException(404, "subscription not found")
+        new_secret = body.secret.strip() or _secrets.token_hex(32)
+        if len(new_secret) < 16:
+            raise HTTPException(422, "secret must be at least 16 chars")
+        now_struct = time.gmtime()
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", now_struct)
+        prior = sub.secret or ""
+        if prior and body.grace_seconds > 0:
+            exp_iso = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(time.time() + int(body.grace_seconds)))
+            sub.previous_secret = prior
+            sub.previous_secret_expires_at = exp_iso
+        else:
+            sub.previous_secret = ""
+            sub.previous_secret_expires_at = None
+        sub.secret = new_secret
+        sub.secret_rotated_at = now_iso
+        webhooks_store.update(sub)
+        return WebhookRotateSecretOut(
+            id=sub.id,
+            secret_rotated_at=sub.secret_rotated_at,
+            previous_secret_expires_at=sub.previous_secret_expires_at,
+            grace_seconds=int(body.grace_seconds) if prior else 0,
+        )
 
     @app.post("/webhooks/fire/latest", response_model=WebhookDeliveryOut,
               dependencies=[Depends(require_api_key)])

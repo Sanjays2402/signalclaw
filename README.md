@@ -6,6 +6,25 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Webhook signing secret rotation with a grace window**. SOC2 CC6.1 + CC6.7 want every shared secret to be rotatable on demand without a flag day, and enterprise procurement reviews score the HMAC story specifically on whether receivers can roll their verifier without missed deliveries. `POST /webhooks/{id}/rotate-secret` (tenant-scoped via the existing owner-key gate) replaces the active secret and, when `grace_seconds > 0`, retains the prior secret on the subscription record as `previous_secret` with an absolute `previous_secret_expires_at` cutoff. While the grace window is open every outbound delivery is dual-signed: `X-SignalClaw-Signature` is computed with the new secret and `X-SignalClaw-Signature-Previous` is computed with the prior secret, so receivers can flip their verifier at any point inside the window without dropping events. Once the grace elapses the prior secret is purged on the very next delivery (the record is mutated and persisted in-line) and only the new signature is emitted. Passing `secret: ""` mints a cryptographically random 32-byte hex secret server-side; secrets shorter than 16 chars are rejected at the boundary (`422`); a sibling tenant's id returns `404` (not `403`) so existence does not leak. The `/webhooks` page surfaces a per-row Rotate button, displays the last `secret_rotated_at`, an active grace badge, and a one-time copy panel for the new secret. Covered by `tests/test_webhook_secret_rotation.py` (rotate response and persisted state, blank-secret minting, too-short secret rejection, end-to-end dual signing during grace then drop-after-expiry on the next delivery, and a two-tenant isolation case where Bob's rotate attempt 404s without changing Alice's secret).
+
+  Try it locally: `make api` then
+  ```bash
+  # Create a webhook (uses the operator key for the example)
+  SUB=$(curl -s -X POST http://localhost:7431/webhooks \
+      -H "x-api-key: $SIGNALCLAW_API_KEY" \
+      -H "content-type: application/json" \
+      -d '{"url":"https://example.test/hook","secret":"first-secret-please-rotate"}' | jq -r .id)
+
+  # Rotate to a server-minted secret, keep the old one valid for 1 hour
+  curl -s -X POST http://localhost:7431/webhooks/$SUB/rotate-secret \
+      -H "x-api-key: $SIGNALCLAW_API_KEY" \
+      -H "content-type: application/json" \
+      -d '{"secret":"","grace_seconds":3600}' | jq .
+  # The new secret is returned on the subscription row at GET /webhooks.
+  ```
+  UI: `pnpm --filter signalclaw-web dev` and visit http://localhost:7430/webhooks.
+
 - **Per-API-key absolute expiry on the Next admin store**. SOC2 CC6.1 requires that credentials cannot live forever; rotation alone is not enough if there is no enforced cutoff. The Next-side admin key store at `web/lib/keyStore.ts` now persists an optional `expires_at` (ISO 8601 UTC) on every key, accepts it on creation (`POST /api/admin/keys`), and exposes a dedicated `GET`/`PUT /api/admin/keys/{id}/expiry` to set or clear the cutoff on an existing key. The check lives inside `authenticate()` itself, so every Next route, admin or public, sees the same answer: an expired key returns `null` exactly like a revoked key, with no last_used_at bump. Past timestamps are rejected at the boundary (`400 invalid_expiry`), unparseable strings fail the same way, revoked keys cannot be edited (`409 revoked`), and every successful change is written to the audit log with a `expiry:<before>-><after>` reason so a reviewer can prove when the window was set. The exported `publicView` now includes both `expires_at` and a derived `expired` boolean so the dashboard at `/settings/keys` can render the badge without a second round-trip. Covered by `web/tests/keyExpiry.test.mjs` (default is no expiry, future timestamps accepted, past and junk timestamps rejected on both create and update, an authenticated key flips to unauthenticated once its expiry passes, `setKeyExpiry(null)` clears the cutoff, and revoked keys are refused).
 
   Try it locally: `pnpm --filter signalclaw-web dev` then
