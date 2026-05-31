@@ -21,6 +21,7 @@ export type ActivityKind =
   | "key.created"
   | "key.revoked"
   | "key.rotated"
+  | "webhook.secret_rotated"
   | "invite.created"
   | "invite.revoked"
   | "invite.accepted"
@@ -48,6 +49,7 @@ const VALID_KINDS: ReadonlySet<ActivityKind> = new Set([
   "key.created",
   "key.revoked",
   "key.rotated",
+  "webhook.secret_rotated",
   "invite.created",
   "invite.revoked",
   "invite.accepted",

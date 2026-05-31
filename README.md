@@ -215,6 +215,18 @@ A local-first time-series signal terminal that classifies market regime (bull / 
   ```
   UI: `pnpm --filter signalclaw-web dev` and visit http://localhost:7430/webhooks.
 
+  The Next.js dashboard runs its own outbound delivery pipeline (`web/lib/webhookStore.ts`) on top of the same contract. `POST /api/webhooks/{id}/rotate-secret` mints or accepts a new HMAC secret, keeps the prior one as `previous_secret` until `previous_secret_expires_at`, and during the grace window every outbound delivery's `X-SignalClaw-Signature` header carries two repeated `v1=` MAC entries: one signed with the new secret, one with the previous, so receivers can verify with whichever they have wired up. `grace_seconds: 0` does an immediate cutover with no previous-secret retention; values above `604800` (7 days) are rejected as `invalid_grace`. Every rotation is appended to the hash-chained audit log (`route=/api/webhooks/{id}/rotate-secret`, `details.grace_seconds`, `details.had_previous`, `details.rotated_at`) and surfaces in the activity feed as `webhook.secret_rotated`. Covered by `web/tests/webhookRotateSecret.test.mjs` (rotate response shape, dual-signing inside the grace window, single-signing on `graceSeconds=0`, replace-while-still-rotating semantics, invalid-grace rejection, and 404 on unknown id).
+
+  Try the Next-side rotation locally:
+  ```bash
+  cd web && pnpm dev
+  # In another shell, after creating a webhook via the UI or POST /webhooks:
+  curl -s -X POST http://localhost:7430/webhooks/$SUB/rotate-secret \
+      -H "content-type: application/json" \
+      -d '{"secret":"","grace_seconds":3600}' | jq .
+  # => { id, secret, secret_rotated_at, previous_secret_expires_at, grace_seconds }
+  ```
+
 - **Per-API-key absolute expiry on the Next admin store**. SOC2 CC6.1 requires that credentials cannot live forever; rotation alone is not enough if there is no enforced cutoff. The Next-side admin key store at `web/lib/keyStore.ts` now persists an optional `expires_at` (ISO 8601 UTC) on every key, accepts it on creation (`POST /api/admin/keys`), and exposes a dedicated `GET`/`PUT /api/admin/keys/{id}/expiry` to set or clear the cutoff on an existing key. The check lives inside `authenticate()` itself, so every Next route, admin or public, sees the same answer: an expired key returns `null` exactly like a revoked key, with no last_used_at bump. Past timestamps are rejected at the boundary (`400 invalid_expiry`), unparseable strings fail the same way, revoked keys cannot be edited (`409 revoked`), and every successful change is written to the audit log with a `expiry:<before>-><after>` reason so a reviewer can prove when the window was set. The exported `publicView` now includes both `expires_at` and a derived `expired` boolean so the dashboard at `/settings/keys` can render the badge without a second round-trip. Covered by `web/tests/keyExpiry.test.mjs` (default is no expiry, future timestamps accepted, past and junk timestamps rejected on both create and update, an authenticated key flips to unauthenticated once its expiry passes, `setKeyExpiry(null)` clears the cutoff, and revoked keys are refused).
 
   Try it locally: `pnpm --filter signalclaw-web dev` then

@@ -30,7 +30,27 @@ export type Webhook = {
   last_status: number | null;
   last_error: string | null;
   last_delivered_at: string | null;
+  // Optional previous signing secret kept active for a grace window so
+  // receivers can rotate without dropping events. Both signatures are sent
+  // until previous_secret_expires_at passes, at which point the previous
+  // secret is purged at the next read/rotate cycle.
+  previous_secret?: string | null;
+  previous_secret_expires_at?: string | null;
+  secret_rotated_at?: string | null;
 };
+
+export type RotateSecretInput = {
+  secret?: string; // optional override; if empty/missing a random one is minted
+  graceSeconds?: number; // 0 = no grace, default 3600 (1h), max 7 days
+};
+export type RotateSecretResult =
+  | {
+      ok: true;
+      webhook: Webhook;
+      secret: string; // plaintext new secret, returned exactly once
+      grace_seconds: number;
+    }
+  | { ok: false; code: "not_found" | "invalid_grace"; message: string };
 
 export type WebhookIn = {
   url: string;
@@ -183,6 +203,47 @@ export async function createWebhook(
   return { ok: true, webhook: wh };
 }
 
+// Mint or accept a new HMAC signing secret. Keeps the current secret active
+// as `previous_secret` for `graceSeconds` so receivers can roll over without
+// a window of dropped events. Returns the plaintext secret exactly once.
+export async function rotateWebhookSecret(
+  id: string,
+  input: RotateSecretInput = {},
+): Promise<RotateSecretResult> {
+  const grace = Number.isFinite(input.graceSeconds as number)
+    ? Math.floor(input.graceSeconds as number)
+    : 3600;
+  if (grace < 0 || grace > 7 * 24 * 3600) {
+    return {
+      ok: false,
+      code: "invalid_grace",
+      message: "grace_seconds must be between 0 and 604800 (7 days).",
+    };
+  }
+  const subs = await readSubs();
+  const idx = subs.findIndex((s) => s.id === id);
+  if (idx === -1) {
+    return { ok: false, code: "not_found", message: "Webhook not found." };
+  }
+  const provided = (input.secret ?? "").trim();
+  const newSecret =
+    provided.length > 0 ? provided : crypto.randomBytes(32).toString("hex");
+  const now = new Date();
+  const previous = subs[idx].secret || null;
+  const previousExpires =
+    previous && grace > 0 ? new Date(now.getTime() + grace * 1000).toISOString() : null;
+  const next: Webhook = {
+    ...subs[idx],
+    secret: newSecret,
+    previous_secret: previousExpires ? previous : null,
+    previous_secret_expires_at: previousExpires,
+    secret_rotated_at: now.toISOString(),
+  };
+  subs[idx] = next;
+  await writeSubs(subs);
+  return { ok: true, webhook: next, secret: newSecret, grace_seconds: grace };
+}
+
 export async function deleteWebhook(id: string): Promise<boolean> {
   const subs = await readSubs();
   const next = subs.filter((s) => s.id !== id);
@@ -206,6 +267,26 @@ function signBody(secret: string, body: string, timestamp: string): string {
   const mac = crypto.createHmac("sha256", secret);
   mac.update(`${timestamp}.${body}`);
   return `t=${timestamp},v1=${mac.digest("hex")}`;
+}
+
+function macHex(secret: string, body: string, timestamp: string): string {
+  const mac = crypto.createHmac("sha256", secret);
+  mac.update(`${timestamp}.${body}`);
+  return mac.digest("hex");
+}
+
+// Build the X-SignalClaw-Signature header value. During a rotation grace
+// window we include both the current and previous secret signatures as
+// repeated v1= entries so the receiver can verify with whichever it has.
+function signBodyForSub(sub: Webhook, body: string, timestamp: string): string | null {
+  if (!sub.secret) return null;
+  const prevActive =
+    sub.previous_secret &&
+    sub.previous_secret_expires_at &&
+    Date.parse(sub.previous_secret_expires_at) > Date.now();
+  const macs: string[] = [`v1=${macHex(sub.secret, body, timestamp)}`];
+  if (prevActive) macs.push(`v1=${macHex(sub.previous_secret!, body, timestamp)}`);
+  return `t=${timestamp},${macs.join(",")}`;
 }
 
 function matches(sub: Webhook, ev: PickEvent): boolean {
@@ -242,7 +323,7 @@ async function deliverOne(
     events,
   });
   const timestamp = String(Math.floor(Date.now() / 1000));
-  const signature = sub.secret ? signBody(sub.secret, body, timestamp) : null;
+  const signature = signBodyForSub(sub, body, timestamp);
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "user-agent": "SignalClaw-Webhook/1.0",
