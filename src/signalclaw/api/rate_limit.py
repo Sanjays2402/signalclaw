@@ -193,6 +193,7 @@ class ScopeEnforcementMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, exempt_paths: Iterable[str] = (
         "/health", "/ready", "/metrics", "/disclaimer",
         "/docs", "/openapi.json", "/redoc", "/docs/oauth2-redirect",
+        "/scim",
     )) -> None:
         super().__init__(app)
         self.exempt = tuple(exempt_paths)

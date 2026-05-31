@@ -2,7 +2,59 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: legal hold suspends retention and erase for in-scope data
+## New: SCIM 2.0 user provisioning for Okta, Entra, and Google Workspace
+
+Procurement reality: every enterprise security review asks whether joiner / mover / leaver is automated against the customer's identity provider. SAML or OIDC alone solves login, not the lifecycle. SCIM 2.0 (RFC 7643 / 7644) is the wire protocol Okta, Microsoft Entra ID, Google Workspace, OneLogin and JumpCloud all speak for that lifecycle, which is why SOC2 CC6.2 and ISO 27001 A.9.2 expect it. SignalClaw now ships a real SCIM 2.0 `/Users` implementation that mints a SignalClaw API key when the IdP creates a user, hard-revokes the key the moment the IdP marks them inactive or deleted, and writes every step to the existing tamper-evident audit log.
+
+The full lifecycle is wired end to end:
+
+- `POST /admin/scim/rotate` mints a rotatable bearer token (admin scope + MFA). The plaintext is shown exactly once; only its SHA-256 hash is persisted.
+- `GET  /scim/v2/ServiceProviderConfig` and `/scim/v2/ResourceTypes` advertise the supported feature set so an IdP connector can discover the integration.
+- `POST /scim/v2/Users` accepts the SCIM `User` schema, mints a SignalClaw API key bound to the IdP `userName` / `externalId`, and returns the secret once via the `urn:signalclaw:scim:extension:1.0` extension.
+- `PUT`, `PATCH /scim/v2/Users/{id}` honor the `active` flag exactly: deactivation hard-revokes the bound key within the same request; reactivation mints a fresh key (the old secret stays dead).
+- `DELETE /scim/v2/Users/{id}` revokes the bound key and removes the SCIM row.
+- `GET /scim/v2/Users?filter=userName eq "..."` supports the only filter Okta and Entra actually send.
+- `GET /admin/scim/users` surfaces the SCIM roster to the admin console without leaking secrets, and `PUT /admin/scim/policy` controls the default role and scopes minted on provision.
+
+Every mutation is written to the existing audit log with the SCIM `id`, the IdP-supplied `externalId`, and the bound `key_id` so a reviewer can trace a deprovision back to the source-of-truth ticket. The bearer is constant-time compared, never logged, and disabling SCIM (`POST /admin/scim/disable`) takes effect instantly.
+
+Try it locally:
+
+```bash
+# 1. Mint a SCIM bearer (admin scope + TOTP required)
+curl -s -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+     -H "x-mfa-code: 123456" \
+     http://localhost:7431/admin/scim/rotate | jq .
+# => {"enabled": true, "bearer": "scim_...", ...}
+
+export SCIM="scim_xxx"  # paste the bearer once
+
+# 2. Provision a user the way Okta does
+curl -s -X POST -H "Authorization: Bearer $SCIM" \
+     -H "content-type: application/scim+json" \
+     -d '{
+       "schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],
+       "userName":"alice@example.com",
+       "displayName":"Alice Example",
+       "externalId":"okta-abc-123",
+       "active":true,
+       "emails":[{"value":"alice@example.com","primary":true,"type":"work"}]
+     }' \
+     http://localhost:7431/scim/v2/Users | jq .
+# => {"id":"...","active":true,"urn:signalclaw:scim:extension:1.0":{"apiKeySecret":"sck_..."}}
+
+# 3. Deprovision (Okta sends this when a leaver hits the IdP)
+curl -s -X PATCH -H "Authorization: Bearer $SCIM" \
+     -H "content-type: application/scim+json" \
+     -d '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+          "Operations":[{"op":"replace","value":{"active":false}}]}' \
+     http://localhost:7431/scim/v2/Users/$USER_ID | jq .
+# The bound API key is dead from this moment on.
+```
+
+Correctness is enforced at the wire: `tests/test_scim.py` proves the endpoint is 404 until a bearer is minted, that every method returns 401 without `Authorization: Bearer ...`, that a wrong bearer is rejected, that creating a user produces an API key which actually authenticates a read call, that PATCH `active=false` revokes that key on the next request, that reactivation issues a fresh secret different from the original, that DELETE removes the user and kills the key, and that `scim.user.create`, `scim.user.deactivate`, `scim.user.reactivate`, and `scim.user.delete` all appear in the audit log.
+
+## Previously: legal hold suspends retention and erase for in-scope data
 
 Procurement reality: every regulated buyer (financial services, healthcare, public sector) requires the vendor to be able to suspend automated deletion the moment litigation, regulatory inquiry, or eDiscovery is anticipated. SOC2 CC6.5, FRCP Rule 37(e), and most master service agreements expect this control to exist before signature. SignalClaw now ships a per-workspace legal hold register that pins data while a matter is open.
 

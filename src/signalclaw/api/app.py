@@ -298,6 +298,25 @@ def create_app() -> FastAPI:
         ttl_seconds=int(os.environ.get("SIGNALCLAW_OIDC_STATE_TTL", "600"))
     )
     app.state.oidc_state = oidc_state
+    # SCIM 2.0 provisioning. Bound to a dedicated bearer token (not an
+    # API key) so an IdP connector cannot accidentally call the rest
+    # of the API. Mints / revokes real api keys via api_key_store.
+    from ..scim import (
+        ScimConfigStore as _ScimCfg,
+        ScimUserStore as _ScimUsr,
+        build_scim_user as _scim_user,
+        scim_error as _scim_error,
+        service_provider_config as _scim_spc,
+        resource_types as _scim_rts,
+        parse_userName as _scim_uname,
+        parse_primary_email as _scim_email,
+        apply_patch_ops as _scim_patch,
+        SCIM_LIST_SCHEMA as _SCIM_LIST,
+    )
+    scim_cfg_store = _ScimCfg(settings.data_dir / "scim" / "config.json")
+    scim_user_store = _ScimUsr(settings.data_dir / "scim" / "users.json")
+    app.state.scim_cfg_store = scim_cfg_store
+    app.state.scim_user_store = scim_user_store
     set_user_key_store(api_key_store)
     # MFA (TOTP) for admin actions. Enrolled keys must present a fresh
     # ``x-mfa-code`` on every admin call. When SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN=1
@@ -3071,6 +3090,352 @@ def create_app() -> FastAPI:
             "return_to": rec.return_to,
             "note": "Store this secret now. It will not be shown again.",
         })
+
+    # -------------------------------------------------------------------
+    # SCIM 2.0 -- automated user provisioning for Okta / Entra / etc.
+    # -------------------------------------------------------------------
+    from fastapi.responses import JSONResponse as _SJson
+    from fastapi import Request as _ScimReq
+    from ..api_keys import ROLE_SCOPES as _ROLE_SCOPES, ROLES as _ROLES
+    # Expose to module globals so FastAPI's annotation resolver (which
+    # runs against the module dict under ``from __future__ import
+    # annotations``) can dereference the local alias.
+    globals()["_ScimReq"] = _ScimReq
+
+    SCIM_CT = "application/scim+json"
+
+    def _scim_resp(body, status: int = 200):
+        return _SJson(body, status_code=status, media_type=SCIM_CT)
+
+    def _scim_audit(request: _ScimReq, action: str, status: int, extra: dict, *, label: str = "scim"):
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE(
+            ts=_now_iso(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method=request.method,
+            path=request.url.path,
+            status=status,
+            actor_key_hash="-",
+            actor_label=label,
+            source_ip=src_ip,
+            duration_ms=0.0,
+            action=action,
+            extra=extra,
+        ))
+
+    def _require_scim(request: _ScimReq):
+        auth = request.headers.get("authorization") or ""
+        token = ""
+        if auth.lower().startswith("bearer "):
+            token = auth.split(" ", 1)[1].strip()
+        cfg = scim_cfg_store.get()
+        if not cfg.enabled or not cfg.bearer_hash:
+            _scim_audit(request, "scim.auth.disabled", 404, {})
+            raise HTTPException(status_code=404, detail="scim not configured")
+        if not token or not scim_cfg_store.verify_bearer(token):
+            _scim_audit(request, "scim.auth.unauthorized", 401, {})
+            raise HTTPException(status_code=401, detail="invalid scim bearer")
+        return True
+
+    def _scim_base(request: _ScimReq) -> str:
+        # Build the resource ``meta.location`` base from the request so
+        # the IdP can dereference users behind a reverse proxy.
+        return str(request.base_url).rstrip("/") + "/scim/v2"
+
+    @app.get("/scim/v2/ServiceProviderConfig", include_in_schema=False)
+    def scim_spc(request: _ScimReq):
+        # Public per RFC 7644 §4; advertises features only.
+        return _scim_resp(_scim_spc())
+
+    @app.get("/scim/v2/ResourceTypes", include_in_schema=False)
+    def scim_resource_types(request: _ScimReq):
+        return _scim_resp(_scim_rts())
+
+    @app.get("/scim/v2/Users", include_in_schema=False,
+             dependencies=[Depends(_require_scim)])
+    def scim_list_users(request: _ScimReq, filter: str | None = None,
+                       startIndex: int = 1, count: int = 100):
+        # Minimal filter support: ``userName eq "x"`` (Okta/Entra send this).
+        uname: str | None = None
+        if filter:
+            f = filter.strip()
+            # crude but RFC-compliant for the only filter the IdPs send
+            if f.lower().startswith("username eq "):
+                rhs = f[len("userName eq "):].strip()
+                if rhs.startswith('"') and rhs.endswith('"'):
+                    uname = rhs[1:-1]
+        rows = scim_user_store.list(filter_username=uname)
+        base = _scim_base(request)
+        # paginate
+        try:
+            start = max(1, int(startIndex))
+            cnt = max(0, min(int(count), 200))
+        except (TypeError, ValueError):
+            start, cnt = 1, 100
+        page = rows[start - 1 : start - 1 + cnt]
+        return _scim_resp({
+            "schemas": [_SCIM_LIST],
+            "totalResults": len(rows),
+            "startIndex": start,
+            "itemsPerPage": len(page),
+            "Resources": [_scim_user(u, location_base=base) for u in page],
+        })
+
+    @app.get("/scim/v2/Users/{user_id}", include_in_schema=False,
+             dependencies=[Depends(_require_scim)])
+    def scim_get_user(user_id: str, request: _ScimReq):
+        u = scim_user_store.get(user_id)
+        if not u:
+            return _scim_resp(_scim_error("User not found", 404), 404)
+        return _scim_resp(_scim_user(u, location_base=_scim_base(request)))
+
+    @app.post("/scim/v2/Users", include_in_schema=False,
+              dependencies=[Depends(_require_scim)])
+    async def scim_create_user(request: _ScimReq):
+        try:
+            payload = await request.json()
+        except Exception:
+            return _scim_resp(_scim_error("body must be JSON", 400, "invalidSyntax"), 400)
+        if not isinstance(payload, dict):
+            return _scim_resp(_scim_error("body must be a JSON object", 400, "invalidSyntax"), 400)
+        uname = _scim_uname(payload)
+        if not uname:
+            return _scim_resp(_scim_error("userName required", 400, "invalidValue"), 400)
+        if scim_user_store.get_by_username(uname) is not None:
+            return _scim_resp(_scim_error("userName already exists", 409, "uniqueness"), 409)
+        external_id = str(payload.get("externalId") or "")
+        display_name = str(payload.get("displayName") or uname)
+        email = _scim_email(payload)
+        active = payload.get("active", True)
+        if not isinstance(active, bool):
+            active = str(active).lower() == "true"
+        cfg = scim_cfg_store.get()
+        role = cfg.default_role if cfg.default_role in _ROLES else "member"
+        allowed = _ROLE_SCOPES[role]
+        scopes = [s for s in cfg.default_scopes if s in allowed] or ["read"]
+        if "admin" in allowed:
+            scopes = sorted(set(scopes) | {"admin"})
+        # Mint a real api key. Label includes the IdP user so an admin
+        # can correlate the key with the source-of-truth account.
+        rec_key, secret = api_key_store.create(
+            label=f"scim:{uname}", scopes=scopes, role=role,
+        )
+        if not active:
+            # SCIM caller created an already-inactive user; revoke the
+            # key immediately so it cannot be used. (Some IdPs do this
+            # during initial sync before group assignment.)
+            api_key_store.revoke(rec_key.id)
+        try:
+            row = scim_user_store.create(
+                user_name=uname,
+                external_id=external_id,
+                display_name=display_name,
+                email=email,
+                active=bool(active),
+                key_id=rec_key.id,
+            )
+        except ValueError as exc:
+            api_key_store.revoke(rec_key.id)
+            return _scim_resp(_scim_error(str(exc), 409, "uniqueness"), 409)
+        _scim_audit(request, "scim.user.create", 201, {
+            "user_id": row.id, "user_name": uname,
+            "external_id": external_id, "key_id": rec_key.id,
+            "active": bool(active), "role": role,
+        }, label=f"scim:{uname}")
+        body = _scim_user(row, location_base=_scim_base(request))
+        # SCIM never returns secrets in the resource. Surface the
+        # one-time api key secret via an out-of-band ``urn:signalclaw``
+        # extension schema so an operator running the call by hand can
+        # capture it; production IdP connectors ignore unknown schemas.
+        body["schemas"] = list(body["schemas"]) + ["urn:signalclaw:scim:extension:1.0"]
+        body["urn:signalclaw:scim:extension:1.0"] = {
+            "apiKeySecret": secret,
+            "apiKeyId": rec_key.id,
+            "note": "Store this secret now. It will not be shown again.",
+        }
+        return _scim_resp(body, 201)
+
+    @app.put("/scim/v2/Users/{user_id}", include_in_schema=False,
+             dependencies=[Depends(_require_scim)])
+    async def scim_replace_user(user_id: str, request: _ScimReq):
+        existing = scim_user_store.get(user_id)
+        if not existing:
+            return _scim_resp(_scim_error("User not found", 404), 404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return _scim_resp(_scim_error("body must be JSON", 400, "invalidSyntax"), 400)
+        if not isinstance(payload, dict):
+            return _scim_resp(_scim_error("body must be a JSON object", 400, "invalidSyntax"), 400)
+        uname = _scim_uname(payload) or existing.user_name
+        display_name = str(payload.get("displayName") or existing.display_name)
+        external_id = str(payload.get("externalId") or existing.external_id)
+        email = _scim_email(payload) or existing.email
+        active_in = payload.get("active", existing.active)
+        if isinstance(active_in, str):
+            active_in = active_in.lower() == "true"
+        active = bool(active_in)
+        # Sync key activation state with SCIM ``active``.
+        if active and not existing.active:
+            # Re-activating a previously-disabled SCIM user. We mint a
+            # fresh api key (the prior one was hard-revoked) and audit.
+            rec_key, secret = api_key_store.create(
+                label=f"scim:{uname}",
+                scopes=list(scim_cfg_store.get().default_scopes) or ["read"],
+                role=scim_cfg_store.get().default_role,
+            )
+            row = scim_user_store.replace(
+                user_id,
+                user_name=uname, display_name=display_name,
+                external_id=external_id, email=email,
+                active=True, key_id=rec_key.id,
+            )
+            _scim_audit(request, "scim.user.reactivate", 200, {
+                "user_id": user_id, "key_id": rec_key.id,
+            }, label=f"scim:{uname}")
+            body = _scim_user(row, location_base=_scim_base(request))
+            body["schemas"] = list(body["schemas"]) + ["urn:signalclaw:scim:extension:1.0"]
+            body["urn:signalclaw:scim:extension:1.0"] = {
+                "apiKeySecret": secret, "apiKeyId": rec_key.id,
+                "note": "Store this secret now. It will not be shown again.",
+            }
+            return _scim_resp(body, 200)
+        if not active and existing.active:
+            # Deactivation: hard-revoke the bound api key. SCIM does
+            # not require deletion of the user resource, so the row
+            # stays for audit but the credential is dead.
+            api_key_store.revoke(existing.key_id)
+            _scim_audit(request, "scim.user.deactivate", 200, {
+                "user_id": user_id, "key_id": existing.key_id,
+            }, label=f"scim:{uname}")
+        row = scim_user_store.replace(
+            user_id,
+            user_name=uname, display_name=display_name,
+            external_id=external_id, email=email, active=active,
+        )
+        _scim_audit(request, "scim.user.replace", 200, {
+            "user_id": user_id, "active": active,
+        }, label=f"scim:{uname}")
+        return _scim_resp(_scim_user(row, location_base=_scim_base(request)))
+
+    @app.patch("/scim/v2/Users/{user_id}", include_in_schema=False,
+               dependencies=[Depends(_require_scim)])
+    async def scim_patch_user(user_id: str, request: _ScimReq):
+        existing = scim_user_store.get(user_id)
+        if not existing:
+            return _scim_resp(_scim_error("User not found", 404), 404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return _scim_resp(_scim_error("body must be JSON", 400, "invalidSyntax"), 400)
+        if not isinstance(payload, dict):
+            return _scim_resp(_scim_error("body must be a JSON object", 400, "invalidSyntax"), 400)
+        changes = _scim_patch(payload)
+        if not changes:
+            return _scim_resp(_scim_user(existing, location_base=_scim_base(request)))
+        new_active = changes.get("active", existing.active)
+        # Same activation semantics as PUT: deactivate revokes, reactivate mints.
+        if not new_active and existing.active:
+            api_key_store.revoke(existing.key_id)
+            _scim_audit(request, "scim.user.deactivate", 200, {
+                "user_id": user_id, "key_id": existing.key_id,
+            }, label=f"scim:{existing.user_name}")
+            row = scim_user_store.replace(user_id, **changes)
+            return _scim_resp(_scim_user(row, location_base=_scim_base(request)))
+        if new_active and not existing.active:
+            rec_key, secret = api_key_store.create(
+                label=f"scim:{existing.user_name}",
+                scopes=list(scim_cfg_store.get().default_scopes) or ["read"],
+                role=scim_cfg_store.get().default_role,
+            )
+            changes["key_id"] = rec_key.id
+            row = scim_user_store.replace(user_id, **changes)
+            _scim_audit(request, "scim.user.reactivate", 200, {
+                "user_id": user_id, "key_id": rec_key.id,
+            }, label=f"scim:{existing.user_name}")
+            body = _scim_user(row, location_base=_scim_base(request))
+            body["schemas"] = list(body["schemas"]) + ["urn:signalclaw:scim:extension:1.0"]
+            body["urn:signalclaw:scim:extension:1.0"] = {
+                "apiKeySecret": secret, "apiKeyId": rec_key.id,
+                "note": "Store this secret now. It will not be shown again.",
+            }
+            return _scim_resp(body, 200)
+        row = scim_user_store.replace(user_id, **changes)
+        _scim_audit(request, "scim.user.patch", 200, {
+            "user_id": user_id, "fields": sorted(changes.keys()),
+        }, label=f"scim:{existing.user_name}")
+        return _scim_resp(_scim_user(row, location_base=_scim_base(request)))
+
+    @app.delete("/scim/v2/Users/{user_id}", include_in_schema=False,
+                dependencies=[Depends(_require_scim)])
+    def scim_delete_user(user_id: str, request: _ScimReq):
+        existing = scim_user_store.get(user_id)
+        if not existing:
+            return _scim_resp(_scim_error("User not found", 404), 404)
+        api_key_store.revoke(existing.key_id)
+        scim_user_store.delete(user_id)
+        _scim_audit(request, "scim.user.delete", 204, {
+            "user_id": user_id, "key_id": existing.key_id,
+            "user_name": existing.user_name,
+        }, label=f"scim:{existing.user_name}")
+        from fastapi.responses import Response as _NCResp
+        return _NCResp(status_code=204)
+
+    # ---------- admin surface: configure / rotate / disable bearer ----------
+
+    @app.get("/admin/scim",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_scim_get():
+        return scim_cfg_store.get().to_public()
+
+    @app.post("/admin/scim/rotate",
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_scim_rotate(request: _ScimReq):
+        cfg, bearer = scim_cfg_store.rotate_bearer()
+        _scim_audit(request, "scim.bearer.rotate", 200, {}, label="admin")
+        out = cfg.to_public()
+        out["bearer"] = bearer
+        out["note"] = "Store this bearer now. It will not be shown again."
+        return out
+
+    @app.post("/admin/scim/disable",
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_scim_disable(request: _ScimReq):
+        cfg = scim_cfg_store.disable()
+        _scim_audit(request, "scim.bearer.disable", 200, {}, label="admin")
+        return cfg.to_public()
+
+    @app.put("/admin/scim/policy",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_scim_policy(body: dict, request: _ScimReq):
+        role = str(body.get("default_role") or "member").strip().lower()
+        if role not in _ROLES:
+            raise HTTPException(400, f"default_role must be one of {sorted(_ROLES)}")
+        scopes_in = body.get("default_scopes") or ["read"]
+        if not isinstance(scopes_in, list) or not all(isinstance(s, str) for s in scopes_in):
+            raise HTTPException(400, "default_scopes must be a list of strings")
+        allowed = _ROLE_SCOPES[role]
+        scopes = sorted({s for s in scopes_in if s in allowed}) or ["read"]
+        cfg = scim_cfg_store.set_policy(role, scopes)
+        _scim_audit(request, "scim.policy.update", 200, {
+            "default_role": role, "default_scopes": scopes,
+        }, label="admin")
+        return cfg.to_public()
+
+    @app.get("/admin/scim/users",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_scim_users():
+        return {
+            "users": [
+                {
+                    "id": u.id, "user_name": u.user_name,
+                    "external_id": u.external_id, "display_name": u.display_name,
+                    "email": u.email, "active": u.active, "key_id": u.key_id,
+                    "created_at": u.created_at, "updated_at": u.updated_at,
+                }
+                for u in scim_user_store.list()
+            ]
+        }
 
     return app
 
