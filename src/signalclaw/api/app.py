@@ -58,6 +58,7 @@ from .middleware import AccessLogMiddleware
 from .dry_run import DryRunMiddleware
 from .request_context import RequestContextMiddleware
 from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware, GlobalIPAllowlistMiddleware
+from .security_headers import SecurityHeadersMiddleware, build_header_policy
 from ..network_policy import get_store as get_network_policy_store, normalise_cidr, MAX_CIDRS
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
@@ -126,6 +127,10 @@ def create_app() -> FastAPI:
     # inside instrument_fastapi to keep span volume bounded.
     instrument_fastapi(app)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    # (SecurityHeadersMiddleware is added last, see below, so it sits at
+    # the outer edge and stamps headers on responses produced by any
+    # short-circuiting middleware further in the chain, e.g. an auth
+    # 401 or a rate-limit 429.)
     app.add_middleware(AccessLogMiddleware)
     # Request context: binds request_id (and optional correlation_id)
     # into structlog contextvars so every downstream log line carries
@@ -297,6 +302,20 @@ def create_app() -> FastAPI:
         store=session_store,
         revocations=revocation_store,
     )
+    # Static HTTP security headers (HSTS, X-Content-Type-Options,
+    # X-Frame-Options, Referrer-Policy, Permissions-Policy, CSP,
+    # COOP, CORP). Added LAST so it sits at the outer edge of the
+    # middleware chain: every response, including 401/403 short-circuits
+    # from auth/scopes, 429 from the rate limiter, and 503 from the
+    # readiness probe, flows back out through it and picks up the
+    # headers. Disable on plain-HTTP staging with
+    # SIGNALCLAW_SECURITY_HEADERS_ENABLED=0.
+    if os.environ.get("SIGNALCLAW_SECURITY_HEADERS_ENABLED", "1") == "1":
+        _sec_policy = build_header_policy()
+        app.state.security_headers_policy = _sec_policy
+        app.add_middleware(SecurityHeadersMiddleware, policy=_sec_policy)
+    else:
+        app.state.security_headers_policy = {}
     _mfa_required = os.environ.get("SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN", "0") == "1"
 
     from fastapi import Header
@@ -382,6 +401,47 @@ def create_app() -> FastAPI:
         if not ok:
             raise HTTPException(status_code=503, detail=body)
         return body
+
+    @app.get("/.well-known/security.txt", include_in_schema=False)
+    def security_txt():
+        # RFC 9116 disclosure file. Returned as text/plain so a
+        # vulnerability researcher can ``curl`` it. Contact and policy
+        # locations are overridable per deployment.
+        from fastapi.responses import PlainTextResponse
+        contact = os.environ.get(
+            "SIGNALCLAW_SECURITY_CONTACT",
+            "mailto:security@signalclaw.local",
+        )
+        policy = os.environ.get(
+            "SIGNALCLAW_SECURITY_POLICY_URL",
+            "https://github.com/Sanjays2402/signalclaw/blob/main/SECURITY.md",
+        )
+        expires = os.environ.get(
+            "SIGNALCLAW_SECURITY_TXT_EXPIRES",
+            "2099-01-01T00:00:00.000Z",
+        )
+        body = (
+            f"Contact: {contact}\n"
+            f"Expires: {expires}\n"
+            f"Policy: {policy}\n"
+            "Preferred-Languages: en\n"
+        )
+        return PlainTextResponse(body, media_type="text/plain; charset=utf-8")
+
+    @app.get(
+        "/admin/security-headers",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_security_headers():
+        """Surface the effective security header policy.
+
+        Procurement reviewers want a single endpoint they can point a
+        scanner at to confirm HSTS / CSP / etc. are configured
+        correctly. The values returned here are byte-identical to
+        what the middleware stamps on every response.
+        """
+        policy = getattr(app.state, "security_headers_policy", {}) or {}
+        return {"enabled": bool(policy), "headers": policy}
 
     @app.get("/audit", dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def audit_tail(limit: int = 100, day: str | None = None):

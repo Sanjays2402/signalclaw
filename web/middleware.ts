@@ -37,6 +37,31 @@ export function middleware(req: NextRequest) {
 
   const res = NextResponse.next({ request: { headers } });
   res.headers.set("x-request-id", requestId);
+
+  // SOC2 / pentest baseline security headers, mirrored from the
+  // Python API SecurityHeadersMiddleware so a browser hitting either
+  // surface gets identical guarantees. Edge runtime safe (string
+  // header writes only). Disable on plain-HTTP local dev with
+  // NEXT_PUBLIC_SECURITY_HEADERS_ENABLED=0.
+  if (process.env.NEXT_PUBLIC_SECURITY_HEADERS_ENABLED !== "0") {
+    const hstsAge = process.env.NEXT_PUBLIC_HSTS_MAX_AGE ?? "31536000";
+    if (Number(hstsAge) > 0) {
+      res.headers.set(
+        "Strict-Transport-Security",
+        `max-age=${hstsAge}; includeSubDomains`,
+      );
+    }
+    res.headers.set("X-Content-Type-Options", "nosniff");
+    res.headers.set("X-Frame-Options", "DENY");
+    res.headers.set("Referrer-Policy", "no-referrer");
+    res.headers.set(
+      "Permissions-Policy",
+      "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
+        "magnetometer=(), microphone=(), payment=(), usb=()",
+    );
+    res.headers.set("Cross-Origin-Opener-Policy", "same-origin");
+    res.headers.set("Cross-Origin-Resource-Policy", "same-site");
+  }
   return res;
 }
 

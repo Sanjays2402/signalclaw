@@ -456,7 +456,94 @@ function SecurityInner() {
           </div>
         </Card>
       )}
+
+      <ResponseHeadersCard />
     </div>
+  );
+}
+
+type HeaderPolicy = {
+  enabled: boolean;
+  headers: Record<string, string>;
+};
+
+function ResponseHeadersCard() {
+  const { data, error, isLoading } = useSWR<HeaderPolicy>(
+    "/admin/security-headers",
+    swrFetcher,
+  );
+  const required = [
+    "Strict-Transport-Security",
+    "X-Content-Type-Options",
+    "X-Frame-Options",
+    "Referrer-Policy",
+    "Permissions-Policy",
+    "Content-Security-Policy",
+    "Cross-Origin-Opener-Policy",
+    "Cross-Origin-Resource-Policy",
+  ];
+  return (
+    <Card>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <ShieldCheck size={20} weight="duotone" className="text-emerald-500" />
+          <h2 className="text-base font-semibold">Response headers</h2>
+        </div>
+        <p className="text-sm text-neutral-500">
+          Stamped on every API response, including health checks and error
+          payloads. Configure via SIGNALCLAW_HSTS_MAX_AGE, SIGNALCLAW_CSP,
+          and SIGNALCLAW_SECURITY_HEADERS_ENABLED.
+        </p>
+        {isLoading && (
+          <div className="space-y-2" aria-hidden>
+            {[0, 1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="h-9 animate-pulse rounded-md bg-neutral-100 dark:bg-neutral-900"
+              />
+            ))}
+          </div>
+        )}
+        {error && <ErrorBox err={error} />}
+        {data && data.enabled === false && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+            Security headers are disabled. Set
+            SIGNALCLAW_SECURITY_HEADERS_ENABLED=1 to re-enable.
+          </div>
+        )}
+        {data && data.enabled && (
+          <div className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+            {required.map((name) => {
+              const value = data.headers[name];
+              const present = typeof value === "string" && value.length > 0;
+              return (
+                <div
+                  key={name}
+                  className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:gap-3"
+                >
+                  <div className="flex min-w-0 items-center gap-2 sm:w-72 sm:shrink-0">
+                    <Badge tone={present ? "up" : "down"}>
+                      {present ? "on" : "missing"}
+                    </Badge>
+                    <span className="truncate font-mono text-xs text-neutral-700 dark:text-neutral-300">
+                      {name}
+                    </span>
+                  </div>
+                  <code className="min-w-0 break-all rounded bg-neutral-50 px-2 py-1 font-mono text-xs text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
+                    {present ? value : "not set"}
+                  </code>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {data && data.enabled && data.headers && Object.keys(data.headers).length === 0 && (
+          <div className="rounded-lg border border-dashed border-neutral-300 px-3 py-6 text-center text-sm text-neutral-500 dark:border-neutral-700">
+            No headers configured.
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
