@@ -11,6 +11,8 @@ import {
   XCircle,
   Key,
   Clock,
+  LinkSimple,
+  Warning,
 } from "@phosphor-icons/react/dist/ssr";
 
 type AuditEvent = {
@@ -67,6 +69,35 @@ export default function AuditPage() {
     { refreshInterval: 0 },
   );
 
+  type VerifyResp = {
+    ok: boolean;
+    checked: number;
+    skipped_legacy: number;
+    first_chained_index: number | null;
+    last_hash: string | null;
+    break_at_index: number | null;
+    break_event_id: string | null;
+    reason: string | null;
+    verified_at: string;
+  };
+  const [verify, setVerify] = useState<VerifyResp | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyErr, setVerifyErr] = useState<string | null>(null);
+  async function runVerify() {
+    setVerifying(true);
+    setVerifyErr(null);
+    try {
+      const r = await fetch("/api/audit/verify");
+      if (!r.ok) throw new Error(`verify failed: ${r.status}`);
+      const j = (await r.json()) as VerifyResp;
+      setVerify(j);
+    } catch (e: any) {
+      setVerifyErr(e?.message ?? "verify failed");
+    } finally {
+      setVerifying(false);
+    }
+  }
+
   const events = data?.events ?? [];
   const stats = useMemo(() => {
     const total = events.length;
@@ -99,6 +130,73 @@ export default function AuditPage() {
           <ArrowsClockwise size={14} weight="duotone" /> Refresh
         </button>
       </header>
+
+      <Card title="Chain Integrity">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="text-[12px] muted max-w-xl">
+            Each event is linked to the prior one with an HMAC-SHA256 over
+            its canonical payload. If a row on disk is edited or removed,
+            verification fails and points at the first broken link. Useful
+            for SOC2 reviewers and forensic checks.
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {verify ? (
+              verify.ok ? (
+                <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--green,#22c55e)]">
+                  <CheckCircle size={14} weight="duotone" /> Chain intact
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--red,#ef4444)]">
+                  <Warning size={14} weight="duotone" /> Chain broken
+                </span>
+              )
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider muted">
+                <LinkSimple size={14} weight="duotone" /> Not verified
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={runVerify}
+              disabled={verifying}
+              className="btn-ghost text-[11px] uppercase tracking-wider inline-flex items-center gap-1"
+            >
+              <ShieldCheck size={14} weight="duotone" />
+              {verifying ? "Verifying" : "Verify chain"}
+            </button>
+          </div>
+        </div>
+        {verify && (
+          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]">
+            <div>
+              <div className="muted text-[11px] uppercase tracking-wider">Events checked</div>
+              <div className="mono">{verify.checked}</div>
+            </div>
+            <div>
+              <div className="muted text-[11px] uppercase tracking-wider">Pre-chain (legacy)</div>
+              <div className="mono">{verify.skipped_legacy}</div>
+            </div>
+            <div>
+              <div className="muted text-[11px] uppercase tracking-wider">Last hash</div>
+              <div className="mono truncate" title={verify.last_hash ?? ""}>
+                {verify.last_hash ? verify.last_hash.slice(0, 16) + "\u2026" : "none"}
+              </div>
+            </div>
+            <div>
+              <div className="muted text-[11px] uppercase tracking-wider">Verified at</div>
+              <div className="mono">{new Date(verify.verified_at).toLocaleTimeString()}</div>
+            </div>
+            {!verify.ok && (
+              <div className="col-span-2 md:col-span-4 text-[12px] text-[var(--red,#ef4444)]">
+                Break at index {verify.break_at_index} (event id {verify.break_event_id ?? "unknown"}): {verify.reason}
+              </div>
+            )}
+          </div>
+        )}
+        {verifyErr && (
+          <div className="mt-2 text-[12px] text-[var(--red,#ef4444)]">{verifyErr}</div>
+        )}
+      </Card>
 
       <Card title="Filters">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2">

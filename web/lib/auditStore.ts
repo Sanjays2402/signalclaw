@@ -18,6 +18,14 @@ import { maybeAutoSweep } from "./retentionStore.ts";
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "audit.jsonl");
 const ROLL_FILE = path.join(DATA_DIR, "audit.jsonl.1");
+// Persistent per-installation HMAC key for the audit hash chain. Generated
+// on first write and never rotated; rotating would invalidate prior links.
+// The key file is mode 0600 so a casual reader of .data cannot forge a
+// chain that re-hashes to match. Real deployments should mount this on an
+// encrypted volume. SOC2 reviewers ask for tamper-evidence on audit logs;
+// the chain below is the answer.
+const CHAIN_KEY_FILE = path.join(DATA_DIR, "audit.chainkey");
+const GENESIS_PREV = "0".repeat(64);
 
 const MAX_LINES = 50_000;
 const ROLL_TO = 25_000;
@@ -39,9 +47,83 @@ export type AuditEvent = {
   reason: string | null; // e.g. "forbidden:trade-required"
   details: Record<string, unknown> | null;
   request_id: string | null; // X-Request-Id propagated from the edge
+  // Tamper-evidence: HMAC-SHA256 over (prev_hash || canonical(event_minus_hash)).
+  // Older events written before this feature shipped have empty strings here;
+  // verifyChain() treats them as a pre-chain prefix and starts checking from
+  // the first event that has both fields populated.
+  prev_hash: string;
+  hash: string;
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
+let chainKeyCache: Buffer | null = null;
+let lastChainHashCache: string | null = null;
+
+async function getChainKey(): Promise<Buffer> {
+  if (chainKeyCache) return chainKeyCache;
+  try {
+    const raw = await fs.readFile(CHAIN_KEY_FILE);
+    if (raw.length >= 32) {
+      chainKeyCache = raw;
+      return chainKeyCache;
+    }
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") throw e;
+  }
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  const key = crypto.randomBytes(32);
+  const tmp = CHAIN_KEY_FILE + ".tmp";
+  await fs.writeFile(tmp, key, { mode: 0o600 });
+  await fs.rename(tmp, CHAIN_KEY_FILE);
+  try { await fs.chmod(CHAIN_KEY_FILE, 0o600); } catch {}
+  chainKeyCache = key;
+  return key;
+}
+
+// Canonical JSON of an event for hashing: stable key order, hash fields excluded.
+function canonicalForHash(ev: AuditEvent): string {
+  const { hash: _h, prev_hash: _p, ...rest } = ev;
+  const keys = Object.keys(rest).sort();
+  const ordered: Record<string, unknown> = {};
+  for (const k of keys) ordered[k] = (rest as Record<string, unknown>)[k];
+  return JSON.stringify(ordered);
+}
+
+async function computeHash(ev: AuditEvent, prev: string): Promise<string> {
+  const key = await getChainKey();
+  const h = crypto.createHmac("sha256", key);
+  h.update(prev);
+  h.update("|");
+  h.update(canonicalForHash(ev));
+  return h.digest("hex");
+}
+
+async function lastChainedHash(): Promise<string> {
+  if (lastChainHashCache) return lastChainHashCache;
+  let primary = "";
+  try {
+    primary = await fs.readFile(DATA_FILE, "utf8");
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") throw e;
+  }
+  const lines = primary.split("\n").filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const obj = JSON.parse(lines[i]!) as AuditEvent;
+      if (typeof obj.hash === "string" && obj.hash.length === 64) {
+        lastChainHashCache = obj.hash;
+        return obj.hash;
+      }
+    } catch {}
+  }
+  return GENESIS_PREV;
+}
+
+// Exposed for tests; clears in-memory caches after a clearAudit().
+export function _resetChainCache(): void {
+  lastChainHashCache = null;
+  chainKeyCache = null;
+}
 
 function genId(): string {
   return crypto.randomBytes(8).toString("hex");
@@ -133,13 +215,19 @@ export async function recordAuditEvent(input: RecordInput): Promise<AuditEvent> 
     details: safeDetails(input.details),
     request_id:
       (input.req?.headers.get("x-request-id") || "").slice(0, 128) || null,
+    prev_hash: "",
+    hash: "",
   };
-  const line = JSON.stringify(ev) + "\n";
-  // Serialize appends so concurrent handlers don't interleave.
+  // Serialize appends so concurrent handlers don't interleave AND so the
+  // chain stays linear: each event's prev_hash = previous event's hash.
   writeQueue = writeQueue.then(async () => {
     try {
       await fs.mkdir(DATA_DIR, { recursive: true });
-      await fs.appendFile(DATA_FILE, line, "utf8");
+      const prev = await lastChainedHash();
+      ev.prev_hash = prev;
+      ev.hash = await computeHash(ev, prev);
+      lastChainHashCache = ev.hash;
+      await fs.appendFile(DATA_FILE, JSON.stringify(ev) + "\n", "utf8");
     } catch {
       // Audit must never break a real request. Swallow.
     }
@@ -147,6 +235,79 @@ export async function recordAuditEvent(input: RecordInput): Promise<AuditEvent> 
   await writeQueue;
   maybeRotate().catch(() => {});
   return ev;
+}
+
+export type ChainVerifyResult = {
+  ok: boolean;
+  checked: number;
+  skipped_legacy: number;
+  first_chained_index: number | null;
+  last_hash: string | null;
+  break_at_index: number | null;
+  break_event_id: string | null;
+  reason: string | null;
+};
+
+// Walks the on-disk log (rolled + primary, in original write order) and
+// re-derives the HMAC chain. Returns ok=false at the first event whose
+// stored hash does not match HMAC(prev_hash || canonical(event)). Events
+// written before this feature (no hash field) are reported as
+// skipped_legacy and do not fail verification.
+export async function verifyChain(): Promise<ChainVerifyResult> {
+  const events = await readAllLines();
+  const res: ChainVerifyResult = {
+    ok: true,
+    checked: 0,
+    skipped_legacy: 0,
+    first_chained_index: null,
+    last_hash: null,
+    break_at_index: null,
+    break_event_id: null,
+    reason: null,
+  };
+  let prev = GENESIS_PREV;
+  let started = false;
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i]!;
+    const hasChain =
+      typeof ev.hash === "string" && ev.hash.length === 64 &&
+      typeof ev.prev_hash === "string" && ev.prev_hash.length === 64;
+    if (!hasChain) {
+      if (!started) {
+        res.skipped_legacy++;
+        continue;
+      }
+      res.ok = false;
+      res.break_at_index = i;
+      res.break_event_id = ev.id ?? null;
+      res.reason = "missing_hash_after_chain_started";
+      return res;
+    }
+    if (!started) {
+      started = true;
+      res.first_chained_index = i;
+      prev = ev.prev_hash; // accept first link's anchor as ground truth
+    }
+    if (ev.prev_hash !== prev) {
+      res.ok = false;
+      res.break_at_index = i;
+      res.break_event_id = ev.id;
+      res.reason = "prev_hash_mismatch";
+      return res;
+    }
+    const expected = await computeHash(ev, prev);
+    if (expected !== ev.hash) {
+      res.ok = false;
+      res.break_at_index = i;
+      res.break_event_id = ev.id;
+      res.reason = "hash_mismatch";
+      return res;
+    }
+    prev = ev.hash;
+    res.checked++;
+    res.last_hash = ev.hash;
+  }
+  return res;
 }
 
 export type QueryInput = {
@@ -224,4 +385,8 @@ export async function clearAudit(): Promise<void> {
   try {
     await fs.unlink(ROLL_FILE);
   } catch {}
+  try {
+    await fs.unlink(CHAIN_KEY_FILE);
+  } catch {}
+  _resetChainCache();
 }

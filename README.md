@@ -6,6 +6,19 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Tamper-evident audit log with hash-chain verification**. SOC2 CC7.2 + CC7.3 require audit logs to be protected from undetected modification, and procurement reviewers fail any product that ships an `audit.jsonl` they can edit with `vi`. Every `recordAuditEvent` now computes an HMAC-SHA256 over the canonical event payload plus the previous event's hash, persists both `prev_hash` and `hash` on the row, and seeds the chain with a 32-byte random key written to `.data/audit.chainkey` (mode 0600, generated on first write, never rotated because rotating would invalidate prior links). The chain serializes through the existing write queue so concurrent route handlers cannot fork the log. `GET /api/audit/verify` (admin scope when `SIGNALCLAW_ADMIN_KEY` is set, open in local mode, mirroring `/api/audit`) walks the entire on-disk log (rolled + primary, oldest first), re-derives each link, and returns `{ok, checked, skipped_legacy, last_hash, break_at_index, break_event_id, reason}`; events written before this feature shipped are accepted as a pre-chain prefix so existing installs do not flip red. The verify call is itself recorded into the chain, so an auditor can prove not just integrity-right-now but that integrity-was-checked at a given timestamp. The `/settings/audit` page adds a Chain Integrity panel with a Verify button, an intact/broken badge, the last hash, and a precise break-at-index callout if the chain has been mutated. Covered by `tests/auditChain.test.mjs`: sequential writes link together, editing a single field on a recorded row trips `hash_mismatch` at the right index, dropping a middle event trips `prev_hash_mismatch`, and legacy unchained rows are tolerated as a pre-chain prefix.
+
+  Try it locally: `cd web && pnpm dev` then
+  ```bash
+  # Walk the chain and report integrity
+  curl -s http://localhost:7430/api/audit/verify | jq .
+
+  # Now tamper with a row and re-verify (ok flips to false)
+  sed -i '' '2s/"status":200/"status":500/' web/.data/audit.jsonl
+  curl -s http://localhost:7430/api/audit/verify | jq '{ok, reason, break_at_index}'
+  ```
+  UI: visit http://localhost:7430/settings/audit and click Verify chain.
+
 - **MFA recovery codes for admin keys**. SOC2 CC6.6 expects a documented account-recovery path, and procurement reviewers fail any product where losing a phone means losing the only admin key. `POST /mfa/confirm` now mints a one-time batch of 10 single-use recovery codes (OCR-friendly `XXXXX-XXXXX` alphabet, no 0/O/1/I) and returns the plaintext exactly once; only SHA-256 hashes are persisted to `<data_dir>/mfa/enrollments.json`, so a backup leak is not enough to bypass MFA. Admins present any unused code as `x-mfa-recovery-code` to unlock any admin route covered by `require_mfa_for_admin`; the code is burned atomically inside the store lock so two concurrent requests with the same code cannot both succeed. `GET /mfa/status` reports `recovery_codes_remaining`, and `POST /mfa/recovery-codes/regenerate` (itself MFA-gated, accepts either TOTP or an unused recovery code) replaces the batch and returns the fresh plaintext exactly once. The `/settings/security` page surfaces a save-once panel with copy-all and a downloadable `.txt` backup, a remaining-count card with low/empty warnings and a Regenerate button, and a one-shot recovery-code field that queues the code on the next admin call and clears it from `sessionStorage` after a single use. Covered by `tests/test_mfa_recovery_codes.py` (confirm returns 10 well-formed codes, a code unlocks `/audit` once and is rejected on reuse, the remaining count drops by exactly one, regenerate wipes the prior batch, and a recursive scan of the on-disk MFA store proves no plaintext code ever leaks to disk).
 
   Try it locally: `make api` then
