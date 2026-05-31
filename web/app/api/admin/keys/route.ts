@@ -9,6 +9,7 @@ import {
 } from "@/lib/keyStore";
 import { recordSafe } from "@/lib/activityStore";
 import { recordAuditEvent } from "@/lib/auditStore";
+import { ensureSeatAvailable } from "@/lib/seats";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,6 +66,11 @@ export async function POST(req: NextRequest) {
     typeof body?.expires_at === "string" && body.expires_at.trim().length > 0
       ? body.expires_at
       : null;
+  try {
+    await ensureSeatAvailable();
+  } catch (e: any) {
+    return err(e.status || 409, e.code || "seat_limit", e.message || "no seats available");
+  }
   let created;
   try {
     created = await createKey({ label, scopes, expires_at });

@@ -21,6 +21,9 @@ export type ActivityKind =
   | "key.created"
   | "key.revoked"
   | "key.rotated"
+  | "invite.created"
+  | "invite.revoked"
+  | "invite.accepted"
   | "alert.fired"
   | "system";
 
@@ -45,6 +48,9 @@ const VALID_KINDS: ReadonlySet<ActivityKind> = new Set([
   "key.created",
   "key.revoked",
   "key.rotated",
+  "invite.created",
+  "invite.revoked",
+  "invite.accepted",
   "alert.fired",
   "system",
 ]);

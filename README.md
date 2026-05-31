@@ -120,6 +120,23 @@ A local-first time-series signal terminal that classifies market regime (bull / 
   ```
   Open `http://localhost:3000/settings/network` to manage CIDRs from the dashboard.
 
+- **Invite links and seat management for onboarding teammates without sharing secrets**. An owner or admin mints a one-time invite at `/settings/invites` (or `POST /api/admin/invites`) with a label, scopes (`read`, `trade`), seat count, and optional expiry up to 90 days. The redemption URL `/invite/{token}` shows the invitee exactly what they are about to accept (label + scopes + expiry, never the creator id or accept log), and on accept a fresh API key is minted and revealed exactly once. `admin` is never grantable through an invite, so a leaked or social-engineered link cannot escalate. Seat usage is workspace-wide: set `SIGNALCLAW_SEAT_LIMIT=N` to cap the number of active (non-revoked) keys, and both `POST /api/admin/keys` and `POST /api/invites/{token}/accept` return `409 seat_limit` once full. Revoking a key frees the seat immediately. Invites are stored append-only with `used_count`, `accepted_by` (key id + accept time + sha256(IP)), and a status of `pending` / `exhausted` / `expired` / `revoked`; `DELETE /api/admin/invites/{token}` revokes a pending link. Every redemption, lookup, and admin mutation is captured by the existing audit log. The redemption UI handles loading, error, empty, and the four terminal states responsively. Covered by `web/tests/invites.test.mjs` (single-use exhaustion, expired, revoked, race-loser, redeemer view never leaks creator id or accept log, seat limit denies further mints and revoking frees a seat).
+
+  Try it locally: `cd web && npm run dev` then
+  ```bash
+  # As admin: create a 7-day, single-seat invite with read scope only.
+  curl -X POST http://localhost:7430/api/admin/invites \
+    -H "content-type: application/json" \
+    -d '{"label":"alice@acme.com","scopes":["read"],"max_uses":1,"expires_in_seconds":604800}'
+  # => { "token":"inv_...", "status":"pending", ... }
+
+  # As the invitee: redeem the link (no admin key required).
+  curl -X POST http://localhost:7430/api/invites/inv_.../accept \
+    -H "content-type: application/json" -d '{"label":"alice-laptop"}'
+  # => { "id":"...","scopes":["read"],"secret":"sc_live_..." }   # shown once
+  ```
+  Cap seats per workspace by exporting `SIGNALCLAW_SEAT_LIMIT=10` before starting the web app.
+
 - **RBAC roles on every API key (owner, admin, member, viewer)**. SignalClaw API keys now carry an explicit role that caps what the key can do, layered on top of the existing scope system. `owner` and `admin` carry the `admin` scope (manage keys, sessions, audit, MFA, GDPR). `member` carries `read` + `trade`. `viewer` is read only and cannot mutate anything, even if the request lists the `trade` scope. The role is the chokepoint: on every request, the resolved key's stored scopes are intersected with the role's allow list, so a downgrade from `admin` to `viewer` immediately revokes the admin scope on the next request without touching the secret. The dashboard at `/settings/keys` adds a role picker on create and a per-key Role button to change it later, both gated by `admin` scope plus MFA. The new endpoint is `PUT /admin/keys/{id}/role` with body `{"role":"owner|admin|member|viewer"}`; unknown roles return 400 and unknown keys return 404. Covered by `tests/test_api_keys_rbac.py` (viewer cannot write even when trade was requested, member cannot reach admin routes, role downgrade revokes admin on next request, unknown roles rejected at create and update). Existing keys that predate this field default to `member` so nothing breaks on upgrade.
 
   Try it locally: `make api` then
