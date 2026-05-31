@@ -14,7 +14,7 @@ function err(status: number, code: string, message: string) {
 }
 
 async function requireAdmin(req: NextRequest, route: string): Promise<NextResponse | null> {
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   if (!process.env.SIGNALCLAW_ADMIN_KEY) {
     await recordAuditEvent({ req, route, method: "DELETE", status: 200, key: k, reason: "local-mode" });
     return null;

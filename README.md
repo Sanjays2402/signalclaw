@@ -2,7 +2,29 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: emergency workspace freeze (break-glass kill switch)
+## New: per-source-IP failed authentication lockout
+
+Procurement reality: every enterprise security questionnaire asks how the product defends against credential stuffing and brute-force token guessing. SignalClaw now tracks failed API key attempts per client IP and locks that source out of `authenticate()` for a configurable cooldown once a configurable threshold of failures is hit inside a configurable window. The chokepoint is the single `authenticate()` function in `web/lib/keyStore.ts`, so every existing route (42 v1 and admin endpoints, no sweep required at call sites) inherits the protection. Successful authentication from the same IP clears the counter, and missing credentials never count toward lockout so unauthenticated browser probes do not trip it. Locked IPs, the active config, and every config change are surfaced in the audit chain and in a dedicated admin settings page.
+
+Try it locally: `cd web && pnpm dev`, then open http://localhost:7430/settings/auth-lockout. Drive it from the API with the admin key:
+
+```bash
+# Inspect the policy and current lockouts.
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/auth-lockout | jq .
+
+# Turn on enforcement: 5 failures in 5 minutes, 15 minute cooldown.
+curl -s -X PUT -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"enabled":true,"threshold":5,"window_seconds":300,"cooldown_seconds":900}' \
+  http://localhost:7430/api/admin/auth-lockout | jq .
+
+# Manually clear one IP after a false positive.
+curl -s -X DELETE -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  "http://localhost:7430/api/admin/auth-lockout?ip=203.0.113.10"
+```
+
+## Previously: emergency workspace freeze (break-glass kill switch)
 
 Procurement reality: enterprise security teams want a single lever that halts every authenticated API call for a workspace during a suspected breach, leaked CI secret, billing dispute, or compliance review. Revoking keys one by one is too slow, and IP allowlists only help if you know the attacker's IP. SignalClaw now ships a workspace-wide freeze. When enabled, every `/api/v1/*` request returns `HTTP 503 workspace_frozen` with `x-workspace-frozen: 1` and `Retry-After: 0` headers before any handler, rate limiter, quota, or residency check runs. Admin routes deliberately stay reachable so an operator can unfreeze. Freeze and unfreeze events are written to the tamper-evident audit log with actor, reason, and timestamp.
 

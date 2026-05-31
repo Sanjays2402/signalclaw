@@ -22,7 +22,7 @@ async function requireAdmin(
   req: NextRequest,
   method: string,
 ): Promise<NextResponse | null> {
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   if (!process.env.SIGNALCLAW_ADMIN_KEY) {
     await recordAuditEvent({ req, route: ROUTE, method, status: 200, key: k, reason: "local-mode" });
     return null;
@@ -72,7 +72,7 @@ export async function PUT(req: NextRequest) {
     route: ROUTE,
     method: "PUT",
     status: 200,
-    key: await authenticate(extractKey(req)),
+    key: await authenticate(extractKey(req), { req }),
     reason: "retention.policy.updated",
     details: {
       before: {

@@ -14,7 +14,7 @@ function err(status: number, code: string, message: string) {
 // key; otherwise local single-user mode allows the owner to moderate freely.
 async function requireAdmin(req: NextRequest): Promise<NextResponse | null> {
   if (!process.env.SIGNALCLAW_ADMIN_KEY) return null;
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   if (!k || !k.scopes.includes("admin")) {
     return err(403, "forbidden", "admin scope required");
   }

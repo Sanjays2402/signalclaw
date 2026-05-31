@@ -13,7 +13,7 @@ const ROUTE = "/api/settings/export";
 // every export is captured in the audit log. Delegates to the same
 // privacy bundle so the two paths cannot drift apart.
 export async function GET(req: NextRequest) {
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   const adminConfigured = !!process.env.SIGNALCLAW_ADMIN_KEY;
   if (adminConfigured && (!k || !k.scopes.includes("admin"))) {
     await recordAuditEvent({

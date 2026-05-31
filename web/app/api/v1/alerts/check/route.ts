@@ -19,7 +19,7 @@ function err(status: number, code: string, message: string) {
 // quote source. Returns the alerts that fired and the quotes used so callers
 // can wire this into their own scheduler.
 export async function POST(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/alerts/check", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");

@@ -286,34 +286,99 @@ export async function rotateKey(
 
 // Used by /v1/* routes: returns the matching, non-revoked key and bumps
 // last_used_at. Returns null if nothing matches.
-export async function authenticate(
+//
+// When `opts.req` is supplied, this also enforces per-source-IP failed-auth
+// lockout (see authLockoutStore). A locked IP receives a null result without
+// any DB lookup; a failed match increments the per-IP failure counter; a
+// successful match clears it. Every existing caller routes through this
+// function, so the lockout policy is enforced everywhere uniformly without
+// touching individual route handlers.
+import {
+  decideLockout as _decideLockout,
+  recordAuthFailure as _recordAuthFailure,
+  clearAuthFailures as _clearAuthFailures,
+} from "./authLockoutStore.ts";
+import { clientIpFromRequest } from "./ipMatch.ts";
+
+export type AuthenticateOptions = {
+  req?: Request;
+};
+
+export type AuthenticateResult = StoredKey | null;
+
+// Returned to callers that need to distinguish "bad key" (401) from
+// "source IP is locked out" (429). The legacy null return shape is
+// preserved for the 42 existing call sites; new code can call
+// `authenticateWithStatus` to get the structured result.
+export type AuthenticateStatus =
+  | { kind: "ok"; key: StoredKey }
+  | { kind: "unauthorized"; reason: "missing" | "unknown_key" | "key_expired" | "key_suspended" }
+  | { kind: "locked"; retry_after_seconds: number; locked_until: string };
+
+export async function authenticateWithStatus(
   secret: string,
-): Promise<StoredKey | null> {
-  if (!secret) return null;
-  // Env-provided admin key, useful for the keys management page itself.
+  opts: AuthenticateOptions = {},
+): Promise<AuthenticateStatus> {
+  const req = opts.req;
+  const ip = req ? clientIpFromRequest(req) : null;
+  if (ip) {
+    const decision = await _decideLockout(ip);
+    if (decision.locked) {
+      return { kind: "locked", retry_after_seconds: decision.retry_after_seconds, locked_until: decision.locked_until };
+    }
+  }
+  if (!secret) {
+    // No credentials presented: not counted as a brute-force attempt,
+    // otherwise unauthenticated public probes (CORS preflights, browsers)
+    // would trip the lockout immediately. Only *wrong* credentials count.
+    return { kind: "unauthorized", reason: "missing" };
+  }
   const adminEnv = process.env.SIGNALCLAW_ADMIN_KEY;
   if (adminEnv && timingSafeEqual(secret, adminEnv)) {
+    if (ip) await _clearAuthFailures(ip).catch(() => {});
     return {
-      id: "env-admin",
-      label: "env admin",
-      prefix: adminEnv.slice(0, 10),
-      hash: sha256(adminEnv),
-      scopes: ["admin", "read", "trade"],
-      created_at: "1970-01-01T00:00:00.000Z",
-      last_used_at: new Date().toISOString(),
-      revoked: false,
+      kind: "ok",
+      key: {
+        id: "env-admin",
+        label: "env admin",
+        prefix: adminEnv.slice(0, 10),
+        hash: sha256(adminEnv),
+        scopes: ["admin", "read", "trade"],
+        created_at: "1970-01-01T00:00:00.000Z",
+        last_used_at: new Date().toISOString(),
+        revoked: false,
+      },
     };
   }
   const h = sha256(secret);
   const store = await readStore();
   const k = store.keys.find((x) => x.hash === h && !x.revoked);
-  if (!k) return null;
-  if (isExpired(k)) return null;
-  if (k.suspended) return null;
+  if (!k) {
+    if (ip) await _recordAuthFailure(ip).catch(() => {});
+    return { kind: "unauthorized", reason: "unknown_key" };
+  }
+  if (isExpired(k)) {
+    // A known-good key that has aged out is *not* a brute-force signal;
+    // do not increment the IP counter. Just refuse.
+    return { kind: "unauthorized", reason: "key_expired" };
+  }
+  if (k.suspended) {
+    return { kind: "unauthorized", reason: "key_suspended" };
+  }
   k.last_used_at = new Date().toISOString();
   await writeStore(store).catch(() => {});
-  return k;
+  if (ip) await _clearAuthFailures(ip).catch(() => {});
+  return { kind: "ok", key: k };
 }
+
+export async function authenticate(
+  secret: string,
+  opts: AuthenticateOptions = {},
+): Promise<AuthenticateResult> {
+  const r = await authenticateWithStatus(secret, opts);
+  return r.kind === "ok" ? r.key : null;
+}
+
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;

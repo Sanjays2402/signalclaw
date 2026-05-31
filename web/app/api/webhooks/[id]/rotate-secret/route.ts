@@ -19,7 +19,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const route = `/api/webhooks/${id}/rotate-secret`;
   const { denied, key: gatedKey } = await requireAdmin(req, route, "POST");
   if (denied) return denied;
-  const k = gatedKey ?? (await authenticate(extractKey(req)));
+  const k = gatedKey ?? (await authenticate(extractKey(req), { req }));
 
   let body: { secret?: string; grace_seconds?: number } = {};
   try {

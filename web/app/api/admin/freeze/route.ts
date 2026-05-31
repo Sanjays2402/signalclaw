@@ -33,7 +33,7 @@ async function requireAdmin(
   route: string,
   method: string,
 ): Promise<{ denied: NextResponse | null; key: any }> {
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   if (!process.env.SIGNALCLAW_ADMIN_KEY) {
     await recordAuditEvent({ req, route, method, status: 200, key: k, reason: "local-mode" });
     return { denied: null, key: k };

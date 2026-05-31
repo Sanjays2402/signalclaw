@@ -19,7 +19,7 @@ function err(status: number, code: string, message: string) {
 // Lists every armed alert in stable order. Single-user terminal model, so
 // scope filtering is by ownership of the key, not the alert.
 export async function GET(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
 // Body: { ticker, condition, value, note?, cooldown_hours?, enabled? }
 // Arms a new alert. Returns the persisted alert with its id and created_at.
 export async function POST(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");

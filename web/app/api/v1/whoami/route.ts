@@ -15,7 +15,7 @@ function err(status: number, code: string, message: string) {
 // Returns a minimal, safe view of the calling key. Useful as a connectivity
 // check from CLI or notebooks, and as the worked example in /docs.
 export async function GET(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/whoami", method: "GET", status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");

@@ -16,7 +16,7 @@ function err(status: number, code: string, message: string) {
 // Returns the free-tier quota meter so paying integrations can show usage
 // and warn users before they hit the cap.
 export async function GET(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/usage", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");

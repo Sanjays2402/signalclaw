@@ -43,7 +43,7 @@ function csvCell(v: unknown): string {
 }
 
 export async function GET(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (process.env.SIGNALCLAW_ADMIN_KEY) {
     if (!key || !key.scopes.includes("admin")) {
       await recordAuditEvent({

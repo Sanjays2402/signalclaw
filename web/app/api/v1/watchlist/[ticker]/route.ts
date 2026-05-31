@@ -29,7 +29,7 @@ export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ ticker: string }> },
 ) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/watchlist/[ticker]", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");
@@ -79,7 +79,7 @@ export async function DELETE(
   req: NextRequest,
   ctx: { params: Promise<{ ticker: string }> },
 ) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/watchlist/[ticker]", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");

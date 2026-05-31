@@ -20,7 +20,7 @@ function parseInt0(v: string | null, fallback: number): number {
 }
 
 export async function GET(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (process.env.SIGNALCLAW_ADMIN_KEY) {
     if (!key || !key.scopes.includes("admin")) {
       await recordAuditEvent({ req, route: "/api/audit", method: "GET", status: 403, key: key ?? null, reason: "forbidden:admin-required" });

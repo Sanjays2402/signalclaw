@@ -25,7 +25,7 @@ function err(status: number, code: string, message: string) {
 // Returns every tracked ticker in stable insertion order. Single-user
 // terminal model, so there is exactly one watchlist per install.
 export async function GET(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");
@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
 // Adds a ticker. Re-adding an existing ticker with a note updates the note
 // and returns the same entry. Returns 409 when the watchlist is full.
 export async function POST(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");

@@ -18,7 +18,7 @@ function err(status: number, code: string, message: string) {
 }
 
 async function requireAdmin(req: NextRequest, method: string) {
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   if (!process.env.SIGNALCLAW_ADMIN_KEY) {
     await recordAuditEvent({
       req,

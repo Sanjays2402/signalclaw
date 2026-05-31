@@ -16,7 +16,7 @@ function err(status: number, code: string, message: string) {
 // Bulk export of saved runs matching the same filters as GET /v1/runs.
 // Capped at 200 rows per request to keep responses bounded.
 export async function GET(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/runs/export", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");

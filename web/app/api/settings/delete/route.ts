@@ -18,7 +18,7 @@ function err(status: number, code: string, message: string) {
 // the central privacy erase so behaviour matches /api/admin/privacy/delete.
 // Defaults: user data only; never touches the audit log or API keys.
 export async function POST(req: NextRequest) {
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   const adminConfigured = !!process.env.SIGNALCLAW_ADMIN_KEY;
   if (adminConfigured && (!k || !k.scopes.includes("admin"))) {
     await recordAuditEvent({

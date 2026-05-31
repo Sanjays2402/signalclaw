@@ -26,7 +26,7 @@ function parseIntParam(v: string | null, fallback: number): number {
 // Auth: Authorization: Bearer <key>  (read scope)
 // Returns a slim public view; no internal hashes or raw payloads.
 export async function GET(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");
@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
 // Runs the regime classifier on the caller-supplied price series, persists
 // the result, fires webhook events, and returns the saved run id + share url.
 export async function POST(req: NextRequest) {
-  const key = await authenticate(extractKey(req));
+  const key = await authenticate(extractKey(req), { req });
   if (!key) {
     await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 401, key: null, reason: "unauthorized" });
     return err(401, "unauthorized", "missing or invalid api key");

@@ -21,7 +21,7 @@ async function requireAdmin(
   req: NextRequest,
   method: string,
 ): Promise<NextResponse | null> {
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   if (!process.env.SIGNALCLAW_ADMIN_KEY) {
     await recordAuditEvent({ req, route: ROUTE, method, status: 200, key: k, reason: "local-mode" });
     return null;
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
   const plan = describeErase(opts);
   await recordAuditEvent({
     req, route: ROUTE, method: "GET", status: 200,
-    key: await authenticate(extractKey(req)),
+    key: await authenticate(extractKey(req), { req }),
     reason: "privacy.delete.preview",
     details: { ...opts, will_remove_count: plan.willRemove.length },
   });
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
   if (confirm !== "DELETE") {
     await recordAuditEvent({
       req, route: ROUTE, method: "POST", status: 400,
-      key: await authenticate(extractKey(req)),
+      key: await authenticate(extractKey(req), { req }),
       reason: "privacy.delete.unconfirmed",
     });
     return err(400, "confirm_required", 'pass {"confirm":"DELETE"} to proceed');
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
   const summary = await eraseAll(opts);
   await recordAuditEvent({
     req, route: ROUTE, method: "POST", status: 200,
-    key: await authenticate(extractKey(req)),
+    key: await authenticate(extractKey(req), { req }),
     reason: "privacy.delete.executed",
     details: {
       ...opts,

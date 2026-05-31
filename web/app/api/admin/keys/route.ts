@@ -22,7 +22,7 @@ function err(status: number, code: string, message: string) {
 // fresh install can mint its first key. Set SIGNALCLAW_ADMIN_KEY in the env
 // to require an admin key on these endpoints (production posture).
 async function requireAdmin(req: NextRequest, route: string, method: string): Promise<NextResponse | null> {
-  const k = await authenticate(extractKey(req));
+  const k = await authenticate(extractKey(req), { req });
   if (!process.env.SIGNALCLAW_ADMIN_KEY) {
     await recordAuditEvent({ req, route, method, status: 200, key: k, reason: "local-mode" });
     return null;
