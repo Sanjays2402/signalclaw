@@ -24,6 +24,29 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - FX rates + multi-currency trade view
 - Notifier with DLQ, replay, and test endpoint
 - Webhook subscriptions (events, ticker filter, HMAC secret)
+- Watchlist at `/watchlist`: add up to 100 tickers (AAPL, BRK.B, ETH-USD), attach a short note, edit notes inline, export the full list as CSV, jump straight to per-ticker views. Backed by `GET/POST /api/watchlist` and `DELETE/PATCH /api/watchlist/<ticker>`.
+
+## Try the watchlist
+
+```bash
+# 1. Boot the web app
+cd web && pnpm dev   # http://localhost:7430/watchlist
+
+# 2. Add a ticker with a note
+curl -s -X POST http://localhost:7430/api/watchlist \
+  -H 'content-type: application/json' \
+  -d '{"ticker":"AAPL","note":"earnings 2/1"}'
+
+# 3. List everything
+curl -s http://localhost:7430/api/watchlist | jq .
+
+# 4. Export as CSV
+curl -s 'http://localhost:7430/api/watchlist?format=csv' -o watchlist.csv
+
+# 5. Remove a ticker
+curl -s -X DELETE http://localhost:7430/api/watchlist/AAPL
+```
+
 - User-managed API keys with scopes (`read`, `trade`), one-time secret reveal, revocation, last-used timestamps; managed at `/settings/keys` in the dashboard or via `/admin/keys` over HTTP
 - Save & share regime runs from `/demo` to permanent public URLs at `/r/<id>`; manage saved runs at `/history` (rename, re-run, copy link, delete, tag)
 - Batch regime scan at `/batch`: paste tickers or drop a CSV, classify up to 50 in one pass, save each as a shareable run, export the whole batch as CSV or JSON
