@@ -410,6 +410,7 @@ export type Webhook = {
   last_status: number | null;
   last_error: string | null;
   last_delivered_at: string | null;
+  owner_key_id: string | null;
 };
 export type WebhookIn = {
   url: string;

@@ -6,6 +6,19 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Per-API-key tenant isolation for webhook subscriptions**. Webhooks carry secrets and trigger downstream side effects, so cross-tenant leakage at the subscription layer is a procurement blocker. Every `WebhookSubscription` now carries an `owner_key_id` that is stamped from the calling API key's stable `StoredKey.id` at creation time and persisted to `<data_dir>/webhooks.json`. `GET /webhooks` returns only the caller's own rows, `DELETE /webhooks/{id}` returns `404` (not `403`) for a sibling tenant's id so existence does not leak, `POST /webhooks/fire/latest` fans out only to subscriptions the caller owns via a `_ScopedWebhookStore` adapter that still lets the deliverer persist last-status updates, `GET /webhooks/deliveries` filters log rows by visible subscription ids, and `POST /webhooks/deliveries/{attempt_id}/replay` rejects replay attempts whose underlying subscription the caller cannot see. Admin-role keys (user-managed `admin` scope, env-registry keys with `admin`, and the legacy operator-default `SIGNALCLAW_API_KEY`) see and act on every tenant's webhooks, matching the existing admin console expectation. Legacy rows that predate this field (`owner_key_id` is `None`) are visible only to admins, so a brand-new user key cannot inherit data created by the operator. Covered by `tests/test_webhooks_tenant_isolation.py` (Alice's webhook is invisible to Bob, Bob's `DELETE` and replay both 404 without leaking existence, admin can see and delete both, and Bob cannot list a delivery row whose subscription Alice owns).
+
+  Try it locally: `make api` then
+  ```bash
+  # Alice's key sees only her own subscriptions
+  curl http://localhost:7431/webhooks -H "x-api-key: $ALICE_KEY"
+
+  # Bob trying to delete Alice's subscription gets 404, not 403
+  curl -i -X DELETE http://localhost:7431/webhooks/$ALICE_SUB_ID \
+    -H "x-api-key: $BOB_KEY"
+  # => HTTP/1.1 404 Not Found
+  ```
+
 - **Per-API-key source IP allowlist (CIDR), enforced on every `/api/v1/*` route**. Enterprise security teams want defence in depth on top of the workspace-wide network policy: even if a key leaks, it should only authenticate from the customer's known service IPs (a backend ETL VPC, an office VPN, a Render egress range). SignalClaw now stores a per-key `ip_allowlist` (canonical CIDRs, IPv4 and IPv6, bare IPs stored as `/32` or `/128`, dedupe-on-write, capped at 64 entries) inside the existing keys file at `<data>/keys.json`. The check lives in the shared `v1Guard.enforceRateLimit` wrapper, so every existing v1 route picks it up without per-handler changes: a blocked request returns `403 {"error":{"code":"ip_not_allowed"}}` before any rate-limit token is consumed or any handler body runs, and is written to the audit log with `reason: ip_not_allowed:<source>` so operators can see which key tried what from where. IPv4-mapped IPv6 sources like `::ffff:203.0.113.5` arriving on a dual-stack socket are normalised so a plain IPv4 CIDR still matches. The new admin endpoints `GET /api/admin/keys/{id}/ip-allowlist` and `PUT /api/admin/keys/{id}/ip-allowlist` validate every entry at the boundary (a single bad CIDR rejects the whole update with `400 bad_cidr`), and the dashboard at `/settings/keys` exposes a per-key IP allowlist editor with the same lockout-aware copy as the workspace page. Empty list means "any source"; revoked keys cannot be edited. Covered by `tests/ipAllowlist.test.mjs` (CIDR canonicalisation and dedupe, max-entries cap, garbage rejection, IPv4 and IPv6 network match, IPv4-mapped IPv6 normalisation, `x-forwarded-for` leftmost extraction, cross-key isolation showing a blocked IP still passes on a different key with no allowlist, unknown source IP blocked, clearing the list reopens the key).
 
   Try it locally: `pnpm --filter signalclaw-web dev` then

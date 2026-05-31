@@ -128,6 +128,13 @@ def diff_picks(
 
 # --- subscriptions ------------------------------------------------------
 
+# Sentinel marking a webhook that was created before per-key ownership
+# was added, or by the operator-default admin key. ``None``-owned rows
+# are visible only to admins and to the legacy default-key caller, so
+# legacy data does not silently leak to a newly-created user key.
+LEGACY_OWNER: Optional[str] = None
+
+
 @dataclass
 class WebhookSubscription:
     url: str
@@ -140,6 +147,13 @@ class WebhookSubscription:
     last_status: Optional[int] = None
     last_error: Optional[str] = None
     last_delivered_at: Optional[str] = None
+    # Tenant-isolation field. Holds the ``StoredKey.id`` of the API key
+    # that created the subscription. ``None`` is the legacy / admin
+    # bucket: rows that predate this field, or that were created by the
+    # operator-default ``api_key`` setting, do not belong to any user
+    # key. Visibility/mutation gates in the API enforce that callers
+    # only see their own rows (admins see all).
+    owner_key_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -158,7 +172,23 @@ class WebhookSubscription:
             last_status=d.get("last_status"),
             last_error=d.get("last_error"),
             last_delivered_at=d.get("last_delivered_at"),
+            owner_key_id=d.get("owner_key_id"),
         )
+
+    def is_visible_to(self, owner_key_id: Optional[str],
+                      is_admin: bool = False) -> bool:
+        """Return True iff a caller with ``owner_key_id`` may see this row.
+
+        Admins see everything. User keys see only rows they own. The
+        legacy/admin bucket (``self.owner_key_id is None``) is visible
+        only to admins so a brand-new user key cannot inherit data
+        created by the operator.
+        """
+        if is_admin:
+            return True
+        if self.owner_key_id is None:
+            return False
+        return self.owner_key_id == owner_key_id
 
     def matches(self, ev: PickEvent) -> bool:
         if not self.enabled:
@@ -188,6 +218,18 @@ class WebhookStore:
 
     def list(self) -> List[WebhookSubscription]:
         return self._read()
+
+    def list_for(self, owner_key_id: Optional[str],
+                 is_admin: bool = False) -> List[WebhookSubscription]:
+        """Return only the subscriptions a caller is allowed to see."""
+        return [s for s in self._read()
+                if s.is_visible_to(owner_key_id, is_admin=is_admin)]
+
+    def get(self, sub_id: str) -> Optional[WebhookSubscription]:
+        for s in self._read():
+            if s.id == sub_id:
+                return s
+        return None
 
     def add(self, sub: WebhookSubscription) -> WebhookSubscription:
         with self._lock:

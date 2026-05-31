@@ -382,6 +382,7 @@ class WebhookOut(BaseModel):
     last_status: Optional[int] = None
     last_error: Optional[str] = None
     last_delivered_at: Optional[str] = None
+    owner_key_id: Optional[str] = None
 
 
 class WebhookListOut(BaseModel):

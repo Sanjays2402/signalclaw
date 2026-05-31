@@ -67,7 +67,7 @@ from ..alerts import (Alert, AlertCondition, AlertStore, AlertEventStore,
                        evaluate_alerts)
 from ..api_keys import ApiKeyStore
 from ..mfa import MfaStore, provisioning_uri
-from .rate_limit import set_user_key_store
+from .rate_limit import set_user_key_store, get_registry
 from ..sessions import SessionStore
 from ..sessions.middleware import SessionTrackingMiddleware
 from ..portfolio import (PortfolioStore, Trade, TradeSide, compute_snapshot,
@@ -241,6 +241,10 @@ def create_app() -> FastAPI:
     webhooks_store = WebhookStore(settings.data_dir / "webhooks.json")
     webhook_log_store = DeliveryLogStore(
         settings.data_dir / "webhook_deliveries.json")
+    # Exposed for the admin console + tests to inspect or seed the
+    # delivery log without reaching into module-private state.
+    app.state.webhooks_store = webhooks_store
+    app.state.webhook_log_store = webhook_log_store
     drawdown_store = DrawdownGuardStore(settings.data_dir / "drawdown_guard.json")
     journal_store = JournalStore(settings.data_dir / "journal.json")
     fx_store = FxStore(settings.data_dir / "fx")
@@ -1808,13 +1812,70 @@ def create_app() -> FastAPI:
         return DailyReportOut(as_of=r.as_of,
                               picks=[Pick(**p.to_dict()) for p in r.picks])
 
+    class _ScopedWebhookStore:
+        """Adapter that exposes only a caller-visible slice of webhooks.
+
+        ``deliver_events`` iterates ``store.list()`` and calls
+        ``store.update(sub)`` per matched subscription. This wrapper
+        narrows ``list()`` to the caller's own subscriptions while
+        still letting the deliverer persist last-status updates against
+        the underlying store.
+        """
+        def __init__(self, real, visible):
+            self._real = real
+            self._visible = list(visible)
+
+        def list(self):
+            return list(self._visible)
+
+        def update(self, sub):
+            return self._real.update(sub)
+
+    def _webhook_caller(x_api_key: Optional[str]) -> tuple[Optional[str], bool]:
+        """Resolve (owner_key_id, is_admin) for the webhooks tenant gate.
+
+        - User-managed key: returns its ``StoredKey.id`` and admin=True
+          iff the role grants the ``admin`` scope.
+        - Env-registry key (``SIGNALCLAW_API_KEYS_JSON``) with the
+          ``admin`` scope: returns ``(None, True)`` so an operator can
+          run a CI/admin key that sees every tenant's webhooks.
+        - Operator-default env key (``SIGNALCLAW_API_KEY``): returns
+          ``(None, True)``. Matches the legacy single-key deployment
+          where there is exactly one tenant.
+        - Unknown / unauth: ``(None, False)``. The route's
+          ``require_api_key`` dependency rejects this before we get
+          here, but the fall-through is fail-closed regardless.
+        """
+        if not x_api_key:
+            return None, False
+        store = api_key_store
+        if store is not None:
+            stored = store.lookup(x_api_key)
+            if stored is not None:
+                try:
+                    from ..api_keys import cap_scopes_to_role  # local
+                    eff = set(cap_scopes_to_role(
+                        stored.scopes, getattr(stored, "role", None)))
+                except Exception:
+                    eff = set(stored.scopes)
+                return stored.id, ("admin" in eff)
+        if x_api_key == settings.api_key:
+            return None, True
+        env_rec = get_registry().get(x_api_key)
+        if env_rec is not None:
+            return None, ("admin" in env_rec.scopes)
+        return None, False
+
     @app.get("/webhooks", response_model=WebhookListOut, dependencies=[Depends(require_api_key)])
-    def webhooks_list():
-        return WebhookListOut(subscriptions=[WebhookOut(**s.to_dict())
-                                             for s in webhooks_store.list()])
+    def webhooks_list(x_api_key: str | None = Header(default=None)):
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        return WebhookListOut(subscriptions=[
+            WebhookOut(**s.to_dict())
+            for s in webhooks_store.list_for(owner_id, is_admin=is_admin)])
 
     @app.post("/webhooks", response_model=WebhookOut, dependencies=[Depends(require_api_key)])
-    def webhooks_add(body: WebhookIn):
+    def webhooks_add(body: WebhookIn,
+                     x_api_key: str | None = Header(default=None)):
         from ..webhooks.destination import validate_destination
         ok, reason = validate_destination(body.url)
         if not ok:
@@ -1822,25 +1883,35 @@ def create_app() -> FastAPI:
         bad = [e for e in body.events if e and e not in EVENT_KINDS]
         if bad:
             raise HTTPException(400, f"unknown event(s): {bad}")
+        owner_id, _ = _webhook_caller(x_api_key)
         sub = WebhookSubscription(
             url=body.url,
             events=list(body.events) if body.events else sorted(EVENT_KINDS),
             tickers=[t.upper() for t in body.tickers],
             secret=body.secret,
             enabled=body.enabled,
+            owner_key_id=owner_id,
         )
         webhooks_store.add(sub)
         return WebhookOut(**sub.to_dict())
 
     @app.delete("/webhooks/{sub_id}", dependencies=[Depends(require_api_key)])
-    def webhooks_remove(sub_id: str):
+    def webhooks_remove(sub_id: str,
+                        x_api_key: str | None = Header(default=None)):
+        sub = webhooks_store.get(sub_id)
+        if sub is None:
+            raise HTTPException(404, "subscription not found")
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        if not sub.is_visible_to(owner_id, is_admin=is_admin):
+            # Do not reveal existence to non-owners.
+            raise HTTPException(404, "subscription not found")
         if not webhooks_store.remove(sub_id):
             raise HTTPException(404, "subscription not found")
         return {"removed": sub_id}
 
     @app.post("/webhooks/fire/latest", response_model=WebhookDeliveryOut,
               dependencies=[Depends(require_api_key)])
-    def webhooks_fire_latest():
+    def webhooks_fire_latest(x_api_key: str | None = Header(default=None)):
         latest = archive.latest()
         if latest is None:
             raise HTTPException(404, "no archived reports")
@@ -1851,7 +1922,13 @@ def create_app() -> FastAPI:
             current_as_of=latest.as_of,
             prior_as_of=prior.as_of if prior else None,
         )
-        deliveries = deliver_events(events, webhooks_store,
+        # Tenant-scope fan-out: deliver only to subscriptions the caller
+        # owns. Admins fan out to every visible subscription, matching
+        # the legacy behaviour for the operator-default key.
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        visible_subs = webhooks_store.list_for(owner_id, is_admin=is_admin)
+        scoped_store = _ScopedWebhookStore(webhooks_store, visible_subs)
+        deliveries = deliver_events(events, scoped_store,
                                     log_store=webhook_log_store)
         return WebhookDeliveryOut(
             events=[PickEventOut(**e.to_dict()) for e in events],
@@ -1862,18 +1939,42 @@ def create_app() -> FastAPI:
              dependencies=[Depends(require_api_key)])
     def webhooks_deliveries(limit: int = 50,
                             status: Optional[str] = None,
-                            subscription_id: Optional[str] = None):
+                            subscription_id: Optional[str] = None,
+                            x_api_key: str | None = Header(default=None)):
         if status is not None and status not in ("ok", "failed"):
             raise HTTPException(400, "status must be 'ok' or 'failed'")
-        rows = webhook_log_store.list(
-            limit=limit, status=status, subscription_id=subscription_id)
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        visible_ids = {s.id for s in
+                       webhooks_store.list_for(owner_id, is_admin=is_admin)}
+        if subscription_id is not None and subscription_id not in visible_ids \
+                and not is_admin:
+            # Non-admins asking for someone else's sub get an empty list,
+            # not a 404, to avoid leaking existence.
+            return WebhookDeliveryLogOut(deliveries=[])
+        # Pull a generous slice from the store, then filter by
+        # visibility, then trim to ``limit``. The store does not know
+        # about ownership so we must filter here.
+        raw = webhook_log_store.list(
+            limit=max(int(limit) * 4, 200), status=status,
+            subscription_id=subscription_id)
+        if not is_admin:
+            raw = [r for r in raw if r.subscription_id in visible_ids]
+        raw = raw[: int(limit)]
         return WebhookDeliveryLogOut(deliveries=[
-            WebhookDeliveryLogItemOut(**r.to_dict()) for r in rows])
+            WebhookDeliveryLogItemOut(**r.to_dict()) for r in raw])
 
     @app.post("/webhooks/deliveries/{attempt_id}/replay",
               response_model=WebhookDeliveryLogItemOut,
               dependencies=[Depends(require_api_key)])
-    def webhooks_deliveries_replay(attempt_id: str):
+    def webhooks_deliveries_replay(attempt_id: str,
+                                   x_api_key: str | None = Header(default=None)):
+        original = webhook_log_store.get(attempt_id)
+        if original is None:
+            raise HTTPException(404, "attempt not found or no payload to replay")
+        sub = webhooks_store.get(original.subscription_id)
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        if sub is None or not sub.is_visible_to(owner_id, is_admin=is_admin):
+            raise HTTPException(404, "attempt not found or no payload to replay")
         replayed = replay_delivery(
             attempt_id, webhooks_store, webhook_log_store)
         if replayed is None:
