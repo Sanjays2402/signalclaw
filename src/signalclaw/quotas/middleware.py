@@ -26,7 +26,6 @@ Behaviour
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
@@ -35,7 +34,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from . import QuotaStore, month_key, seconds_until_next_month
-from ..api.rate_limit import get_registry, _USER_STORE  # type: ignore
+from ..api.rate_limit import get_registry
 import hashlib
 
 

@@ -6,6 +6,24 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Per-key monthly quotas with billing plans and standard rate-limit headers**. Enterprise procurement asks two questions on every call: how do you cap a customer's usage, and how do we see what they consumed this month for billing. SignalClaw now ships a plan catalogue (`free`, `pro`, `enterprise`; override with `SIGNALCLAW_PLANS_JSON`) and a `QuotaMiddleware` that bills every authenticated request against the calling key's plan. Counts live in `<data_dir>/quotas.json` keyed by `(key_id, YYYY-MM)`; the key id is the stable id from the user-managed store so usage survives secret rotation, and env-configured keys get a deterministic `env:<sha8>` bucket. When a key crosses its monthly ceiling the middleware returns `429` with `Retry-After` set to the seconds until 00:00 UTC on the first of the next month, plus the standard envelope `X-RateLimit-Scope: monthly`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`. Successful responses carry the same headers reflecting the post-increment state so a customer dashboard can render "412 of 10,000 calls this month" without a separate probe; unlimited plans report `X-RateLimit-Limit: 0` and `X-RateLimit-Remaining: unlimited` (GitHub's convention). Anonymous traffic, health, readiness, metrics, and docs are exempt. New admin endpoints `GET /admin/plans`, `PUT /admin/keys/{id}/plan`, `GET /admin/usage`, and `GET /admin/usage/{id}` are gated by `admin` scope plus MFA and audited via the existing `AuditMiddleware`. Covered by `tests/test_quotas.py` (standard headers on success, no headers for anonymous traffic, monthly ceiling returns 429 with Retry-After, plan upgrade lifts the cap on the next call without restart, per-key usage isolation, plan catalogue and default plan are visible).
+
+  Try it locally: `make api` then
+  ```bash
+  # list plans
+  curl http://localhost:7431/admin/plans \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" -H "x-mfa-code: 123456"
+
+  # upgrade a key to the pro plan
+  curl -X PUT http://localhost:7431/admin/keys/$KEY_ID/plan \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" -H "x-mfa-code: 123456" \
+    -H "content-type: application/json" -d '{"plan":"pro"}'
+
+  # see this month's usage for every key
+  curl http://localhost:7431/admin/usage \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" -H "x-mfa-code: 123456"
+  ```
+
 - **Workspace-level IP allowlist (global network policy)**. Enterprise security teams routinely require the ability to restrict the API and dashboard to a known set of office, VPN, or bastion CIDRs as a precondition to signing. SignalClaw now ships a workspace-wide allowlist enforced by `GlobalIPAllowlistMiddleware` ahead of authentication, audit, and rate limiting, so off-network callers are dropped before any handler or store runs. The policy is JSON-backed under `<data_dir>/network_policy.json`, defaults to disabled so existing deployments keep working unchanged, and refuses `enabled=true` with an empty CIDR list to prevent self-lockout. CIDRs are validated with the stdlib `ipaddress` module; bare IPs are accepted and promoted to `/32` or `/128`. Health, readiness, metrics, and docs paths stay exempt so external monitors keep working, and loopback (`127.0.0.1`, `::1`) is always allowed so an operator on the box itself cannot be locked out. The admin endpoints `GET /admin/network-policy` and `PUT /admin/network-policy` are gated by the `admin` scope plus MFA and audited via the existing `AuditMiddleware`. The dashboard page at `/settings/network` adds a toggle, an add/remove CIDR list with a lockout warning when enforcement would activate without any CIDRs, and a save action that surfaces the API's structured 400 on bad input. Covered by `tests/test_network_policy.py` (CIDR normalisation, refusal to enable with empty list, cap at `MAX_CIDRS`, disabled policy passes through, enabled policy blocks a non-allowlisted IP with 403, on-network IP passes, health and metrics exempt, admin endpoints update with validation).
 
   Try it locally: `make api` then

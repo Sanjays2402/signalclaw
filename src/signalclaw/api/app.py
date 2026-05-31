@@ -58,6 +58,8 @@ from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMidd
 from ..network_policy import get_store as get_network_policy_store, normalise_cidr, MAX_CIDRS
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
+from ..quotas import get_quota_store
+from ..quotas.middleware import QuotaMiddleware
 from ..audit.retention import AuditRetentionPruner, retention_config_from_env
 from ..privacy import StoreBundle, collect_user_data, erase_user_data
 from ..privacy.export_formats import build_zip as _build_export_zip, export_filename as _export_filename
@@ -172,6 +174,14 @@ def create_app() -> FastAPI:
             default_per_minute=int(os.environ.get("SIGNALCLAW_RATE_LIMIT_READ_PER_MIN", "120")),
             write_per_minute=int(os.environ.get("SIGNALCLAW_RATE_LIMIT_WRITE_PER_MIN", "30")),
         )
+    # Per-key monthly quota + standard X-RateLimit-* response headers.
+    # Always on. Anonymous traffic is skipped so an unauthenticated
+    # probe of /healthz never burns quota. Sits INSIDE the per-minute
+    # limiter (added later therefore runs earlier on inbound) so a
+    # bursty caller is shaped before they count against monthly cap.
+    quota_store = get_quota_store(settings.data_dir / "quotas.json")
+    app.state.quota_store = quota_store
+    app.add_middleware(QuotaMiddleware, store=quota_store)
     # RBAC scope enforcement: applied globally so mutating endpoints
     # require a key with the ``trade`` scope and ``/admin/*`` requires
     # ``admin``, regardless of whether each route declared a per-route
@@ -511,6 +521,124 @@ def create_app() -> FastAPI:
         out["secret"] = secret  # one-time reveal
         out["grace_seconds"] = grace
         return out
+
+    # --- Plans + monthly usage (quotas) ---------------------------------
+    # Enterprise procurement asks two questions repeatedly: how do you
+    # cap a customer's usage, and how do we see what they consumed for
+    # billing. These endpoints answer both. ``GET /admin/plans`` lists
+    # the configured catalogue; ``PUT /admin/keys/{id}/plan`` assigns
+    # a plan to a key; ``GET /admin/usage`` returns this month's call
+    # count per key (and the plan it is on). All writes are audited
+    # automatically because the request flows through AuditMiddleware.
+    @app.get("/admin/plans",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_plans_list():
+        return {
+            "plans": [p.to_public() for p in quota_store.plans()],
+            "default_plan_id": quota_store.default_plan_id(),
+        }
+
+    @app.put("/admin/keys/{key_id}/plan",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_keys_set_plan(key_id: str, body: dict):
+        """Assign a billing plan to a key.
+
+        Body: ``{"plan": "free|pro|enterprise"}``. The plan key id is
+        stored against the API key's stable id so usage and the cap
+        survive secret rotation. Returns the resolved plan plus the
+        key's current month usage so the admin console can render
+        the new state without a second probe.
+        """
+        plan_id = (body or {}).get("plan")
+        if not isinstance(plan_id, str) or not plan_id:
+            raise HTTPException(400, "plan must be a non-empty string")
+        # Validate the key id exists (and is not revoked) so we do not
+        # silently bill against a phantom row.
+        stored = next((k for k in api_key_store.list()
+                       if k.id == key_id and not k.revoked), None)
+        if stored is None:
+            raise HTTPException(404, "key not found")
+        scoped_id = f"key:{key_id}"
+        try:
+            plan = quota_store.set_plan(scoped_id, plan_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        used = quota_store.usage(scoped_id)
+        remaining, _ = quota_store.remaining(scoped_id)
+        return {
+            "key_id": key_id,
+            "plan": plan.to_public(),
+            "usage": int(used),
+            "remaining": int(remaining),
+        }
+
+    @app.get("/admin/usage",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_usage_summary():
+        """Current-month usage for every known key.
+
+        Includes revoked keys (their historical counters are still
+        useful for invoicing the period in which they were active).
+        Rows for keys with no recorded calls this month are returned
+        with ``used=0`` so the admin console can render the full
+        roster without a join.
+        """
+        from ..quotas import month_key as _mk
+        current = _mk()
+        rows = []
+        seen: set[str] = set()
+        for k in api_key_store.list():
+            scoped = f"key:{k.id}"
+            seen.add(scoped)
+            plan = quota_store.plan_for(scoped)
+            used = quota_store.usage(scoped, current)
+            remaining, _ = quota_store.remaining(scoped, current)
+            rows.append({
+                "key_id": k.id,
+                "label": k.label,
+                "revoked": bool(k.revoked),
+                "plan": plan.to_public(),
+                "used": int(used),
+                "remaining": int(remaining),
+                "month": current,
+            })
+        # Env-configured keys do not appear in api_key_store; surface
+        # any usage rows we tracked against them so an operator can
+        # still see who is calling the API.
+        for scoped_id, by_month in quota_store.usage_all().items():
+            if scoped_id in seen:
+                continue
+            plan = quota_store.plan_for(scoped_id)
+            used = int(by_month.get(current, 0))
+            remaining, _ = quota_store.remaining(scoped_id, current)
+            rows.append({
+                "key_id": scoped_id,
+                "label": "",
+                "revoked": False,
+                "plan": plan.to_public(),
+                "used": used,
+                "remaining": int(remaining),
+                "month": current,
+            })
+        return {"month": current, "keys": rows}
+
+    @app.get("/admin/usage/{key_id}",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_usage_one(key_id: str):
+        scoped = f"key:{key_id}"
+        plan = quota_store.plan_for(scoped)
+        all_usage = quota_store.usage_all().get(scoped, {})
+        from ..quotas import month_key as _mk
+        current = _mk()
+        remaining, _ = quota_store.remaining(scoped, current)
+        return {
+            "key_id": key_id,
+            "plan": plan.to_public(),
+            "current_month": current,
+            "used": int(all_usage.get(current, 0)),
+            "remaining": int(remaining),
+            "history": {m: int(v) for m, v in sorted(all_usage.items())},
+        }
 
     # --- Active sessions ------------------------------------------------
     # An enterprise admin needs to see, in one place, which API keys are
