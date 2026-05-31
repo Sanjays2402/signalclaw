@@ -20,6 +20,7 @@ import {
   Trash,
   CheckCircle,
   Key,
+  Globe,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -96,6 +97,12 @@ function Settings() {
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
             <ShieldWarning size={14} weight="duotone" /> Security
+          </Link>
+          <Link
+            href="/settings/network"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Globe size={14} weight="duotone" /> Network
           </Link>
           <Link
             href="/usage"

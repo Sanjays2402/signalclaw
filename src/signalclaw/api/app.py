@@ -54,7 +54,8 @@ from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .dry_run import DryRunMiddleware
 from .request_context import RequestContextMiddleware
-from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware
+from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware, GlobalIPAllowlistMiddleware
+from ..network_policy import get_store as get_network_policy_store, normalise_cidr, MAX_CIDRS
 from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
 from ..audit.retention import AuditRetentionPruner, retention_config_from_env
@@ -188,6 +189,18 @@ def create_app() -> FastAPI:
     _ipa_trusted = tuple(p.strip() for p in _ipa_trusted_raw.split(",") if p.strip())
     app.add_middleware(
         IPAllowlistMiddleware,
+        trust_forwarded=_ipa_trust_xff,
+        trusted_proxies=_ipa_trusted,
+    )
+    # Workspace-level global IP allowlist. Added near the outer edge
+    # so it runs before auth/audit/rbac on the inbound chain and drops
+    # off-network traffic before any handler or store work occurs.
+    network_policy_store = get_network_policy_store(
+        settings.data_dir / "network_policy.json")
+    app.state.network_policy_store = network_policy_store
+    app.add_middleware(
+        GlobalIPAllowlistMiddleware,
+        store=network_policy_store,
         trust_forwarded=_ipa_trust_xff,
         trusted_proxies=_ipa_trusted,
     )
@@ -538,6 +551,63 @@ def create_app() -> FastAPI:
         """
         n = session_store.revoke_all()
         return {"sessions_removed": int(n)}
+
+    # --- Workspace network policy (global IP allowlist) -----------------
+    # Surfaced under /admin/network-policy so the admin console can
+    # manage it. Audited automatically by AuditMiddleware because the
+    # PUT mutates auth-gating state.
+    @app.get("/admin/network-policy",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_network_policy_get():
+        p = network_policy_store.get()
+        return {
+            "enabled": p.enabled,
+            "cidrs": list(p.cidrs),
+            "updated_at": p.updated_at,
+            "updated_by": p.updated_by,
+            "max_cidrs": MAX_CIDRS,
+        }
+
+    @app.put("/admin/network-policy",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_network_policy_put(
+        body: dict,
+        x_api_key: str | None = Header(default=None),
+    ):
+        """Replace the workspace IP allowlist.
+
+        Body shape: ``{"enabled": bool, "cidrs": ["10.0.0.0/8", ...]}``.
+        Refuses ``enabled=true`` with no CIDRs to prevent lockout.
+        Bare IPs are accepted and promoted to host networks.
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        enabled = bool(body.get("enabled", False))
+        raw_cidrs = body.get("cidrs") or []
+        if not isinstance(raw_cidrs, list):
+            raise HTTPException(400, "cidrs must be a list of strings")
+        # Validate up front so we return 400 on bad input rather than 500.
+        try:
+            for c in raw_cidrs:
+                if not isinstance(c, str):
+                    raise ValueError("cidrs entries must be strings")
+                normalise_cidr(c)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        actor = (x_api_key or "")[:12] or "admin"
+        try:
+            p = network_policy_store.set(
+                enabled=enabled, cidrs=raw_cidrs, actor=actor)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        log.info("network_policy.updated",
+                 enabled=p.enabled, cidr_count=len(p.cidrs))
+        return {
+            "enabled": p.enabled,
+            "cidrs": list(p.cidrs),
+            "updated_at": p.updated_at,
+            "updated_by": p.updated_by,
+        }
 
     @app.get("/disclaimer")
     def disclaimer():

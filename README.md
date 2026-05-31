@@ -6,6 +6,22 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Workspace-level IP allowlist (global network policy)**. Enterprise security teams routinely require the ability to restrict the API and dashboard to a known set of office, VPN, or bastion CIDRs as a precondition to signing. SignalClaw now ships a workspace-wide allowlist enforced by `GlobalIPAllowlistMiddleware` ahead of authentication, audit, and rate limiting, so off-network callers are dropped before any handler or store runs. The policy is JSON-backed under `<data_dir>/network_policy.json`, defaults to disabled so existing deployments keep working unchanged, and refuses `enabled=true` with an empty CIDR list to prevent self-lockout. CIDRs are validated with the stdlib `ipaddress` module; bare IPs are accepted and promoted to `/32` or `/128`. Health, readiness, metrics, and docs paths stay exempt so external monitors keep working, and loopback (`127.0.0.1`, `::1`) is always allowed so an operator on the box itself cannot be locked out. The admin endpoints `GET /admin/network-policy` and `PUT /admin/network-policy` are gated by the `admin` scope plus MFA and audited via the existing `AuditMiddleware`. The dashboard page at `/settings/network` adds a toggle, an add/remove CIDR list with a lockout warning when enforcement would activate without any CIDRs, and a save action that surfaces the API's structured 400 on bad input. Covered by `tests/test_network_policy.py` (CIDR normalisation, refusal to enable with empty list, cap at `MAX_CIDRS`, disabled policy passes through, enabled policy blocks a non-allowlisted IP with 403, on-network IP passes, health and metrics exempt, admin endpoints update with validation).
+
+  Try it locally: `make api` then
+  ```bash
+  # inspect current policy (default: disabled)
+  curl http://localhost:7431/admin/network-policy \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" -H "x-mfa-code: 123456"
+
+  # restrict to office + VPN
+  curl -X PUT http://localhost:7431/admin/network-policy \
+    -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" -H "x-mfa-code: 123456" \
+    -H "content-type: application/json" \
+    -d '{"enabled":true,"cidrs":["203.0.113.0/24","10.0.0.0/8"]}'
+  ```
+  Open `http://localhost:3000/settings/network` to manage CIDRs from the dashboard.
+
 - **RBAC roles on every API key (owner, admin, member, viewer)**. SignalClaw API keys now carry an explicit role that caps what the key can do, layered on top of the existing scope system. `owner` and `admin` carry the `admin` scope (manage keys, sessions, audit, MFA, GDPR). `member` carries `read` + `trade`. `viewer` is read only and cannot mutate anything, even if the request lists the `trade` scope. The role is the chokepoint: on every request, the resolved key's stored scopes are intersected with the role's allow list, so a downgrade from `admin` to `viewer` immediately revokes the admin scope on the next request without touching the secret. The dashboard at `/settings/keys` adds a role picker on create and a per-key Role button to change it later, both gated by `admin` scope plus MFA. The new endpoint is `PUT /admin/keys/{id}/role` with body `{"role":"owner|admin|member|viewer"}`; unknown roles return 400 and unknown keys return 404. Covered by `tests/test_api_keys_rbac.py` (viewer cannot write even when trade was requested, member cannot reach admin routes, role downgrade revokes admin on next request, unknown roles rejected at create and update). Existing keys that predate this field default to `member` so nothing breaks on upgrade.
 
   Try it locally: `make api` then

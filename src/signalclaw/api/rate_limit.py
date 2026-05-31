@@ -421,6 +421,71 @@ class IPAllowlistMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class GlobalIPAllowlistMiddleware(BaseHTTPMiddleware):
+    """Workspace-level (global) IP allowlist gate.
+
+    Unlike :class:`IPAllowlistMiddleware`, which only enforces per-key
+    allowlists when a user-managed API key is presented, this middleware
+    is a coarse network policy applied to every request, authenticated
+    or not. Enterprise procurement reviews routinely demand the ability
+    to restrict the API+dashboard to a known set of office/VPN CIDRs;
+    this is that knob.
+
+    Behaviour:
+
+    * When the policy is disabled (default) every request passes.
+    * When enabled, the resolved client IP must match at least one CIDR
+      in the workspace policy or the request is rejected with 403.
+    * Healthcheck and metrics paths are exempt so monitoring continues
+      to work from the cluster's own subnet even if it is not on the
+      allowlist.
+    * Loopback (``127.0.0.1``/``::1``) is always allowed so an operator
+      who SSHes into the host and curls locally cannot be locked out.
+    """
+
+    def __init__(self, app, store,
+                 trust_forwarded: bool = False,
+                 trusted_proxies: Iterable[str] = (),
+                 exempt_paths: Iterable[str] = (
+                     "/health", "/ready", "/healthz", "/readyz",
+                     "/metrics", "/disclaimer",
+                     "/docs", "/openapi.json", "/redoc",
+                     "/docs/oauth2-redirect",
+                 )) -> None:
+        super().__init__(app)
+        self.store = store
+        self.trust_forwarded = bool(trust_forwarded)
+        self.trusted_proxies = tuple(trusted_proxies)
+        self.exempt = tuple(exempt_paths)
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path == p or path.startswith(p + "/") for p in self.exempt):
+            return await call_next(request)
+        ip = client_ip_from_request(
+            request,
+            trusted_proxies=self.trusted_proxies,
+            trust_forwarded=self.trust_forwarded,
+        )
+        # Loopback bypass: an operator on the box itself is implicitly
+        # trusted; otherwise a misconfigured policy could lock everyone
+        # out with no recovery path short of editing JSON on disk.
+        if ip in ("127.0.0.1", "::1"):
+            return await call_next(request)
+        allowed, reason = self.store.check(ip)
+        if not allowed:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "client IP not in workspace allowlist",
+                    "client_ip": ip,
+                    "reason": reason,
+                    "scope": "workspace",
+                },
+            )
+        return await call_next(request)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Per-key + per-route-class token bucket.
 
