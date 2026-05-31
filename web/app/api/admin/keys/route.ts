@@ -7,6 +7,7 @@ import {
   authenticate,
   type Scope,
 } from "@/lib/keyStore";
+import { recordSafe } from "@/lib/activityStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,5 +56,11 @@ export async function POST(req: NextRequest) {
     return err(400, "label_too_long", "label exceeds 80 chars");
   }
   const { key, secret } = await createKey({ label, scopes });
+  await recordSafe({
+    kind: "key.created",
+    title: `API key created · ${key.label}`,
+    body: `Scopes: ${(key.scopes.length ? key.scopes.join(", ") : "none")}. Prefix ${key.prefix}…`,
+    href: "/settings/keys",
+  });
   return NextResponse.json({ ...publicView(key), secret });
 }

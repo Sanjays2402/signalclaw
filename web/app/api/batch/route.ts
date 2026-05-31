@@ -6,6 +6,7 @@ import {
   mapConcurrent,
   type BatchRow,
 } from "@/lib/batch";
+import { recordSafe } from "@/lib/activityStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -150,6 +151,13 @@ export async function POST(req: NextRequest) {
     lookback_days: lookback,
     saved: save,
   };
+
+  await recordSafe({
+    kind: "batch.completed",
+    title: `Batch scan complete · ${summary.requested} tickers`,
+    body: `${summary.ok} ok, ${summary.failed} failed, lookback ${summary.lookback_days}d`,
+    href: "/batch",
+  });
 
   if (format === "csv") {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");

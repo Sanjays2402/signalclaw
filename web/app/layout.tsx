@@ -8,6 +8,7 @@ import TickerTape from "@/components/TickerTape";
 import RegimeIndicator from "@/components/RegimeIndicator";
 import QuotaMeter from "@/components/QuotaMeter";
 import InstallPrompt from "@/components/InstallPrompt";
+import ActivityBell from "@/components/ActivityBell";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -63,6 +64,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-4">
             <RegimeIndicator />
             <QuotaMeter />
+            <ActivityBell />
             <span className="muted text-[10px] uppercase tracking-widest hidden md:inline">
               Research only. Not advice.
             </span>
@@ -103,6 +105,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <NavLink href="/fx">FX</NavLink>
           <NavLink href="/notifier">Notifier</NavLink>
           <NavLink href="/webhooks">Webhooks</NavLink>
+          <NavLink href="/activity">Activity</NavLink>
           <NavLink href="/settings">Settings</NavLink>
           <NavLink href="/settings/keys">Keys</NavLink>
           <NavLink href="/usage">Usage</NavLink>

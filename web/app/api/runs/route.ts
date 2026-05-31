@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createRun, queryRuns, normalizeTags } from "@/lib/runStore";
+import { recordSafe } from "@/lib/activityStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,6 +93,12 @@ export async function POST(req: NextRequest) {
     lookback_days,
     payload,
     tags: normalizeTags(tags),
+  });
+  await recordSafe({
+    kind: "run.saved",
+    title: `Saved run · ${run.ticker}`,
+    body: `${run.label} · ${run.payload.snapshot?.label ?? "unknown regime"}`,
+    href: `/r/${run.id}`,
   });
   return NextResponse.json({ id: run.id, label: run.label, created_at: run.created_at, tags: run.tags });
 }

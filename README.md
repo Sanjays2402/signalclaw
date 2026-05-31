@@ -30,6 +30,29 @@ Tracks a watchlist, ingests OHLCV via yfinance, generates daily picks from a fea
 - Free-tier usage meter at `/usage`: real per-month quota of saved runs, daily activity chart, top tickers, regime breakdown, and upgrade CTA; live quota pill in the header that links to `/usage`
 - Guided 3-step onboarding at `/welcome`: unlock the terminal, run a real regime classification on a deterministic seeded series, save it to history with the `#onboarding` tag; dismissible homepage banner points new users to it and a replay button lets anyone redo the tour
 - Installable PWA with offline shell: Chrome/Edge/Android show an "Install SignalClaw" prompt, iOS supports Add to Home Screen, and a service worker caches the app shell so cached pages keep loading without a network. See `/manifest.webmanifest` and `/offline`.
+- In-app activity feed at `/activity`: every saved run, batch scan, webhook delivery, and API key mint is captured with a real event log; the header bell shows an unread badge, the page supports kind filters, unread-only view, mark read, delete, and clear. Backed by `GET/PATCH/DELETE /api/activity` and `PATCH/DELETE /api/activity/<id>`.
+
+## Try the activity feed
+
+```bash
+# 1. Boot the web app
+cd web && pnpm dev   # http://localhost:7430
+
+# 2. Trigger some events
+curl -s http://localhost:7430/api/activity | jq .unread
+# Save a run from /demo, fire a webhook from /webhooks, or run a batch from /batch.
+
+# 3. List recent activity
+curl -s 'http://localhost:7430/api/activity?limit=10' | jq '.events[] | {kind, title, read}'
+
+# 4. Mark them all read
+curl -s -X PATCH http://localhost:7430/api/activity \
+  -H 'content-type: application/json' \
+  -d '{"action":"mark_all_read"}'
+```
+
+The header bell (next to the quota meter) polls every twenty seconds and shows the live unread count. Click it to open `/activity`.
+
 
 ## Install as a desktop or mobile app
 

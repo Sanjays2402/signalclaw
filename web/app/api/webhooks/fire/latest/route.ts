@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { dispatchEvents, type PickEvent } from "@/lib/webhookStore";
 import { queryRuns } from "@/lib/runStore";
+import { recordSafe } from "@/lib/activityStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,5 +30,18 @@ export async function POST() {
     },
   ];
   const result = await dispatchEvents(events);
+  const ok = result.deliveries.filter((d) => (d.status ?? 0) >= 200 && (d.status ?? 0) < 300).length;
+  const failed = result.deliveries.length - ok;
+  if (result.deliveries.length > 0) {
+    await recordSafe({
+      kind: failed > 0 ? "webhook.failed" : "webhook.delivered",
+      title:
+        failed > 0
+          ? `Webhook delivery had ${failed} failure${failed === 1 ? "" : "s"}`
+          : `Webhook delivered to ${ok} endpoint${ok === 1 ? "" : "s"}`,
+      body: `${r.ticker} · ${label} · ${asOf}`,
+      href: "/webhooks",
+    });
+  }
   return NextResponse.json(result);
 }
