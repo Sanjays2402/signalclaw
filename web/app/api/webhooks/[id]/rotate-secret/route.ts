@@ -3,6 +3,7 @@ import { rotateWebhookSecret, getWebhook } from "@/lib/webhookStore";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { recordSafe } from "@/lib/activityStore";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { requireAdmin } from "@/lib/adminGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +17,9 @@ function err(status: number, code: string, message: string) {
 export async function POST(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   const route = `/api/webhooks/${id}/rotate-secret`;
-  const k = await authenticate(extractKey(req));
+  const { denied, key: gatedKey } = await requireAdmin(req, route, "POST");
+  if (denied) return denied;
+  const k = gatedKey ?? (await authenticate(extractKey(req)));
 
   let body: { secret?: string; grace_seconds?: number } = {};
   try {

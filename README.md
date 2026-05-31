@@ -6,6 +6,29 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Admin gating on the entire `/api/webhooks/*` management surface.** The webhook signing-secret rotation route already enforced an admin posture, but the sibling create/list/get/delete/replay/fire-test routes were wide open: anyone who reached the dashboard could create a subscription pointing at an arbitrary URL, list every configured endpoint and its events, delete subscriptions, replay a prior delivery, or fire a synthesized event from the latest run. That's a procurement red flag (SSRF + abuse + tenant exposure) the moment SignalClaw is reachable from anything other than `localhost`. A new shared gate (`web/lib/adminGuardCore.ts`, adapted into Next via `web/lib/adminGuard.ts`) factors the existing `/api/admin/network-policy` policy out of copy-paste range: in local single-user mode (no `SIGNALCLAW_ADMIN_KEY` env var) the call passes and writes a `local-mode` line to the tamper-evident audit chain, exactly as today; in production posture (`SIGNALCLAW_ADMIN_KEY` set) the request must present an authenticated key with the `admin` scope or it's refused with `403 forbidden` and a `forbidden:admin-required` audit line. The same gate is now wired into `GET/POST /api/webhooks`, `GET/DELETE /api/webhooks/:id`, `POST /api/webhooks/:id/rotate-secret`, `GET /api/webhooks/deliveries`, `POST /api/webhooks/deliveries/:id/replay`, and `POST /api/webhooks/fire/latest`, and each handler audits success too (with `webhook_id`, target URL, delivery counts, or replay metadata in `details`) so a SOC2 reviewer can reconstruct every change to the webhook surface from the existing audit chain. Covered by `tests/webhookAdminGuard.test.mjs`: local mode admits unauthenticated callers, production posture rejects unauthenticated callers, unknown bearers, and real keys without admin scope (proving permission denial), admits the env admin secret, and a source-level check pins that every one of the six webhook management route files imports `requireAdmin` and short-circuits on `denied` so a future refactor can't silently reopen the surface.
+
+  Try it locally: `cd web && npm run dev` then
+  ```bash
+  # Production posture: gate is on.
+  export SIGNALCLAW_ADMIN_KEY=sc_live_bootstrap_admin
+
+  # No bearer => 403, audit line written.
+  curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:7430/api/webhooks
+  # HTTP 403
+
+  # Env admin bearer => 200 with the live subscription list.
+  curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+    http://localhost:7430/api/webhooks | jq
+
+  # Same gate covers create, delete, replay, rotate-secret, and fire-latest.
+  curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+    -H 'Content-Type: application/json' \
+    -d '{"url":"https://example.com/hook","events":["entered"],"tickers":["SPY"]}' \
+    http://localhost:7430/api/webhooks | jq
+  ```
+  Unsetting `SIGNALCLAW_ADMIN_KEY` returns to local single-user mode without any code change.
+
 - **Reversible API key suspension as the operational hold between revoke and rotate.** Revoke is permanent and rotate forces every legitimate client to redeploy a new secret; neither is the right tool when a SOC2 incident response (or an enterprise customer's billing dispute) needs the key to stop authenticating *right now* with the option to lift the hold in five minutes. `web/lib/keyStore.ts` now carries `suspended` / `suspended_at` / `suspended_reason` on every stored key, exposes a new `setKeySuspended(id, suspended, reason?)` primitive (rejects revoked keys and `env-admin`, caps the reason at 200 chars for the audit trail), and `authenticate()` refuses suspended keys before any route handler or rate-limit token is touched, so they fail uniformly with `401 unauthorized` across `/api/v1/*` and the admin surface. A new `GET/PUT /api/admin/keys/:id/suspend` route returns the live hold state and toggles it with `{ suspended: boolean, reason?: string|null }`, writes the existing tamper-evident audit chain under `reason: suspend:active->suspended` (and back), and refuses `409 revoked` / `409 env_admin` so an operator cannot accidentally suspend an already-dead key or the bootstrap admin. The `/settings/keys` admin UI surfaces a `suspended` badge with the reason inline, swaps the action button between **Suspend** (prompts for a reason) and **Unsuspend** (confirm-only) per row, and disables both controls while a sibling action is in flight. Covered by `tests/keySuspend.test.mjs`: new keys are not suspended, suspending blocks `authenticate()` on the exact same secret, unsuspending restores it without rotation (proves reversibility), revoked keys and `env-admin` are refused, and reason is truncated at 200 chars.
 
   Try it locally: `cd web && npm run dev` then

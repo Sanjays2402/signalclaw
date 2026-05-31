@@ -1,16 +1,23 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { dispatchEvents, type PickEvent } from "@/lib/webhookStore";
 import { queryRuns } from "@/lib/runStore";
 import { recordSafe } from "@/lib/activityStore";
+import { requireAdmin } from "@/lib/adminGuard";
+import { recordAuditEvent } from "@/lib/auditStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const ROUTE = "/api/webhooks/fire/latest";
+
 // Synthesize an event from the most recent saved run so users can test
 // their webhook end to end without waiting for a real signal.
-export async function POST() {
+export async function POST(req: NextRequest) {
+  const { denied, key } = await requireAdmin(req, ROUTE, "POST");
+  if (denied) return denied;
   const { runs } = await queryRuns({ limit: 1, offset: 0 });
   if (runs.length === 0) {
+    await recordAuditEvent({ req, route: ROUTE, method: "POST", status: 400, key: key ?? null, reason: "no_runs" });
     return NextResponse.json(
       { error: { code: "no_runs", message: "Save a run first, then fire a test event." } },
       { status: 400 },
@@ -43,5 +50,13 @@ export async function POST() {
       href: "/webhooks",
     });
   }
+  await recordAuditEvent({
+    req,
+    route: ROUTE,
+    method: "POST",
+    status: 200,
+    key: key ?? null,
+    details: { delivered: ok, failed, ticker: r.ticker, as_of: asOf },
+  });
   return NextResponse.json(result);
 }

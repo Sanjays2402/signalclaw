@@ -79,6 +79,15 @@ from ..privacy.export_formats import build_zip as _build_export_zip, export_file
 from ..alerts import (Alert, AlertCondition, AlertStore, AlertEventStore,
                        evaluate_alerts)
 from ..api_keys import ApiKeyStore
+from ..sso import (
+    OidcConfig,
+    OidcConfigStore,
+    OidcClient,
+    OidcError,
+    StateStore as OidcStateStore,
+    email_allowed as _oidc_email_allowed,
+    extract_email as _oidc_extract_email,
+)
 from ..mfa import MfaStore, provisioning_uri
 from .rate_limit import set_user_key_store, get_registry
 from ..sessions import SessionStore
@@ -280,6 +289,15 @@ def create_app() -> FastAPI:
     scaling_store = ScalingPlanStore(settings.data_dir / "scaling.json")
     api_key_store = ApiKeyStore(settings.data_dir / "api_keys.json")
     app.state.api_key_store = api_key_store
+    # OIDC single sign-on. Config is admin-managed at runtime through
+    # ``/admin/sso``; the login flow at ``/auth/sso/*`` mints a real
+    # api key bound to the IdP-issued email and audits every step.
+    oidc_store = OidcConfigStore(settings.data_dir / "sso" / "oidc.json")
+    app.state.oidc_store = oidc_store
+    oidc_state = OidcStateStore(
+        ttl_seconds=int(os.environ.get("SIGNALCLAW_OIDC_STATE_TTL", "600"))
+    )
+    app.state.oidc_state = oidc_state
     set_user_key_store(api_key_store)
     # MFA (TOTP) for admin actions. Enrolled keys must present a fresh
     # ``x-mfa-code`` on every admin call. When SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN=1
@@ -2883,6 +2901,176 @@ def create_app() -> FastAPI:
         )
         log.info("privacy.delete", **summary.to_dict())
         return summary.to_dict()
+
+    # -------------------------------------------------------------------
+    # SSO (OIDC) -- admin config + browser-driven login flow
+    # -------------------------------------------------------------------
+    from fastapi import Request as _Req
+    from fastapi.responses import RedirectResponse as _Redir, JSONResponse as _Json
+    from pydantic import BaseModel as _BM, Field as _Fld
+    from ..audit.log import AuditEvent as _AE, _hash_key as _hk, _utc_now_iso as _now_iso
+    from ..api_keys import StoredKey  # noqa: F401  (type only, not used)
+
+    class _OidcConfigIn(_BM):
+        enabled: bool = False
+        issuer: str = ""
+        client_id: str = ""
+        client_secret: str | None = None
+        redirect_uri: str = ""
+        allowed_email_domains: list[str] = _Fld(default_factory=list)
+        default_role: str = "viewer"
+        default_scopes: list[str] = _Fld(default_factory=lambda: ["read"])
+
+    @app.get(
+        "/admin/sso",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_sso_get():
+        return oidc_store.get().public_dict()
+
+    from fastapi import Body as _Body
+    @app.put(
+        "/admin/sso",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_sso_put(body: _OidcConfigIn = _Body(...)):
+        current = oidc_store.get()
+        # Allow rotating any field; if client_secret is omitted or
+        # equals the redaction placeholder, keep the stored value so
+        # the UI can PUT back what GET returned without leaking it.
+        new_secret = body.client_secret
+        if new_secret is None or new_secret == "***redacted***":
+            new_secret = current.client_secret
+        cfg = OidcConfig(
+            enabled=bool(body.enabled),
+            issuer=body.issuer.strip(),
+            client_id=body.client_id.strip(),
+            client_secret=new_secret or "",
+            redirect_uri=body.redirect_uri.strip(),
+            allowed_email_domains=list(body.allowed_email_domains or []),
+            default_role=body.default_role or "viewer",
+            default_scopes=list(body.default_scopes or ["read"]),
+        )
+        try:
+            saved = oidc_store.put(cfg)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return saved.public_dict()
+
+    @app.delete(
+        "/admin/sso",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_sso_delete():
+        oidc_store.clear()
+        return {"ok": True}
+
+    def _sso_client() -> OidcClient:
+        cfg = oidc_store.get()
+        if not cfg.enabled:
+            raise HTTPException(404, "sso not configured")
+        # Allow tests to inject a fake client by attaching one to
+        # app.state.oidc_client_factory; production uses a fresh client
+        # per request which keeps connection state out of process globals.
+        factory = getattr(app.state, "oidc_client_factory", None)
+        if factory is not None:
+            return factory(cfg)
+        return OidcClient(cfg)
+
+    @app.get("/auth/sso/login")
+    def sso_login(return_to: str = "/"):
+        client = _sso_client()
+        rec = oidc_state.issue(return_to=return_to)
+        try:
+            url = client.authorization_url(rec)
+        except OidcError as exc:
+            raise HTTPException(502, f"oidc discovery failed: {exc}")
+        return _Redir(url, status_code=302)
+
+    @app.get("/auth/sso/callback")
+    def sso_callback(request: _Req, code: str | None = None, state: str | None = None, error: str | None = None):
+        cfg = oidc_store.get()
+        if not cfg.enabled:
+            raise HTTPException(404, "sso not configured")
+        src_ip = (request.client.host if request.client else "-") or "-"
+        if error:
+            audit_log.record(_AE(
+                ts=_now_iso(), request_id=request.headers.get("x-request-id", "-"),
+                method="GET", path="/auth/sso/callback", status=400,
+                actor_key_hash="-", actor_label="sso", source_ip=src_ip,
+                duration_ms=0.0, action="sso.callback.error",
+                extra={"error": error[:200]},
+            ))
+            raise HTTPException(400, f"idp error: {error}")
+        if not code or not state:
+            raise HTTPException(400, "missing code or state")
+        rec = oidc_state.consume(state)
+        if rec is None:
+            audit_log.record(_AE(
+                ts=_now_iso(), request_id=request.headers.get("x-request-id", "-"),
+                method="GET", path="/auth/sso/callback", status=400,
+                actor_key_hash="-", actor_label="sso", source_ip=src_ip,
+                duration_ms=0.0, action="sso.callback.invalid_state", extra={},
+            ))
+            raise HTTPException(400, "invalid or expired state")
+        client = _sso_client()
+        try:
+            token_resp = client.exchange_code(code, rec)
+            userinfo = None
+            try:
+                if token_resp.get("access_token"):
+                    userinfo = client.userinfo(token_resp["access_token"])
+            except OidcError:
+                # userinfo is optional; we fall back to id_token claims
+                userinfo = None
+            email = _oidc_extract_email(token_resp, userinfo)
+        except OidcError as exc:
+            audit_log.record(_AE(
+                ts=_now_iso(), request_id=request.headers.get("x-request-id", "-"),
+                method="GET", path="/auth/sso/callback", status=502,
+                actor_key_hash="-", actor_label="sso", source_ip=src_ip,
+                duration_ms=0.0, action="sso.exchange_failed",
+                extra={"reason": str(exc)[:200]},
+            ))
+            raise HTTPException(502, f"oidc exchange failed: {exc}")
+        if not _oidc_email_allowed(email, cfg.allowed_email_domains):
+            audit_log.record(_AE(
+                ts=_now_iso(), request_id=request.headers.get("x-request-id", "-"),
+                method="GET", path="/auth/sso/callback", status=403,
+                actor_key_hash="-", actor_label="sso", source_ip=src_ip,
+                duration_ms=0.0, action="sso.email_not_allowed",
+                extra={"email": email},
+            ))
+            raise HTTPException(403, f"email domain not on allowlist: {email}")
+        label = f"sso:{email}"
+        rec_key, secret = api_key_store.create(
+            label=label,
+            scopes=list(cfg.default_scopes),
+            role=cfg.default_role,
+        )
+        audit_log.record(_AE(
+            ts=_now_iso(), request_id=request.headers.get("x-request-id", "-"),
+            method="GET", path="/auth/sso/callback", status=200,
+            actor_key_hash=_hk(secret), actor_label=label, source_ip=src_ip,
+            duration_ms=0.0, action="sso.login.success",
+            extra={
+                "email": email,
+                "key_id": rec_key.id,
+                "role": rec_key.role,
+                "scopes": rec_key.scopes,
+            },
+        ))
+        return _Json({
+            "ok": True,
+            "email": email,
+            "key_id": rec_key.id,
+            "label": rec_key.label,
+            "role": rec_key.role,
+            "scopes": rec_key.scopes,
+            "secret": secret,
+            "return_to": rec.return_to,
+            "note": "Store this secret now. It will not be shown again.",
+        })
 
     return app
 
