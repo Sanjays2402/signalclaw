@@ -14,6 +14,7 @@ import {
   EyeSlash,
   Terminal,
   ArrowsClockwise,
+  Gauge,
 } from "@phosphor-icons/react/dist/ssr";
 
 type StoredKey = {
@@ -50,6 +51,61 @@ export default function ApiKeysPage() {
   const [allowlistDraft, setAllowlistDraft] = useState("");
   const [allowlistErr, setAllowlistErr] = useState<string | null>(null);
   const [savingAllowlist, setSavingAllowlist] = useState(false);
+  const [editingRate, setEditingRate] = useState<string | null>(null);
+  const [rateDraft, setRateDraft] = useState("");
+  const [rateErr, setRateErr] = useState<string | null>(null);
+  const [savingRate, setSavingRate] = useState(false);
+  const [rateInfo, setRateInfo] = useState<Record<string, { limit_per_minute: number; default_per_minute: number; window_seconds: number; is_override: boolean }>>({});
+
+  async function openRateEditor(id: string) {
+    setRateErr(null);
+    setEditingRate(id);
+    try {
+      const info = await api<{ key_id: string; limit_per_minute: number; default_per_minute: number; window_seconds: number; is_override: boolean }>(
+        `/admin/keys/${id}/rate-limit`,
+      );
+      setRateInfo((m) => ({ ...m, [id]: info }));
+      setRateDraft(String(info.limit_per_minute));
+    } catch (err) {
+      setRateErr(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function onSaveRate(id: string) {
+    setRateErr(null);
+    setSavingRate(true);
+    try {
+      const n = Number.parseInt(rateDraft, 10);
+      if (!Number.isFinite(n) || n < 1) throw new Error("Enter a positive integer");
+      const info = await api<{ key_id: string; limit_per_minute: number; default_per_minute: number; window_seconds: number; is_override: boolean }>(
+        `/admin/keys/${id}/rate-limit`,
+        { method: "PUT", body: JSON.stringify({ limit: n }) },
+      );
+      setRateInfo((m) => ({ ...m, [id]: info }));
+      setEditingRate(null);
+    } catch (err) {
+      setRateErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingRate(false);
+    }
+  }
+
+  async function onResetRate(id: string) {
+    setRateErr(null);
+    setSavingRate(true);
+    try {
+      const info = await api<{ key_id: string; limit_per_minute: number; default_per_minute: number; window_seconds: number; is_override: boolean }>(
+        `/admin/keys/${id}/rate-limit`,
+        { method: "PUT", body: JSON.stringify({ limit: null }) },
+      );
+      setRateInfo((m) => ({ ...m, [id]: info }));
+      setRateDraft(String(info.limit_per_minute));
+    } catch (err) {
+      setRateErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingRate(false);
+    }
+  }
 
   async function onSaveAllowlist(id: string) {
     setAllowlistErr(null);
@@ -290,6 +346,21 @@ export default function ApiKeysPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => {
+                      if (editingRate === k.id) {
+                        setEditingRate(null);
+                      } else {
+                        openRateEditor(k.id);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm"
+                    title="Cap requests per minute for this key"
+                  >
+                    <Gauge size={12} weight="duotone" />
+                    Rate limit
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onRotate(k.id, k.label || k.prefix)}
                     disabled={rotating === k.id || revoking === k.id}
                     className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm disabled:opacity-50"
@@ -313,6 +384,63 @@ export default function ApiKeysPage() {
                   </button>
                 </div>
                 </div>
+                {editingRate === k.id && (
+                  <div className="mt-2 ml-0 sm:ml-2 p-3 border border-[var(--border)] rounded-sm bg-black/20 space-y-2">
+                    <label className="block text-[10px] uppercase tracking-widest muted">
+                      Requests per minute
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={100000}
+                        value={rateDraft}
+                        onChange={(e) => setRateDraft(e.target.value)}
+                        className="w-32 bg-black/30 border border-[var(--border)] rounded-sm px-2 py-1.5 text-[12px] mono focus:outline-none focus:border-[var(--amber)]"
+                      />
+                      <span className="text-[11px] muted">
+                        default {rateInfo[k.id]?.default_per_minute ?? "\u2014"}
+                        {rateInfo[k.id]?.is_override ? " (override active)" : ""}
+                      </span>
+                    </div>
+                    <p className="text-[11px] muted">
+                      Requests over the cap return 429 with Retry-After and
+                      standard X-RateLimit-Limit, Remaining, Reset headers.
+                      The window is {rateInfo[k.id]?.window_seconds ?? 60} seconds.
+                    </p>
+                    {rateErr && (
+                      <div className="flex items-start gap-2 p-2 border border-red-500/40 bg-red-500/10 rounded-sm text-[12px]">
+                        <WarningCircle size={14} weight="duotone" className="text-red-400 shrink-0 mt-0.5" />
+                        <span>{rateErr}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onResetRate(k.id)}
+                        disabled={savingRate}
+                        className="px-3 py-1 text-[11px] muted hover:text-white"
+                      >
+                        Reset to default
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingRate(null)}
+                        className="px-3 py-1 text-[11px] muted hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingRate}
+                        onClick={() => onSaveRate(k.id)}
+                        className="px-3 py-1 text-[11px] font-medium bg-[var(--amber)] text-black rounded-sm disabled:opacity-50"
+                      >
+                        {savingRate ? "Saving..." : "Save limit"}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {editingAllowlist === k.id && (
                   <div className="mt-2 ml-0 sm:ml-2 p-3 border border-[var(--border)] rounded-sm bg-black/20 space-y-2">
                     <label className="block text-[10px] uppercase tracking-widest muted">

@@ -5,6 +5,7 @@
 // reading the log is itself audited as `/api/v1/audit GET`.
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { queryAudit, recordAuditEvent } from "@/lib/auditStore";
 
 export const runtime = "nodejs";
@@ -56,8 +57,11 @@ export async function GET(req: NextRequest) {
     offset: parseInt0(sp.get("offset"), 0),
   });
   await recordAuditEvent({ req, route: "/api/v1/audit", method: "GET", status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/audit", async () => {
   return NextResponse.json({
     ...out,
     has_more: out.offset + out.events.length < out.total,
+  });
+
   });
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { runCheck } from "@/lib/alertStore";
 
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
     return err(403, "forbidden", "trade scope required to run alert checks");
   }
   await recordAuditEvent({ req, route: "/api/v1/alerts/check", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/alerts/check", async () => {
 
   let body: any = {};
   const text = await req.text();
@@ -54,4 +56,6 @@ export async function POST(req: NextRequest) {
 
   const result = await runCheck(prices);
   return NextResponse.json(result);
+
+  });
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { getUsageSummary } from "@/lib/quota";
 
@@ -25,6 +26,9 @@ export async function GET(req: NextRequest) {
     return err(403, "forbidden", "read scope required");
   }
   await recordAuditEvent({ req, route: "/api/v1/usage", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/usage", async () => {
   const summary = await getUsageSummary();
   return NextResponse.json(summary);
+
+  });
 }

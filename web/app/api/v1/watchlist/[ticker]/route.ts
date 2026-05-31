@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import {
   removeTicker,
@@ -35,6 +36,7 @@ export async function PATCH(
     return err(403, "forbidden", "trade scope required to edit watchlist");
   }
   await recordAuditEvent({ req, route: "/api/v1/watchlist/[ticker]", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/watchlist/[ticker]", async () => {
 
   const { ticker } = await ctx.params;
   const t = normalizeTicker(ticker);
@@ -53,6 +55,8 @@ export async function PATCH(
   const entry = await updateNote(t, note);
   if (!entry) return err(404, "not_found", `ticker ${t} not on watchlist`);
   return NextResponse.json({ entry });
+
+  });
 }
 
 // DELETE /v1/watchlist/{ticker}
@@ -72,6 +76,7 @@ export async function DELETE(
     return err(403, "forbidden", "trade scope required to edit watchlist");
   }
   await recordAuditEvent({ req, route: "/api/v1/watchlist/[ticker]", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/watchlist/[ticker]", async () => {
   const { ticker } = await ctx.params;
   const t = normalizeTicker(ticker);
   if (!t) return err(400, "bad_ticker", "invalid ticker");
@@ -83,4 +88,6 @@ export async function DELETE(
     body: "no longer tracked",
   });
   return NextResponse.json({ ok: true, ticker: t });
+
+  });
 }

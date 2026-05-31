@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { deleteRun, getRun } from "@/lib/runStore";
 import { recordSafe } from "@/lib/activityStore";
@@ -26,6 +27,7 @@ export async function GET(
     return err(403, "forbidden", "read scope required");
   }
   await recordAuditEvent({ req, route: "/api/v1/runs/[id]", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/runs/[id]", async () => {
 
   const { id } = await ctx.params;
   const run = await getRun(id);
@@ -38,6 +40,8 @@ export async function GET(
     created_at: run.created_at,
     payload: run.payload,
     share_url: `/r/${run.id}`,
+  });
+
   });
 }
 
@@ -56,6 +60,7 @@ export async function DELETE(
     return err(403, "forbidden", "trade scope required to delete runs");
   }
   await recordAuditEvent({ req, route: "/api/v1/runs/[id]", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/runs/[id]", async () => {
   const { id } = await ctx.params;
   const existing = await getRun(id);
   if (!existing) return err(404, "not_found", "run not found");
@@ -68,4 +73,6 @@ export async function DELETE(
     href: "/history",
   });
   return NextResponse.json({ id, deleted: true });
+
+  });
 }

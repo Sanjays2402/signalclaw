@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { getRun, runsToCSV } from "@/lib/runStore";
 
@@ -27,6 +28,7 @@ export async function GET(
     return err(403, "forbidden", "read scope required");
   }
   await recordAuditEvent({ req, route: "/api/v1/runs/[id]/export", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/runs/[id]/export", async () => {
 
   const format = (req.nextUrl.searchParams.get("format") ?? "csv").toLowerCase();
   if (format !== "csv" && format !== "json") {
@@ -54,5 +56,7 @@ export async function GET(
       "content-type": "text/csv; charset=utf-8",
       "content-disposition": `attachment; filename="${base}.csv"`,
     },
+  });
+
   });
 }

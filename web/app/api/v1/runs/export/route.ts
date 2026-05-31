@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { queryRuns, runsToCSV } from "@/lib/runStore";
 
@@ -25,6 +26,7 @@ export async function GET(req: NextRequest) {
     return err(403, "forbidden", "read scope required");
   }
   await recordAuditEvent({ req, route: "/api/v1/runs/export", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/runs/export", async () => {
 
   const sp = req.nextUrl.searchParams;
   const format = (sp.get("format") ?? "csv").toLowerCase();
@@ -64,5 +66,7 @@ export async function GET(req: NextRequest) {
       "content-type": "text/csv; charset=utf-8",
       "content-disposition": `attachment; filename="signalclaw-runs-${stamp}.csv"`,
     },
+  });
+
   });
 }

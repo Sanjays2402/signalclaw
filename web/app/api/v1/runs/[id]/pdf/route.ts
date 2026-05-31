@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { getRun } from "@/lib/runStore";
 import { buildRunPdf, pdfFilename } from "@/lib/runPdf";
@@ -29,6 +30,7 @@ export async function GET(
     return err(403, "forbidden", "read scope required");
   }
   await recordAuditEvent({ req, route: "/api/v1/runs/[id]/pdf", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/runs/[id]/pdf", async () => {
   const { id } = await ctx.params;
   const run = await getRun(id);
   if (!run) return err(404, "not_found", "run not found");
@@ -40,5 +42,7 @@ export async function GET(
       "Content-Disposition": `attachment; filename="${pdfFilename(run)}"`,
       "Cache-Control": "private, max-age=0, must-revalidate",
     },
+  });
+
   });
 }

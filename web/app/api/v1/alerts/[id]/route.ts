@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { deleteAlert } from "@/lib/alertStore";
 
@@ -26,6 +27,7 @@ export async function DELETE(
     return err(403, "forbidden", "trade scope required to delete alerts");
   }
   await recordAuditEvent({ req, route: "/api/v1/alerts/[id]", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/alerts/[id]", async () => {
 
   const { id } = await ctx.params;
   if (!id || typeof id !== "string") {
@@ -34,4 +36,6 @@ export async function DELETE(
   const ok = await deleteAlert(id);
   if (!ok) return err(404, "not_found", "alert not found");
   return NextResponse.json({ ok: true, id });
+
+  });
 }

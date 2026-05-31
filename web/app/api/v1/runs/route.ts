@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { queryRuns, createRun, normalizeTags } from "@/lib/runStore";
 import { classifyRegime } from "@/lib/regimeClassify";
@@ -33,6 +34,7 @@ export async function GET(req: NextRequest) {
     return err(403, "forbidden", "read scope required");
   }
   await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/runs", async () => {
 
   const sp = req.nextUrl.searchParams;
   const q = sp.get("q") ?? "";
@@ -66,6 +68,8 @@ export async function GET(req: NextRequest) {
     offset: appliedOffset,
     has_more: appliedOffset + items.length < total,
   });
+
+  });
 }
 
 // POST /v1/runs
@@ -85,6 +89,7 @@ export async function POST(req: NextRequest) {
     return err(403, "forbidden", "trade scope required to create runs");
   }
   await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/runs", async () => {
 
   let body: any;
   try {
@@ -157,4 +162,6 @@ export async function POST(req: NextRequest) {
     },
     { status: 201 },
   );
+
+  });
 }

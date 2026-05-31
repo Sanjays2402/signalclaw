@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import {
   listWatchlist,
@@ -32,12 +33,15 @@ export async function GET(req: NextRequest) {
     return err(403, "forbidden", "read scope required");
   }
   await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/watchlist", async () => {
   const entries = await listWatchlist();
   return NextResponse.json({
     entries,
     tickers: entries.map((e) => e.ticker),
     total: entries.length,
     limit: MAX_TICKERS,
+  });
+
   });
 }
 
@@ -57,6 +61,7 @@ export async function POST(req: NextRequest) {
     return err(403, "forbidden", "trade scope required to edit watchlist");
   }
   await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 200, key });
+  return enforceRateLimit(req, key, "/api/v1/watchlist", async () => {
 
   let body: any;
   try {
@@ -97,4 +102,6 @@ export async function POST(req: NextRequest) {
     }
     return err(400, "bad_request", e?.message ?? "could not add ticker");
   }
+
+  });
 }
