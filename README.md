@@ -449,6 +449,21 @@ curl -X POST http://localhost:7430/admin/keys/<id>/rotate
 
 # revoke a key when compromised beyond rotation
 curl -X DELETE http://localhost:7430/admin/keys/<id>
+
+# whoami: confirm your key is wired up before any real call (read scope)
+curl http://localhost:7430/api/v1/whoami -H "Authorization: Bearer $SC_KEY"
+# response: { id, label, prefix, scopes, created_at, last_used_at, server_time }
+```
+
+## Try it: interactive API reference
+
+Every v1 endpoint is documented on a single page with copy-paste curl, sample responses, scope badges, and a live "Try it" button that runs the GET endpoints against the key your browser is signed in with. Lands you straight in your terminal after minting a key, no separate tab to a hosted docs site.
+
+Web: <http://localhost:7430/docs>
+
+```bash
+# the same call the page makes when you click Try it on /api/v1/whoami
+curl -H "Authorization: Bearer $SC_KEY" http://localhost:7430/api/v1/whoami
 ```
 
 ## Try it: regime classifier
