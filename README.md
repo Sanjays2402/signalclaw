@@ -1,17 +1,42 @@
 # SignalClaw
 
-A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, and now compare runs side by side.
+A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
 ![landing](docs/screenshots/landing.png)
 
 ## What's new
 
+- **Comments on shared runs** at `/r/<id>`: anyone with a share link can leave a public comment (display name optional, 1000 char body, 3-per-minute per IP rate limit, 500 per run hard cap). Comments persist to `web/.data/comments.json` with atomic writes and SHA-256 hashed IPs (never exposed). The run owner (anyone holding the local API key, or an admin-scoped key when `SIGNALCLAW_ADMIN_KEY` is set) can delete any comment in-place from the share page. Backed by `GET/POST /api/runs/<id>/comments` and `DELETE /api/runs/<id>/comments/<cid>`.
 - **Watchlist in the public API** under `/api/v1/watchlist`: list, add, update note, and remove tracked tickers from the same Bearer-key surface. Read scope can list, trade scope can mutate. Fully documented at `/docs` with copy-paste curl. Capped at 100 tickers per install.
 - **Alerts in the public API** under `/api/v1/alerts`: list, arm, and disarm price or percent alerts with the same Bearer key already used for `/api/v1/runs`. `POST /api/v1/alerts/check` evaluates every armed alert against caller-supplied prices, returns the hits, and writes them to the alert history and activity feed. Read scope can list, trade scope can mutate.
 - **Digest subscriptions** at `/digest`: subscribe any webhook URL (Slack incoming, Discord, n8n, Zapier, custom) to a daily or weekly SignalClaw activity digest. Real outbound HTTP POST signed with HMAC-SHA256 in `x-signalclaw-signature`, one automatic retry on network errors and 5xx, per-subscription delivery log with status, attempt, and byte count. Schedule by pinging `POST /api/digest/cron` (optionally protected by `DIGEST_CRON_TOKEN`) from cron, Vercel scheduled functions, or any pinger. Pause, resume, rotate the secret, and trigger a one-off send from the UI.
 - **Alerts, end to end** at `/alerts`: arm price-above / price-below / percent-change rules with cooldown windows, run `POST /api/alerts/check` to evaluate them against live or supplied prices, and browse the paginated fire history filtered by ticker. Records land in `web/.data/alerts.json` with atomic writes, and every fire posts to the activity feed.
 - **Activity digest** at `/digest`: rolling summary of saved runs, webhook deliveries, batches, and alerts over a selectable window (1 / 3 / 7 / 14 / 30 / 90 days). Renders text + HTML previews of what the email digest will contain. Backed by `GET /api/digest/preview?days=N&format=json|text|html`.
 - **Compare runs** at `/compare`: pick any two saved regime runs and overlay their normalized price series, regime mix, and window return. Backed by `GET /api/runs/compare?a=ID&b=ID`.
+
+### Try it
+
+```bash
+# 1. Boot the web app
+cd web && npm run dev
+
+# 2. Save a run from /demo, copy its id from the URL after "/r/"
+#    (or hit POST /api/runs from the existing curl examples below).
+
+# 3. Post a public comment on the shared run
+curl -sS -X POST http://localhost:7430/api/runs/<RUN_ID>/comments \
+  -H 'content-type: application/json' \
+  -d '{"author":"alice","body":"agree, chop is dominant here"}'
+
+# 4. List comments
+curl -sS http://localhost:7430/api/runs/<RUN_ID>/comments
+
+# 5. Owner-only delete (omit auth in local single-user mode, or pass an admin key)
+curl -sS -X DELETE http://localhost:7430/api/runs/<RUN_ID>/comments/<COMMENT_ID> \
+  -H 'authorization: Bearer <ADMIN_KEY>'
+```
+
+Live UI: http://localhost:7430/r/<RUN_ID>
 
 ### Try it
 

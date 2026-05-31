@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getRun } from "@/lib/runStore";
 import RegimeChart, { REGIME_PALETTE } from "@/components/RegimeChart";
 import CopyLinkButton from "@/components/CopyLinkButton";
+import RunComments from "@/components/RunComments";
 import { Card, Stat, Badge, fmtPct } from "@/components/ui";
 import {
   ShieldCheck,
@@ -219,6 +220,8 @@ export default async function SharePage({ params }: Params) {
           <span className="muted text-[12px]">no bars classified</span>
         )}
       </Card>
+
+      <RunComments runId={run.id} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="panel p-4">
