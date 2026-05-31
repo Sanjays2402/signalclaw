@@ -6,6 +6,22 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Privacy and data control (GDPR Article 17 and 20).** Procurement and SOC2 reviewers both ask the same question: can an operator export everything you store about this workspace, and can the workspace owner irreversibly erase it? The previous account export at `/api/settings/export` was unauthenticated, wrote nothing to the audit log, and bundled only a partial subset of stores. A new `web/lib/privacyStore.ts` is the single source of truth for every `.data/*.json(l)` file we own, tagged `user` or `compliance`. `GET /api/admin/privacy/export` (admin scope, audit logged) streams a single JSON bundle containing every user store plus a copy of the audit log and API key metadata so a customer can verify what we retain about them. `POST /api/admin/privacy/delete` (admin scope, audit logged, requires `{"confirm":"DELETE"}`) erases user-generated state by default and preserves compliance stores (audit log, keys, idempotency, rate limits, delivery logs) so SOC2 evidence is not destroyed by accident; opt-in flags `wipe_compliance` and `wipe_audit` let an operator scorch them too. `GET /api/admin/privacy/delete?wipe_compliance=...&wipe_audit=...` returns a dry-run plan so the UI shows exactly which files will be removed and which will be preserved before anyone clicks the button. The legacy `/api/settings/export` and `/api/settings/delete` routes are re-routed through the same store and now require admin scope when one is configured, closing the unauth export hole. `/settings/privacy` ships a focused page: a one-click signed export, a dry-run impact preview that updates as the wipe checkboxes toggle, and a danger zone that only enables the Erase button after the user types `DELETE`. Covered by `tests/privacyStore.test.mjs`: every known store appears in the export, JSON and JSONL files round-trip, the default erase plan removes user data and preserves audit + keys, the wipe flags promote compliance and audit files into the remove list, on-disk files matching that plan are actually unlinked, and the operation is idempotent on missing files.
+
+  Try it locally: `cd web && pnpm dev` then
+  ```bash
+  # Mint an admin key at http://localhost:3000/settings/keys, then:
+  export SC_KEY=sc_live_xxxxxxxx
+  # Download a full workspace export
+  curl -OJ -H "x-api-key: $SC_KEY" http://localhost:3000/api/admin/privacy/export
+  # Preview what an erase would remove (no data touched)
+  curl -s -H "x-api-key: $SC_KEY" 'http://localhost:3000/api/admin/privacy/delete?wipe_compliance=false&wipe_audit=false'
+  # Actually erase user data (compliance + audit preserved)
+  curl -s -X POST -H "x-api-key: $SC_KEY" -H 'content-type: application/json' \
+    -d '{"confirm":"DELETE"}' http://localhost:3000/api/admin/privacy/delete
+  ```
+  UI: visit http://localhost:3000/settings/privacy.
+
 - **Multi-day audit search and CSV export.** SOC2 and ISO 27001 reviewers expect operators to answer "show me every mutating call from key X over the past 30 days where status was 4xx or 5xx, and hand me the CSV." The existing `/audit` endpoint only tailed a single day with no filters. Two new admin-scoped routes close that gap: `GET /audit/search` accepts `actor_label`, `actor_key_hash`, `method`, `status`, `status_min`, `path_prefix`, `path_contains`, `action`, `from_ts`, `to_ts`, `days_back` (clamped 1..365), `limit`, and `offset`; it walks daily JSONL files newest-first and returns a paginated JSON page. `GET /audit/export.csv` takes the same filters and streams a CSV download (header row + matching events) so a 30-day export of a busy install never has to materialise in memory. The web UI at `/settings/audit` gets an Export CSV button that always reflects the current filter view, mirrored at `/api/audit/export.csv` against the Next.js audit store. Covered by `tests/test_audit_search_export.py`: filtering by `status_min` + `actor_label`, method + path prefix, the CSV header + escaping, admin-scope enforcement on both routes, and the `days_back` clamp.
 
   Try it locally:

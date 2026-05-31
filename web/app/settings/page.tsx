@@ -24,6 +24,7 @@ import {
   ArchiveBox,
   UserPlus,
   ArrowsClockwise,
+  FileLock,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -124,6 +125,12 @@ function Settings() {
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
             <ArrowsClockwise size={14} weight="duotone" /> Idempotency
+          </Link>
+          <Link
+            href="/settings/privacy"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <FileLock size={14} weight="duotone" /> Privacy
           </Link>
           <Link
             href="/usage"
