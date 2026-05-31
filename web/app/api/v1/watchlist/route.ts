@@ -10,6 +10,7 @@ import {
   MAX_TICKERS,
 } from "@/lib/watchlistStore";
 import { recordSafe } from "@/lib/activityStore";
+import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,6 +83,17 @@ export async function POST(req: NextRequest) {
     );
   }
   const note = normalizeNote(body.note);
+
+  if (isDryRun(req, body)) {
+    const effect = {
+      action: "create",
+      resource: "watchlist_entry",
+      id: ticker,
+      preview: { ticker, note },
+    };
+    await recordAuditEvent({ req, route: "/api/v1/watchlist", method: req.method, status: 200, key, reason: "dry_run", details: { would: effect } });
+    return dryRunResponse(effect, { status: 200 });
+  }
 
   try {
     const entry = await addTicker(ticker, note);

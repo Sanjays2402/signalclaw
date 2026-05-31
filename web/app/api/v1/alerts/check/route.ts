@@ -3,6 +3,7 @@ import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { runCheck } from "@/lib/alertStore";
+import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,7 +55,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const result = await runCheck(prices);
+  const dry = isDryRun(req, body);
+  const result = await runCheck(prices, { dryRun: dry });
+  if (dry) {
+    const effect = {
+      action: "evaluate",
+      resource: "alert_check",
+      id: null,
+      preview: { hits: result.hits, checked: result.checked, quotes: result.quotes },
+    };
+    await recordAuditEvent({ req, route: "/api/v1/alerts/check", method: req.method, status: 200, key, reason: "dry_run", details: { hit_count: result.hits.length } });
+    return dryRunResponse(effect, { status: 200 });
+  }
   return NextResponse.json(result);
 
   });

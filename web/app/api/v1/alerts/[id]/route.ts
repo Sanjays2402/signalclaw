@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
-import { deleteAlert } from "@/lib/alertStore";
+import { deleteAlert, listAlerts } from "@/lib/alertStore";
+import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,6 +33,19 @@ export async function DELETE(
   const { id } = await ctx.params;
   if (!id || typeof id !== "string") {
     return err(400, "bad_id", "alert id is required");
+  }
+  if (isDryRun(req)) {
+    const all = await listAlerts();
+    const existing = all.find((a) => a.id === id);
+    if (!existing) return err(404, "not_found", "alert not found");
+    const effect = {
+      action: "delete",
+      resource: "alert",
+      id,
+      preview: { ticker: existing.ticker, condition: existing.condition, value: existing.value },
+    };
+    await recordAuditEvent({ req, route: "/api/v1/alerts/[id]", method: req.method, status: 200, key, reason: "dry_run", details: { would: effect } });
+    return dryRunResponse(effect, { status: 200 });
   }
   const ok = await deleteAlert(id);
   if (!ok) return err(404, "not_found", "alert not found");

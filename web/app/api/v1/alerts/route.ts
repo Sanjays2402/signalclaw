@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
-import { createAlert, listAlerts, MAX_ALERTS } from "@/lib/alertStore";
+import { createAlert, listAlerts, MAX_ALERTS, validateInput } from "@/lib/alertStore";
 import { recordSafe } from "@/lib/activityStore";
+import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +64,19 @@ export async function POST(req: NextRequest) {
   }
   if (!body || typeof body !== "object") {
     return err(400, "bad_body", "request body must be a JSON object");
+  }
+
+  if (isDryRun(req, body)) {
+    const v = validateInput(body);
+    if (!v.ok) return err(400, v.err.code, v.err.message);
+    const effect = {
+      action: "create",
+      resource: "alert",
+      id: null,
+      preview: v.data,
+    };
+    await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 200, key, reason: "dry_run", details: { would: effect } });
+    return dryRunResponse(effect, { status: 200 });
   }
 
   const r = await createAlert(body);

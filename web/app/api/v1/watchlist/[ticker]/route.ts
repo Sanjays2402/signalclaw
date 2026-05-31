@@ -7,8 +7,10 @@ import {
   updateNote,
   normalizeNote,
   normalizeTicker,
+  listWatchlist,
 } from "@/lib/watchlistStore";
 import { recordSafe } from "@/lib/activityStore";
+import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,6 +54,19 @@ export async function PATCH(
     return err(400, "bad_body", "request body must be a JSON object");
   }
   const note = normalizeNote(body.note);
+  if (isDryRun(req, body)) {
+    const all = await listWatchlist();
+    const existing = all.find((e) => e.ticker === t);
+    if (!existing) return err(404, "not_found", `ticker ${t} not on watchlist`);
+    const effect = {
+      action: "update",
+      resource: "watchlist_entry",
+      id: t,
+      preview: { ticker: t, before: { note: existing.note }, after: { note } },
+    };
+    await recordAuditEvent({ req, route: "/api/v1/watchlist/[ticker]", method: req.method, status: 200, key, reason: "dry_run", details: { would: effect } });
+    return dryRunResponse(effect, { status: 200 });
+  }
   const entry = await updateNote(t, note);
   if (!entry) return err(404, "not_found", `ticker ${t} not on watchlist`);
   return NextResponse.json({ entry });
@@ -80,6 +95,19 @@ export async function DELETE(
   const { ticker } = await ctx.params;
   const t = normalizeTicker(ticker);
   if (!t) return err(400, "bad_ticker", "invalid ticker");
+  if (isDryRun(req)) {
+    const all = await listWatchlist();
+    const existing = all.find((e) => e.ticker === t);
+    if (!existing) return err(404, "not_found", `ticker ${t} not on watchlist`);
+    const effect = {
+      action: "delete",
+      resource: "watchlist_entry",
+      id: t,
+      preview: { ticker: t, note: existing.note },
+    };
+    await recordAuditEvent({ req, route: "/api/v1/watchlist/[ticker]", method: req.method, status: 200, key, reason: "dry_run", details: { would: effect } });
+    return dryRunResponse(effect, { status: 200 });
+  }
   const ok = await removeTicker(t);
   if (!ok) return err(404, "not_found", `ticker ${t} not on watchlist`);
   await recordSafe({

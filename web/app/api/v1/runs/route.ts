@@ -6,6 +6,7 @@ import { queryRuns, createRun, normalizeTags } from "@/lib/runStore";
 import { classifyRegime } from "@/lib/regimeClassify";
 import { recordSafe } from "@/lib/activityStore";
 import { dispatchEvents, type PickEvent } from "@/lib/webhookStore";
+import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -117,6 +118,24 @@ export async function POST(req: NextRequest) {
     typeof label === "string" && label.trim().length > 0
       ? label.trim().slice(0, 80)
       : `${payload.ticker} \u00b7 ${lb}d \u00b7 api`;
+
+  if (isDryRun(req, body)) {
+    const effect = {
+      action: "create",
+      resource: "run",
+      id: null,
+      preview: {
+        label: safeLabel,
+        ticker: payload.ticker,
+        lookback_days: lb,
+        bars: payload.dates.length,
+        snapshot: payload.snapshot,
+        tags: normalizeTags(tags),
+      },
+    };
+    await recordAuditEvent({ req, route: "/api/v1/runs", method: req.method, status: 200, key, reason: "dry_run", details: { would: effect } });
+    return dryRunResponse(effect, { status: 200 });
+  }
 
   const run = await createRun({
     label: safeLabel,

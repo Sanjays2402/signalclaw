@@ -4,6 +4,7 @@ import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { deleteRun, getRun } from "@/lib/runStore";
 import { recordSafe } from "@/lib/activityStore";
+import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,6 +65,16 @@ export async function DELETE(
   const { id } = await ctx.params;
   const existing = await getRun(id);
   if (!existing) return err(404, "not_found", "run not found");
+  if (isDryRun(req)) {
+    const effect = {
+      action: "delete",
+      resource: "run",
+      id,
+      preview: { label: existing.label, ticker: existing.ticker },
+    };
+    await recordAuditEvent({ req, route: "/api/v1/runs/[id]", method: req.method, status: 200, key, reason: "dry_run", details: { would: effect } });
+    return dryRunResponse(effect, { status: 200 });
+  }
   const ok = await deleteRun(id);
   if (!ok) return err(500, "delete_failed", "could not delete run");
   await recordSafe({

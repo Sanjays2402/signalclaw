@@ -211,7 +211,7 @@ export type CheckHit = {
   note: string;
 };
 
-export async function runCheck(prices?: Record<string, number>):
+export async function runCheck(prices?: Record<string, number>, opts?: { dryRun?: boolean }):
   Promise<{ hits: CheckHit[]; checked: number; quotes: Record<string, { last: number; prev: number }> }> {
   const store = await readStore();
   const now = new Date();
@@ -271,6 +271,6 @@ export async function runCheck(prices?: Record<string, number>):
     hits.push(event);
     mutated = true;
   }
-  if (mutated) await writeStore(store);
+  if (mutated && !opts?.dryRun) await writeStore(store);
   return { hits, checked: store.alerts.length, quotes };
 }
