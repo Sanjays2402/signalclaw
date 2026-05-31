@@ -1579,8 +1579,10 @@ def create_app() -> FastAPI:
 
     @app.post("/webhooks", response_model=WebhookOut, dependencies=[Depends(require_api_key)])
     def webhooks_add(body: WebhookIn):
-        if not body.url.startswith(("http://", "https://")):
-            raise HTTPException(400, "url must be http(s)")
+        from ..webhooks.destination import validate_destination
+        ok, reason = validate_destination(body.url)
+        if not ok:
+            raise HTTPException(400, reason)
         bad = [e for e in body.events if e and e not in EVENT_KINDS]
         if bad:
             raise HTTPException(400, f"unknown event(s): {bad}")

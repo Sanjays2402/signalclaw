@@ -6,6 +6,16 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **SSRF guard on outbound webhook destinations**. Enterprise security review rejects any product that lets a user register an arbitrary webhook URL and have the server POST to it without validation. SignalClaw now refuses webhook destinations that resolve to loopback (`127.0.0.0/8`, `::1`), link-local (`169.254.0.0/16` including the EC2/GCP metadata IP, `fe80::/10`), RFC1918 private space, multicast, or reserved ranges. The check runs at subscribe time in `POST /webhooks` so bad rows never persist, and again inside `_default_http` on every delivery attempt (including retries and byte-for-byte replays) so a hostname whose A record flips to internal space after subscribe is still blocked. URLs with embedded credentials (`https://user:pass@host/...`) and non-http(s) schemes are rejected. Operators can pin destinations to a fixed set via `SIGNALCLAW_WEBHOOK_HOST_ALLOWLIST=hook.example.com,events.example.com` (suffix match against subdomains, so `a.hook.example.com` matches `hook.example.com`); when set, only listed hosts are allowed. `SIGNALCLAW_WEBHOOK_ALLOW_PRIVATE=1` opts the guard out for dev fixtures and is the only thing the test suite uses to keep the existing `*.test` fakes working. Covered by `tests/test_webhooks_ssrf.py` (loopback, EC2 metadata IP, RFC1918, credentialed URLs, non-http schemes, unresolvable hosts, allowlist allow + deny, delivery-time refusal via `_default_http`, and policy parsing).
+
+  Try it locally: `make api` then
+  ```bash
+  curl -X POST http://localhost:7431/webhooks \
+    -H "x-api-key: $SIGNALCLAW_API_KEY" -H "content-type: application/json" \
+    -d '{"url":"http://169.254.169.254/latest/meta-data/"}'
+  # => 400 {"detail":"refusing webhook to non-public ip 169.254.169.254"}
+  ```
+
 - **Active sessions admin console (visibility + force-revoke)**. SignalClaw now records every authenticated request as a session row keyed by `(api_key, source_ip, user_agent)` and exposes the live list at `GET /admin/sessions`. An operator can see which keys are in use, from which IPs, with which clients, when each session was first seen, when it was last seen, and how many requests it has served. Suspicious row? `DELETE /admin/sessions/{id}` drops just that row. Suspected compromise of one key? `POST /admin/sessions/revoke-key/{key_id}` clears every row tied to it. Suspected platform-wide compromise? `POST /admin/sessions/revoke-all` resets the entire ledger. The session store auto-prunes rows older than `SIGNALCLAW_SESSION_TTL_SECONDS` (default 14 days) so it stays bounded without operator intervention. All four endpoints require the `admin` scope plus MFA and are written to the tamper-evident audit log. Covered by `tests/test_sessions_admin.py` (tracking creates rows, non-admin gets 403, revoke removes one row, revoke-all clears the ledger without invalidating the underlying credential, missing session returns 404).
 
   Try it locally: `make api` then

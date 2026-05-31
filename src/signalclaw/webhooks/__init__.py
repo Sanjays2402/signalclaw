@@ -28,6 +28,13 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+from .destination import (
+    DestinationPolicy,
+    assert_destination_safe,
+    validate_destination,
+    validate_destination_or_raise,
+)
+
 
 EVENT_KINDS = {"entered", "exited", "upgraded", "downgraded", "score_jump"}
 
@@ -318,6 +325,13 @@ def _next_backoff(attempt: int, base: float = 0.2, cap: float = 5.0) -> float:
 
 def _default_http(url: str, body: bytes, headers: Dict[str, str],
                   timeout: int = 5) -> Tuple[int, str]:
+    # SSRF gate: re-validate the destination on every attempt so a
+    # hostname that flips to internal address space after the
+    # subscription was created is still refused, including on replay.
+    try:
+        assert_destination_safe(url)
+    except ValueError as e:
+        return 0, f"destination_blocked: {e}"
     req = urllib.request.Request(url, data=body, method="POST")
     for k, v in headers.items():
         req.add_header(k, v)
