@@ -60,6 +60,7 @@ from .metrics import install_metrics, data_dir_ready
 from ..audit import AuditMiddleware, get_audit_log
 from ..audit.retention import AuditRetentionPruner, retention_config_from_env
 from ..privacy import StoreBundle, collect_user_data, erase_user_data
+from ..privacy.export_formats import build_zip as _build_export_zip, export_filename as _export_filename
 from ..alerts import (Alert, AlertCondition, AlertStore, AlertEventStore,
                        evaluate_alerts)
 from ..api_keys import ApiKeyStore
@@ -2063,16 +2064,38 @@ def create_app() -> FastAPI:
 
     @app.get("/privacy/export",
              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
-    def privacy_export():
-        """Return every user-state record as a single JSON blob (GDPR Article 20).
+    def privacy_export(format: str = "json"):
+        """Return every user-state record (GDPR Article 20).
 
         Requires the ``admin`` scope on the calling API key. Output
         contains watchlist, alerts, portfolio trades, stops, journal,
         brackets, earnings calendar, news events, webhooks, drawdown
         history, scaling plans, FX currencies, and the full persisted
         audit log grouped by UTC day.
+
+        Supported ``format`` values:
+
+        * ``json`` (default): a single JSON document.
+        * ``zip`` / ``csv``: a ZIP bundle containing one CSV per
+          store plus a MANIFEST.txt and (for ``zip``) the raw JSON.
+          ``csv`` produces the same bundle without the JSON blob.
         """
-        return collect_user_data(_store_bundle())
+        fmt = (format or "json").lower().strip()
+        if fmt not in ("json", "zip", "csv"):
+            raise HTTPException(400, "format must be one of: json, zip, csv")
+        bundle = collect_user_data(_store_bundle())
+        if fmt == "json":
+            return bundle
+        from fastapi.responses import Response
+        blob = _build_export_zip(bundle, include_json=(fmt == "zip"))
+        fname = _export_filename(fmt)
+        log.info("privacy.export", format=fmt, bytes=len(blob),
+                 stores=sum(1 for k in bundle if isinstance(bundle.get(k), list)))
+        return Response(
+            content=blob,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
 
     @app.post("/privacy/delete",
               dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])

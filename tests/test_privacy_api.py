@@ -106,3 +106,54 @@ def test_privacy_delete_wipes_user_state(client):
     assert post["portfolio_trades"] == []
     # audit log preserved by default
     assert isinstance(post["audit_log"], dict)
+
+
+def test_privacy_export_zip_bundle(client):
+    import io
+    import zipfile
+
+    client.post("/watchlist", json={"ticker": "NVDA"}, headers=_admin())
+    client.post("/alerts", json={
+        "ticker": "NVDA", "condition": "price_above", "value": 1.0,
+    }, headers=_admin())
+    r = client.get("/privacy/export?format=zip", headers=_admin())
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/zip")
+    cd = r.headers.get("content-disposition", "")
+    assert "attachment" in cd and ".zip" in cd
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    names = set(z.namelist())
+    assert "MANIFEST.txt" in names
+    assert "export.json" in names
+    assert "watchlist.csv" in names
+    assert "alerts.csv" in names
+    # CSV has header + at least one row for NVDA watchlist
+    wl = z.read("watchlist.csv").decode("utf-8")
+    assert "NVDA" in wl
+    alerts_csv = z.read("alerts.csv").decode("utf-8")
+    assert "NVDA" in alerts_csv
+    manifest = z.read("MANIFEST.txt").decode("utf-8")
+    assert "row counts" in manifest
+
+
+def test_privacy_export_csv_omits_json(client):
+    import io
+    import zipfile
+
+    r = client.get("/privacy/export?format=csv", headers=_admin())
+    assert r.status_code == 200
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    names = set(z.namelist())
+    assert "MANIFEST.txt" in names
+    assert "export.json" not in names
+    assert "watchlist.csv" in names
+
+
+def test_privacy_export_rejects_unknown_format(client):
+    r = client.get("/privacy/export?format=xml", headers=_admin())
+    assert r.status_code == 400
+
+
+def test_privacy_export_zip_requires_admin(client):
+    r = client.get("/privacy/export?format=zip", headers=_trader())
+    assert r.status_code == 403

@@ -1367,6 +1367,17 @@ curl -H "x-api-key: $ADMIN_KEY" http://localhost:8000/privacy/export \
   > export-$(date -u +%Y%m%d).json
 ```
 
+For compliance reviewers who want CSVs they can open in a spreadsheet,
+pass `format=zip` (default bundle: one CSV per store plus the raw JSON
+and a `MANIFEST.txt` summarising row counts) or `format=csv` (same
+ZIP without the JSON copy):
+
+```
+curl -H "x-api-key: $ADMIN_KEY" \
+  "http://localhost:8000/privacy/export?format=zip" \
+  -o export-$(date -u +%Y%m%d).zip
+```
+
 `POST /privacy/delete` erases user state in place. To guard against
 accidents the call must include `confirm=DELETE` exactly. Audit log,
 archived daily reports, and cached OHLCV are preserved by default since
