@@ -44,6 +44,10 @@ import {
   decideResidency,
   type ResidencyDecision,
 } from "./residencyStore";
+import {
+  getPolicy as getNetworkPolicy,
+  decideAllowed as decideNetworkAllowed,
+} from "./networkPolicyStore";
 
 function applyRotationHeaders(headers: Headers, ev: RotationEvaluation): void {
   headers.set("x-key-age-days", String(ev.age_days));
@@ -223,6 +227,33 @@ export async function enforceRateLimit(
   const route_class = classifyRoute(route);
   const requestId = req.headers.get("x-request-id") || undefined;
   try {
+    const netPolicy = await getNetworkPolicy();
+    const netDecision = decideNetworkAllowed(req, netPolicy);
+    if (!netDecision.allowed) {
+      const res = NextResponse.json(
+        {
+          error: {
+            code: "network_policy_block",
+            message:
+              netDecision.reason === "no-ip"
+                ? "source IP could not be determined and workspace network policy is enforcing"
+                : `source IP ${netDecision.ip} is not in the workspace network allowlist`,
+          },
+        },
+        { status: 403 },
+      );
+      if (requestId) res.headers.set("x-request-id", requestId);
+      await recordAuditEvent({
+        req,
+        route,
+        method,
+        status: 403,
+        key,
+        reason: `network_policy_block:${netDecision.reason}`,
+      }).catch(() => {});
+      observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+      return res;
+    }
     const ipBlock = await enforceKeyIpAllowlist(req, key, route, method, requestId);
     if (ipBlock) {
       observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
