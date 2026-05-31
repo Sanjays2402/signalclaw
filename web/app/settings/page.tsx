@@ -121,6 +121,12 @@ function Settings() {
             <Globe size={14} weight="duotone" /> Network
           </Link>
           <Link
+            href="/settings/cors"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Globe size={14} weight="duotone" /> CORS
+          </Link>
+          <Link
             href="/settings/retention"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >

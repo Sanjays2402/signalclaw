@@ -6,6 +6,40 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Strict, env-driven CORS allowlist on every `/api/*` response.** The edge middleware already minted request IDs and set the SOC2 header baseline (HSTS, X-Frame-Options, COOP, CORP) on every response, but cross-origin browser access was implicit: no `Access-Control-Allow-Origin`, no preflight handler, so any first-party browser SDK either had to be proxied through the same origin or run in a permissive dev posture. A new `web/lib/corsPolicy.ts` is the single source of truth: it reads `SIGNALCLAW_CORS_ORIGINS` (comma-separated, byte-for-byte exact origins, scheme plus host plus optional port, no suffix or regex matching), refuses anything that does not parse as `http(s)://host[:port]`, and only ever echoes an allowlisted origin back. In production posture (`SIGNALCLAW_ADMIN_KEY` set) with no allowlist the policy denies every browser origin, including loopback, so misconfiguration fails closed. In local single-user mode (no admin key, no allowlist) it admits `http://localhost:*` and `http://127.0.0.1:*` so a fresh install works without extra env. The middleware short-circuits `OPTIONS` preflight with `204`, sets `Vary: Origin` on every `/api/*` response (so a shared cache cannot poison `Access-Control-Allow-Origin`), and emits `Access-Control-Allow-Credentials: true` plus `Access-Control-Expose-Headers` covering `X-Request-Id`, `X-RateLimit-*`, and `Retry-After` so SDKs can read the rate-limit envelope from JavaScript. A new admin-gated `GET /api/admin/cors` route returns the effective policy (production flag, parsed origins, loopback default, allow methods, allow headers, expose headers, max age) and is intentionally read-only because the allowlist is a deploy artifact, not a dashboard knob. `/settings/cors` renders the readout for owners. Covered by `tests/corsPolicy.test.mjs` (17 cases): allowlist parsing dedupes and drops malformed entries, production posture denies even loopback when no allowlist is set, exact-match wins, suffix attacks (`evil.app.example.com`, `app.example.com.attacker.io`) are rejected, `javascript:` and `file://` schemes are rejected, `applyCors` sets credentials and expose headers on simple responses but only sets methods, headers, and max age on preflight, denied responses still set `Vary: Origin`, and the middleware source is pinned to import the shared policy and short-circuit `OPTIONS` so a future refactor cannot silently regress to a wildcard.
+
+  Try it locally: `cd web && npm run dev` then
+  ```bash
+  # Local mode (no admin key): loopback is permitted by default.
+  curl -s -i -X OPTIONS http://localhost:7430/api/v1/whoami \
+    -H 'Origin: http://localhost:3000' \
+    -H 'Access-Control-Request-Method: GET' | head -n 12
+  # HTTP/1.1 204 No Content
+  # access-control-allow-origin: http://localhost:3000
+  # access-control-allow-credentials: true
+  # access-control-allow-methods: GET, POST, PUT, DELETE, OPTIONS
+  # vary: Origin, Access-Control-Request-Method, Access-Control-Request-Headers
+
+  # Production posture with an explicit allowlist.
+  export SIGNALCLAW_ADMIN_KEY=sc_live_bootstrap_admin
+  export SIGNALCLAW_CORS_ORIGINS=https://app.example.com
+
+  # Allowlisted origin: ACAO is echoed.
+  curl -s -i -X OPTIONS http://localhost:7430/api/v1/whoami \
+    -H 'Origin: https://app.example.com' \
+    -H 'Access-Control-Request-Method: GET' | head -n 6
+
+  # Unlisted origin: no ACAO header, browser blocks the request.
+  curl -s -i -X OPTIONS http://localhost:7430/api/v1/whoami \
+    -H 'Origin: https://evil.example.com' \
+    -H 'Access-Control-Request-Method: GET' | head -n 6
+
+  # Admin-gated readout of the effective policy.
+  curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+    http://localhost:7430/api/admin/cors | jq
+  ```
+  Unsetting `SIGNALCLAW_CORS_ORIGINS` in production posture returns to deny-all for browser origins (server-to-server bearer-token traffic is unaffected).
+
 - **Admin gating on the entire `/api/webhooks/*` management surface.** The webhook signing-secret rotation route already enforced an admin posture, but the sibling create/list/get/delete/replay/fire-test routes were wide open: anyone who reached the dashboard could create a subscription pointing at an arbitrary URL, list every configured endpoint and its events, delete subscriptions, replay a prior delivery, or fire a synthesized event from the latest run. That's a procurement red flag (SSRF + abuse + tenant exposure) the moment SignalClaw is reachable from anything other than `localhost`. A new shared gate (`web/lib/adminGuardCore.ts`, adapted into Next via `web/lib/adminGuard.ts`) factors the existing `/api/admin/network-policy` policy out of copy-paste range: in local single-user mode (no `SIGNALCLAW_ADMIN_KEY` env var) the call passes and writes a `local-mode` line to the tamper-evident audit chain, exactly as today; in production posture (`SIGNALCLAW_ADMIN_KEY` set) the request must present an authenticated key with the `admin` scope or it's refused with `403 forbidden` and a `forbidden:admin-required` audit line. The same gate is now wired into `GET/POST /api/webhooks`, `GET/DELETE /api/webhooks/:id`, `POST /api/webhooks/:id/rotate-secret`, `GET /api/webhooks/deliveries`, `POST /api/webhooks/deliveries/:id/replay`, and `POST /api/webhooks/fire/latest`, and each handler audits success too (with `webhook_id`, target URL, delivery counts, or replay metadata in `details`) so a SOC2 reviewer can reconstruct every change to the webhook surface from the existing audit chain. Covered by `tests/webhookAdminGuard.test.mjs`: local mode admits unauthenticated callers, production posture rejects unauthenticated callers, unknown bearers, and real keys without admin scope (proving permission denial), admits the env admin secret, and a source-level check pins that every one of the six webhook management route files imports `requireAdmin` and short-circuits on `denied` so a future refactor can't silently reopen the surface.
 
   Try it locally: `cd web && npm run dev` then

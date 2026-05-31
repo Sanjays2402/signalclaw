@@ -7,6 +7,7 @@
 // serve /api/v1/* (those isolates differ). Metrics are observed inside the
 // per-route rate-limit guard and the health/metrics routes themselves.
 import { NextRequest, NextResponse } from "next/server";
+import { getPolicy, decide, applyCors } from "@/lib/corsPolicy";
 
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -35,8 +36,43 @@ export function middleware(req: NextRequest) {
   const headers = new Headers(req.headers);
   headers.set("x-request-id", requestId);
 
+  // CORS: only for `/api/*` (the dashboard's own pages don't need it and
+  // would only attract reflected XSS noise). Preflight gets short-circuited
+  // with 204; real requests fall through with the right ACAO headers.
+  const pathname = req.nextUrl.pathname;
+  const isApi = pathname.startsWith("/api/");
+  const origin = req.headers.get("origin");
+  let corsDecision: ReturnType<typeof decide> | null = null;
+  if (isApi && origin) {
+    corsDecision = decide(origin, getPolicy());
+  }
+
+  if (isApi && req.method === "OPTIONS") {
+    // Preflight: respond with 204, no body. ACAO headers only if allowed.
+    const pre = new NextResponse(null, { status: 204 });
+    pre.headers.set("x-request-id", requestId);
+    if (corsDecision) applyCors(pre.headers, corsDecision, true);
+    else {
+      // Still set Vary: Origin so caches don't poison.
+      pre.headers.set("Vary", "Origin");
+    }
+    return pre;
+  }
+
   const res = NextResponse.next({ request: { headers } });
   res.headers.set("x-request-id", requestId);
+  if (isApi && corsDecision) {
+    applyCors(res.headers, corsDecision, false);
+  } else if (isApi) {
+    const v = new Set(
+      (res.headers.get("Vary") || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    v.add("Origin");
+    res.headers.set("Vary", Array.from(v).join(", "));
+  }
 
   // SOC2 / pentest baseline security headers, mirrored from the
   // Python API SecurityHeadersMiddleware so a browser hitting either
