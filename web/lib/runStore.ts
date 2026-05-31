@@ -9,6 +9,16 @@ const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "runs.json");
 const MAX_RUNS = 500;
 
+export const MAX_NOTES_LEN = 2000;
+
+export function normalizeNotes(input: unknown): string {
+  if (input === null || input === undefined) return "";
+  if (typeof input !== "string") return "";
+  // Strip control chars except tab/newline, trim, cap length.
+  const cleaned = input.replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "").trim();
+  return cleaned.slice(0, MAX_NOTES_LEN);
+}
+
 export type SavedRun = {
   id: string;
   label: string;
@@ -16,6 +26,7 @@ export type SavedRun = {
   lookback_days: number;
   created_at: string;
   tags: string[];
+  notes?: string;
   payload: {
     ticker: string;
     dates: string[];
@@ -60,6 +71,7 @@ export function normalizeTags(input: unknown): string[] {
 
 function ensureTags(r: SavedRun): SavedRun {
   if (!Array.isArray((r as any).tags)) (r as any).tags = [];
+  if (typeof (r as any).notes !== "string") (r as any).notes = "";
   return r;
 }
 
@@ -144,6 +156,15 @@ export async function setRunTags(id: string, tags: unknown): Promise<SavedRun | 
   r.tags = normalizeTags(tags);
   await writeStore(s);
   return r;
+}
+
+export async function setRunNotes(id: string, notes: unknown): Promise<SavedRun | null> {
+  const s = await readStore();
+  const r = s.runs.find((r) => r.id === id);
+  if (!r) return null;
+  r.notes = normalizeNotes(notes);
+  await writeStore(s);
+  return ensureTags(r);
 }
 
 export type TagCount = { tag: string; count: number };

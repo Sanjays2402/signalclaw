@@ -19,6 +19,7 @@ import {
   Code,
   Tag,
   Plus,
+  NotePencil,
 } from "@phosphor-icons/react/dist/ssr";
 
 type TagCount = { tag: string; count: number };
@@ -33,6 +34,7 @@ type RunListItem = {
   regime: string | null;
   confidence: number | null;
   tags: string[];
+  notes: string;
 };
 
 type ListResp = {
@@ -330,6 +332,8 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
   const [label, setLabel] = useState(run.label);
   const [editingTags, setEditingTags] = useState(false);
   const [tagDraft, setTagDraft] = useState((run.tags ?? []).join(", "));
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState(run.notes ?? "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -383,6 +387,26 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
       });
       if (!r.ok) throw new Error(`${r.status}`);
       setEditingTags(false);
+      onChange();
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveNotes() {
+    const notes = notesDraft.slice(0, 2000);
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch(`/api/runs/${run.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ notes }),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      setEditingNotes(false);
       onChange();
     } catch (e: any) {
       setErr(String(e?.message || e));
@@ -523,6 +547,88 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
               aria-label="Add tags"
             >
               <Plus size={9} weight="bold" /> add tag
+            </button>
+          )}
+        </div>
+        <div className="mt-1.5">
+          {editingNotes ? (
+            <div className="flex flex-col gap-1.5">
+              <textarea
+                value={notesDraft}
+                onChange={(e) => setNotesDraft(e.target.value.slice(0, 2000))}
+                placeholder="Why this run matters. Setup, catalyst, what to watch."
+                aria-label="Edit notes"
+                maxLength={2000}
+                rows={3}
+                className="w-full bg-[var(--bg)] border border-[var(--border-strong)] rounded-sm px-2 py-1.5 text-[12px] leading-relaxed resize-y"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveNotes();
+                  if (e.key === "Escape") {
+                    setEditingNotes(false);
+                    setNotesDraft(run.notes ?? "");
+                  }
+                }}
+              />
+              <div className="flex items-center justify-between gap-2">
+                <span className="muted text-[10px] mono">
+                  {notesDraft.length}/2000 · cmd+enter to save
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={saveNotes}
+                    disabled={busy}
+                    className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono disabled:opacity-40 flex items-center gap-1"
+                    title="Save notes"
+                    aria-label="Save notes"
+                  >
+                    <Check size={11} weight="bold" /> Save
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingNotes(false);
+                      setNotesDraft(run.notes ?? "");
+                    }}
+                    className="p-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5"
+                    title="Cancel"
+                    aria-label="Cancel notes edit"
+                  >
+                    <X size={11} weight="bold" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (run.notes ?? "").trim().length > 0 ? (
+            <button
+              onClick={() => {
+                setNotesDraft(run.notes ?? "");
+                setEditingNotes(true);
+              }}
+              className="w-full text-left flex items-start gap-1.5 group"
+              title="Edit notes"
+              aria-label="Edit notes"
+            >
+              <NotePencil
+                size={11}
+                weight="duotone"
+                className="shrink-0 mt-0.5 muted group-hover:opacity-100"
+                style={{ color: "var(--accent)" }}
+              />
+              <span className="text-[11px] muted line-clamp-2 group-hover:text-white whitespace-pre-wrap break-words">
+                {run.notes}
+              </span>
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                setNotesDraft("");
+                setEditingNotes(true);
+              }}
+              className="text-[10px] mono px-1.5 py-0.5 rounded-sm border border-dashed border-[var(--border-strong)] hover:bg-white/5 muted flex items-center gap-1"
+              title="Add notes"
+              aria-label="Add notes"
+            >
+              <NotePencil size={9} weight="bold" /> add notes
             </button>
           )}
         </div>

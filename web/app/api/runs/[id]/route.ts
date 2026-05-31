@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRun, deleteRun, renameRun, setRunTags } from "@/lib/runStore";
+import { getRun, deleteRun, renameRun, setRunTags, setRunNotes, MAX_NOTES_LEN } from "@/lib/runStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,9 +33,10 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 
   const hasLabel = Object.prototype.hasOwnProperty.call(body ?? {}, "label");
   const hasTags = Object.prototype.hasOwnProperty.call(body ?? {}, "tags");
+  const hasNotes = Object.prototype.hasOwnProperty.call(body ?? {}, "notes");
 
-  if (!hasLabel && !hasTags) {
-    return err(400, "no_fields", "provide label or tags");
+  if (!hasLabel && !hasTags && !hasNotes) {
+    return err(400, "no_fields", "provide label, tags, or notes");
   }
 
   let current = await getRun(id);
@@ -57,5 +58,21 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (!current) return err(404, "not_found", "run not found");
   }
 
-  return NextResponse.json({ id: current.id, label: current.label, tags: current.tags });
+  if (hasNotes) {
+    if (body.notes !== null && typeof body.notes !== "string") {
+      return err(400, "bad_notes", "notes must be a string or null");
+    }
+    if (typeof body.notes === "string" && body.notes.length > MAX_NOTES_LEN * 2) {
+      return err(400, "notes_too_long", `notes exceeds ${MAX_NOTES_LEN} chars`);
+    }
+    current = await setRunNotes(id, body.notes ?? "");
+    if (!current) return err(404, "not_found", "run not found");
+  }
+
+  return NextResponse.json({
+    id: current.id,
+    label: current.label,
+    tags: current.tags,
+    notes: current.notes ?? "",
+  });
 }

@@ -182,6 +182,27 @@ curl -s http://localhost:7430/api/runs/tags | jq .
 # Filter the history feed by tag
 curl -s 'http://localhost:7430/api/runs?tag=swing' | jq '.runs | length'
 ```
+
+## Try run notes
+
+Every saved run can carry a free form note up to 2000 chars. Use it to capture why this run matters: the setup, the catalyst, what to watch next. Notes show up on the history list and on the public share page at `/r/<id>` so a copied link arrives with context already attached.
+
+1. Open <http://localhost:7430/history>, click `add notes` on any saved run, type your reasoning, hit cmd+enter.
+2. The note renders as a two line preview on the list and as a full block on the public share page.
+
+Or from the command line:
+
+```bash
+# Attach notes to a saved run
+curl -s -X PATCH http://localhost:7430/api/runs/<id> \
+  -H 'content-type: application/json' \
+  -d '{"notes":"rate cut day, clean breakout above 440, watch for retest"}'
+
+# Clear notes
+curl -s -X PATCH http://localhost:7430/api/runs/<id> \
+  -H 'content-type: application/json' \
+  -d '{"notes":""}'
+```
 - Next.js dashboard (pages per resource) with lightweight-charts and recharts
 
 ## Try the webhooks

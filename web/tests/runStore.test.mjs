@@ -282,3 +282,54 @@ test("setRunTags returns null for missing id", async () => {
   const res = await store.setRunTags("doesnotexs", ["x"]);
   assert.equal(res, null);
 });
+
+test("setRunNotes saves, trims, strips control chars, caps length", async () => {
+  await store._resetForTests();
+  const r = await store.createRun({
+    label: "notes test",
+    ticker: "SPY",
+    lookback_days: 30,
+    payload: samplePayload,
+  });
+
+  // Save with surrounding whitespace and a bell control char in the middle.
+  const updated = await store.setRunNotes(r.id, "  rate cut day\u0007clean breakout  ");
+  assert.ok(updated);
+  assert.equal(updated.notes, "rate cut dayclean breakout");
+
+  // Empty string clears.
+  const cleared = await store.setRunNotes(r.id, "");
+  assert.equal(cleared.notes, "");
+
+  // Long input is capped to MAX_NOTES_LEN.
+  const huge = "x".repeat(store.MAX_NOTES_LEN + 500);
+  const capped = await store.setRunNotes(r.id, huge);
+  assert.equal(capped.notes.length, store.MAX_NOTES_LEN);
+
+  // Newlines are preserved.
+  const multi = await store.setRunNotes(r.id, "line1\nline2\tindented");
+  assert.equal(multi.notes, "line1\nline2\tindented");
+
+  // Non-string input becomes empty string.
+  const nonstr = await store.setRunNotes(r.id, 123);
+  assert.equal(nonstr.notes, "");
+});
+
+test("setRunNotes returns null for missing id", async () => {
+  await store._resetForTests();
+  const res = await store.setRunNotes("doesnotexs", "hi");
+  assert.equal(res, null);
+});
+
+test("notes persist across reads and survive ensureTags backfill", async () => {
+  await store._resetForTests();
+  const r = await store.createRun({
+    label: "persist",
+    ticker: "QQQ",
+    lookback_days: 30,
+    payload: samplePayload,
+  });
+  await store.setRunNotes(r.id, "watching breakout above 440");
+  const fetched = await store.getRun(r.id);
+  assert.equal(fetched.notes, "watching breakout above 440");
+});

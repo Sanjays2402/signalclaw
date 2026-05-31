@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   LightningSlash,
   ArrowRight,
+  NotePencil,
 } from "@phosphor-icons/react/dist/ssr";
 
 export const runtime = "nodejs";
@@ -98,6 +99,26 @@ export default async function SharePage({ params }: Params) {
         </div>
       </section>
 
+      {run.notes && run.notes.trim().length > 0 && (
+        <section className="panel p-4 md:p-5">
+          <div className="flex items-start gap-3">
+            <NotePencil
+              size={18}
+              weight="duotone"
+              style={{ color: "var(--accent)" }}
+              className="shrink-0 mt-0.5"
+            />
+            <div className="min-w-0">
+              <div className="muted text-[10px] uppercase tracking-widest mono mb-1.5">
+                Notes
+              </div>
+              <p className="text-[13px] whitespace-pre-wrap break-words leading-relaxed">
+                {run.notes}
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card title="Regime">
           {snap ? (

@@ -33,13 +33,14 @@ export async function GET(req: NextRequest) {
     offset,
   });
 
-  const items = runs.map(({ id, label, ticker, lookback_days, created_at, tags, payload }) => ({
+  const items = runs.map(({ id, label, ticker, lookback_days, created_at, tags, notes, payload }) => ({
     id,
     label,
     ticker,
     lookback_days,
     created_at,
     tags: tags ?? [],
+    notes: notes ?? "",
     bars: payload.dates.length,
     regime: payload.snapshot?.label ?? null,
     confidence: payload.snapshot?.confidence ?? null,
