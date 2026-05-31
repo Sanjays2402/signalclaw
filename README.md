@@ -6,6 +6,22 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Per-API-key absolute expiry on the Next admin store**. SOC2 CC6.1 requires that credentials cannot live forever; rotation alone is not enough if there is no enforced cutoff. The Next-side admin key store at `web/lib/keyStore.ts` now persists an optional `expires_at` (ISO 8601 UTC) on every key, accepts it on creation (`POST /api/admin/keys`), and exposes a dedicated `GET`/`PUT /api/admin/keys/{id}/expiry` to set or clear the cutoff on an existing key. The check lives inside `authenticate()` itself, so every Next route, admin or public, sees the same answer: an expired key returns `null` exactly like a revoked key, with no last_used_at bump. Past timestamps are rejected at the boundary (`400 invalid_expiry`), unparseable strings fail the same way, revoked keys cannot be edited (`409 revoked`), and every successful change is written to the audit log with a `expiry:<before>-><after>` reason so a reviewer can prove when the window was set. The exported `publicView` now includes both `expires_at` and a derived `expired` boolean so the dashboard at `/settings/keys` can render the badge without a second round-trip. Covered by `web/tests/keyExpiry.test.mjs` (default is no expiry, future timestamps accepted, past and junk timestamps rejected on both create and update, an authenticated key flips to unauthenticated once its expiry passes, `setKeyExpiry(null)` clears the cutoff, and revoked keys are refused).
+
+  Try it locally: `pnpm --filter signalclaw-web dev` then
+  ```bash
+  # Create a key that auto-expires in 1 hour
+  EXP=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
+  curl -X POST http://localhost:7430/api/admin/keys \
+    -H 'content-type: application/json' \
+    -d "{\"label\":\"ci-runner\",\"scopes\":[\"read\"],\"expires_at\":\"$EXP\"}"
+
+  # Later, extend or clear the cutoff
+  curl -X PUT http://localhost:7430/api/admin/keys/$KEY_ID/expiry \
+    -H 'content-type: application/json' \
+    -d '{"expires_at": null}'
+  ```
+
 - **Configurable data retention with on-demand sweep**. SOC2 CC6 and GDPR Article 5(1)(e) both want a documented data-minimisation control: how long does the platform keep operational data, who set the window, and when was it last enforced? SignalClaw now ships a per-deployment retention policy stored at `<data_dir>/retention.json` covering three classes of operational data: saved runs (`runs_days`), the authenticated audit log including the rotated `audit.jsonl.1` half (`audit_days`), and outbound webhook delivery attempts (`webhook_deliveries_days`). Zero on any field means retain forever, matching prior behaviour for fresh installs. The sweep is idempotent and is invoked three ways: explicitly via `POST /api/admin/retention/run`, opportunistically inside `listRuns`, `queryAudit`, and `listDeliveries` on a one-hour throttle so a long-running deployment converges without a cron, and implicitly after any `PUT /api/admin/retention` policy change. The policy update endpoint writes a before/after diff to the audit log with `reason: retention.policy.updated` so a security reviewer can prove the window did not silently shrink. Unparseable audit lines are retained (we never silently destroy data we cannot read). Subscriptions themselves are never deleted; only their delivery attempt history is pruned. The dashboard at `/settings/retention` exposes the policy with input validation (whole-number days, 0 to 3650), a confirm-gated Run sweep now button, and a Last sweep card that shows the timestamp and per-class purge counts from the most recent run. Covered by `tests/retention.test.mjs` (default is retain-forever, non-numeric clamps to zero, zero policy is a no-op, runs older than the window are removed and edge cases at the cutoff are kept, audit lines purge across both current and rotated files, webhook deliveries are pruned by `delivered_at`, last-sweep state persists, and `maybeAutoSweep` is throttled and short-circuits on a zero policy).
 
   Try it locally: `pnpm --filter signalclaw-web dev` then visit http://localhost:7430/settings/retention and

@@ -25,6 +25,11 @@ export type StoredKey = {
   // Stored as canonical CIDR strings (e.g. "10.0.0.0/8" or "203.0.113.5/32").
   // Enforced in v1Guard before the rate limiter consumes a token.
   ip_allowlist?: string[];
+  // Optional absolute expiry (ISO 8601 UTC). After this instant, the key
+  // stops authenticating and is reported as expired. Null/undefined means
+  // "never expires" (legacy behaviour). Enforced inside authenticate() so
+  // every caller, v1 or admin, sees the same cutoff.
+  expires_at?: string | null;
 };
 
 type Store = { keys: StoredKey[] };
@@ -72,7 +77,46 @@ export function publicView(k: StoredKey) {
     last_used_at: k.last_used_at,
     revoked: k.revoked,
     ip_allowlist: Array.isArray(k.ip_allowlist) ? [...k.ip_allowlist] : [],
+    expires_at: k.expires_at ?? null,
+    expired: isExpired(k),
   };
+}
+
+// Pure predicate so route handlers and the UI agree on the cutoff.
+export function isExpired(k: { expires_at?: string | null }, now: Date = new Date()): boolean {
+  if (!k.expires_at) return false;
+  const t = Date.parse(k.expires_at);
+  if (!Number.isFinite(t)) return false;
+  return t <= now.getTime();
+}
+
+// Set or clear a key's absolute expiry. Pass null to clear. Rejects values
+// that are not parseable ISO 8601, or that are already in the past (set the
+// expiry to a near-future timestamp and let it lapse, or revoke instead).
+// Cannot expire a revoked key (no point) or the env admin id.
+export async function setKeyExpiry(
+  id: string,
+  iso: string | null,
+): Promise<StoredKey | null> {
+  if (id === "env-admin") return null;
+  const store = await readStore();
+  const k = store.keys.find((x) => x.id === id);
+  if (!k) return null;
+  if (k.revoked) return null;
+  if (iso === null || iso === "") {
+    k.expires_at = null;
+  } else {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) {
+      throw new Error("invalid_expiry: not a valid ISO 8601 timestamp");
+    }
+    if (t <= Date.now()) {
+      throw new Error("invalid_expiry: expires_at must be in the future");
+    }
+    k.expires_at = new Date(t).toISOString();
+  }
+  await writeStore(store);
+  return k;
 }
 
 // Replaces the IP allowlist on a key. Caller is responsible for validating
@@ -103,7 +147,7 @@ export async function listKeys(): Promise<StoredKey[]> {
   return [...s.keys].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 }
 
-export type CreateInput = { label: string; scopes: Scope[] };
+export type CreateInput = { label: string; scopes: Scope[]; expires_at?: string | null };
 
 export async function createKey(
   input: CreateInput,
@@ -116,6 +160,18 @@ export async function createKey(
   );
   if (scopes.length === 0) scopes.push("read");
 
+  let expires_at: string | null = null;
+  if (input.expires_at) {
+    const t = Date.parse(input.expires_at);
+    if (!Number.isFinite(t)) {
+      throw new Error("invalid_expiry: not a valid ISO 8601 timestamp");
+    }
+    if (t <= Date.now()) {
+      throw new Error("invalid_expiry: expires_at must be in the future");
+    }
+    expires_at = new Date(t).toISOString();
+  }
+
   const secret = genSecret();
   const key: StoredKey = {
     id: genId(),
@@ -126,6 +182,7 @@ export async function createKey(
     created_at: new Date().toISOString(),
     last_used_at: null,
     revoked: false,
+    expires_at,
   };
   const store = await readStore();
   store.keys.push(key);
@@ -188,6 +245,7 @@ export async function authenticate(
   const store = await readStore();
   const k = store.keys.find((x) => x.hash === h && !x.revoked);
   if (!k) return null;
+  if (isExpired(k)) return null;
   k.last_used_at = new Date().toISOString();
   await writeStore(store).catch(() => {});
   return k;

@@ -61,7 +61,21 @@ export async function POST(req: NextRequest) {
   if (label.length > 80) {
     return err(400, "label_too_long", "label exceeds 80 chars");
   }
-  const { key, secret } = await createKey({ label, scopes });
+  const expires_at =
+    typeof body?.expires_at === "string" && body.expires_at.trim().length > 0
+      ? body.expires_at
+      : null;
+  let created;
+  try {
+    created = await createKey({ label, scopes, expires_at });
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    if (msg.startsWith("invalid_expiry")) {
+      return err(400, "invalid_expiry", msg.replace(/^invalid_expiry:\s*/, ""));
+    }
+    throw e;
+  }
+  const { key, secret } = created;
   await recordSafe({
     kind: "key.created",
     title: `API key created · ${key.label}`,
