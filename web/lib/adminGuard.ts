@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { decideAdmin } from "@/lib/adminGuardCore";
 import { recordAuditEvent } from "@/lib/auditStore";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import type { StoredKey } from "@/lib/keyStore";
 
 export type AdminGuardResult = {
@@ -51,5 +52,9 @@ export async function requireAdmin(
     key: d.key,
     reason: d.reason,
   });
+  if (method !== "GET") {
+    const mfaDenied = await enforceAdminMfa(req, d.key, route, method);
+    if (mfaDenied) return { denied: mfaDenied, key: d.key };
+  }
   return { denied: null, key: d.key };
 }

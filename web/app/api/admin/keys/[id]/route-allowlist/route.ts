@@ -7,6 +7,7 @@
 // Every call is recorded in the audit log (mirroring sibling admin
 // endpoints) so SOC2 reviewers can replay who narrowed which key when.
 import { NextRequest, NextResponse } from "next/server";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import {
   extractKey,
   authenticate,
@@ -49,6 +50,10 @@ async function requireAdmin(
     return err(403, "forbidden", "admin scope required");
   }
   await recordAuditEvent({ req, route, method, status: 200, key: k });
+  if ((method) !== "GET") {
+    const __mfaDenied = await enforceAdminMfa(req, k, route, (method));
+    if (__mfaDenied) return __mfaDenied;
+  }
   return null;
 }
 

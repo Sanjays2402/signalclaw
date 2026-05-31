@@ -152,6 +152,12 @@ function Settings() {
             <FileLock size={14} weight="duotone" /> Privacy
           </Link>
           <Link
+            href="/settings/admin-mfa"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <ShieldWarning size={14} weight="duotone" /> Admin MFA
+          </Link>
+          <Link
             href="/settings/auth-lockout"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >

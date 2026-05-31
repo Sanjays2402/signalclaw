@@ -2,7 +2,40 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-API-key usage analytics
+## New: TOTP MFA on every mutating admin route
+
+Procurement reality: a single static admin bearer token is the artifact most security reviews refuse to accept. Once the token leaks, every workspace setting from key minting to data residency to the kill switch is one curl call away. SignalClaw now requires a second factor on every mutating admin endpoint. Each admin API key can enroll a TOTP secret (RFC 6238, SHA1, 30 second step, 6 digits, Google Authenticator / 1Password / Authy compatible). Once enrolled, every `POST`, `PUT`, `PATCH`, and `DELETE` under `/api/admin/*` requires a fresh `X-MFA-Code` header. Wrong, missing, malformed, or replayed codes are rejected with `401 mfa_required` or `401 mfa_invalid` and written to the tamper-evident audit chain. Read-only `GET` calls stay un-gated so the dashboard does not nag on every render, and local single-user mode (no `SIGNALCLAW_ADMIN_KEY`) bypasses MFA so a fresh install can bootstrap.
+
+Replay defence is real, not aspirational: the last accepted time step per key is persisted, so the same 6-digit code cannot be reused within its 30 second window. A ±1 step tolerance keeps codes that tick over mid-request from failing. Every mutating admin route on the codebase is covered, including the shared `lib/adminGuard.ts` helper used by the webhooks management surface, so future admin routes inherit the gate.
+
+Try it locally: `cd web && npm run dev`, then open http://localhost:7430/settings/admin-mfa, scan the QR, and verify a code. Or drive it from the API:
+
+```bash
+# Status: is this key enrolled?
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/mfa | jq .
+
+# Begin enrollment. Returns the base32 secret and otpauth:// URI exactly once.
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/mfa | jq .
+
+# Verify the 6-digit code your authenticator app shows to complete enrollment.
+curl -s -X PUT -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"code":"123456"}' \
+  http://localhost:7430/api/admin/mfa | jq .
+
+# From now on, every mutating admin call needs X-MFA-Code:
+curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H "X-MFA-Code: 654321" \
+  -H 'content-type: application/json' \
+  -d '{"reason":"incident-1234"}' \
+  http://localhost:7430/api/admin/freeze
+```
+
+Correctness is enforced at the store: `web/tests/totpStore.test.mjs` verifies the RFC 6238 reference vector, proves replay rejection, exercises the ±1 step tolerance, and confirms enrollment / disable round-trip.
+
+## Previously: per-API-key usage analytics
 
 Procurement reality: enterprise buyers will not approve a credential model they cannot meter. Every security review asks for per-key request volume, success rate, and route mix so abuse, runaway integrations, and seat-level billing disputes can be triaged from a single screen. SignalClaw now writes a counter on every authenticated `/api/v1/*` request, bucketed by `(key_id, UTC day, route_class, status_class)`, with a 35 day ring buffer. The counter is dropped at the single terminal `observeRequest` point inside `web/lib/v1Guard.ts`, so every existing v1 route is covered with no per-route edits. Owners can read the analytics via a new admin endpoint and a dedicated admin console page, including a dense daily series suitable for sparklines and a per-route breakdown.
 

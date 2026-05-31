@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractKey, authenticate } from "@/lib/keyStore";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import {
   getResidencyPolicy,
@@ -47,6 +48,10 @@ async function requireAdmin(req: NextRequest, method: string) {
       ok: false as const,
       res: err(403, "forbidden", "admin scope required"),
     };
+  }
+  if (method !== "GET") {
+    const mfaDenied = await enforceAdminMfa(req, k, ROUTE, method);
+    if (mfaDenied) return { ok: false as const, res: mfaDenied };
   }
   return { ok: true as const, key: k };
 }

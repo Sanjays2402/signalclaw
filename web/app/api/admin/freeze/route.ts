@@ -12,6 +12,7 @@
 // workspace must still be able to unfreeze itself; otherwise the kill
 // switch becomes a permanent self-lockout.
 import { NextRequest, NextResponse } from "next/server";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import { authenticate, extractKey } from "@/lib/keyStore";
 import { recordAuditEvent } from "@/lib/auditStore";
 import {
@@ -48,6 +49,10 @@ async function requireAdmin(
       reason: "forbidden:admin-required",
     });
     return { denied: err(403, "forbidden", "admin scope required"), key: k };
+  }
+  if ((method) !== "GET") {
+    const __mfaDenied = await enforceAdminMfa(req, k, route, (method));
+    if (__mfaDenied) return { denied: __mfaDenied, key: k };
   }
   return { denied: null, key: k };
 }

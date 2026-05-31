@@ -6,6 +6,7 @@ import {
   type InviteScope,
 } from "@/lib/inviteStore";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import { recordSafe } from "@/lib/activityStore";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { getSeatUsage } from "@/lib/seats";
@@ -28,6 +29,10 @@ async function requireAdmin(req: NextRequest, route: string, method: string) {
     return { ok: false as const, response: err(403, "forbidden", "admin scope required") };
   }
   await recordAuditEvent({ req, route, method, status: 200, key: k });
+  if (method !== "GET") {
+    const mfaDenied = await enforceAdminMfa(req, k, route, method);
+    if (mfaDenied) return { ok: false as const, response: mfaDenied };
+  }
   return { ok: true as const, key: k };
 }
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import { authenticate, extractKey } from "@/lib/keyStore";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { collectExport, exportFilename } from "@/lib/privacyStore";
@@ -29,6 +30,10 @@ async function requireAdmin(
     return err(403, "forbidden", "admin scope required");
   }
   await recordAuditEvent({ req, route: ROUTE, method, status: 200, key: k, reason: "privacy.export" });
+  if ((method) !== "GET") {
+    const __mfaDenied = await enforceAdminMfa(req, k, "/api/admin/privacy/export", (method));
+    if (__mfaDenied) return __mfaDenied;
+  }
   return null;
 }
 

@@ -9,6 +9,7 @@
 // Every successful change writes a before/after diff to the audit log.
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { getPolicy, setPolicy, publicPolicy, type EgressPolicy } from "@/lib/egressPolicy";
 
@@ -40,6 +41,10 @@ async function requireAdmin(
       reason: "forbidden:admin-required",
     });
     return { denied: err(403, "forbidden", "admin scope required"), actor: null };
+  }
+  if (method !== "GET") {
+    const mfaDenied = await enforceAdminMfa(req, k, ROUTE, method);
+    if (mfaDenied) return { denied: mfaDenied, actor: k.id };
   }
   return { denied: null, actor: k.id };
 }

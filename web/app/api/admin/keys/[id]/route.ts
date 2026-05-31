@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import {
   revokeKey,
   extractKey,
@@ -24,6 +25,10 @@ async function requireAdmin(req: NextRequest, route: string): Promise<NextRespon
     return err(403, "forbidden", "admin scope required");
   }
   await recordAuditEvent({ req, route, method: "DELETE", status: 200, key: k });
+  if (((req).method) !== "GET") {
+    const __mfaDenied = await enforceAdminMfa(req, k, route, ((req).method));
+    if (__mfaDenied) return __mfaDenied;
+  }
   return null;
 }
 

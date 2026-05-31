@@ -10,6 +10,7 @@
 // every other workspace setting. Every mutation lands in the tamper-evident
 // audit chain with a before/after diff (config) or the unlocked IP.
 import { NextRequest, NextResponse } from "next/server";
+import { enforceAdminMfa } from "@/lib/adminMfaGuard";
 import { authenticate, extractKey } from "@/lib/keyStore";
 import { recordAuditEvent } from "@/lib/auditStore";
 import {
@@ -45,6 +46,10 @@ async function requireAdmin(
       reason: "forbidden:admin-required",
     });
     return { denied: err(403, "forbidden", "admin scope required"), key: k };
+  }
+  if ((method) !== "GET") {
+    const __mfaDenied = await enforceAdminMfa(req, k, route, (method));
+    if (__mfaDenied) return { denied: __mfaDenied, key: k };
   }
   return { denied: null, key: k };
 }
