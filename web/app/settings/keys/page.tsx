@@ -15,6 +15,7 @@ import {
   Terminal,
   ArrowsClockwise,
   Gauge,
+  ChartLineUp,
 } from "@phosphor-icons/react/dist/ssr";
 
 type StoredKey = {
@@ -71,6 +72,70 @@ export default function ApiKeysPage() {
   const [rateErr, setRateErr] = useState<string | null>(null);
   const [savingRate, setSavingRate] = useState(false);
   const [rateInfo, setRateInfo] = useState<Record<string, { limit_per_minute: number; default_per_minute: number; window_seconds: number; is_override: boolean }>>({});
+  const [editingQuota, setEditingQuota] = useState<string | null>(null);
+  const [quotaDraft, setQuotaDraft] = useState("");
+  const [quotaErr, setQuotaErr] = useState<string | null>(null);
+  const [savingQuota, setSavingQuota] = useState(false);
+  type QuotaInfo = {
+    key_id: string;
+    monthly_quota: number;
+    default_monthly_quota: number;
+    is_override: boolean;
+    unlimited: boolean;
+    period: string;
+    used: number;
+    remaining: number | null;
+    resets_at: string;
+  };
+  const [quotaInfo, setQuotaInfo] = useState<Record<string, QuotaInfo>>({});
+
+  async function openQuotaEditor(id: string) {
+    setQuotaErr(null);
+    setEditingQuota(id);
+    try {
+      const info = await api<QuotaInfo>(`/admin/keys/${id}/monthly-quota`);
+      setQuotaInfo((m) => ({ ...m, [id]: info }));
+      setQuotaDraft(String(info.monthly_quota));
+    } catch (err) {
+      setQuotaErr(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function onSaveQuota(id: string) {
+    setQuotaErr(null);
+    setSavingQuota(true);
+    try {
+      const n = Number.parseInt(quotaDraft, 10);
+      if (!Number.isFinite(n) || n < 0) throw new Error("Enter 0 (unlimited) or a positive integer");
+      const info = await api<QuotaInfo>(`/admin/keys/${id}/monthly-quota`, {
+        method: "PUT",
+        body: JSON.stringify({ quota: n }),
+      });
+      setQuotaInfo((m) => ({ ...m, [id]: info }));
+      setEditingQuota(null);
+    } catch (err) {
+      setQuotaErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingQuota(false);
+    }
+  }
+
+  async function onResetQuota(id: string) {
+    setQuotaErr(null);
+    setSavingQuota(true);
+    try {
+      const info = await api<QuotaInfo>(`/admin/keys/${id}/monthly-quota`, {
+        method: "PUT",
+        body: JSON.stringify({ quota: null }),
+      });
+      setQuotaInfo((m) => ({ ...m, [id]: info }));
+      setQuotaDraft(String(info.monthly_quota));
+    } catch (err) {
+      setQuotaErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingQuota(false);
+    }
+  }
 
   async function openRateEditor(id: string) {
     setRateErr(null);
@@ -499,6 +564,21 @@ export default function ApiKeysPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => {
+                      if (editingQuota === k.id) {
+                        setEditingQuota(null);
+                      } else {
+                        openQuotaEditor(k.id);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm"
+                    title="Hard cap on requests this key may make per calendar month"
+                  >
+                    <ChartLineUp size={12} weight="duotone" />
+                    Monthly quota
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onRotate(k.id, k.label || k.prefix)}
                     disabled={rotating === k.id || revoking === k.id}
                     className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm disabled:opacity-50"
@@ -575,6 +655,74 @@ export default function ApiKeysPage() {
                         className="px-3 py-1 text-[11px] font-medium bg-[var(--amber)] text-black rounded-sm disabled:opacity-50"
                       >
                         {savingRate ? "Saving..." : "Save limit"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {editingQuota === k.id && (
+                  <div className="mt-2 ml-0 sm:ml-2 p-3 border border-[var(--border)] rounded-sm bg-black/20 space-y-2">
+                    <label className="block text-[10px] uppercase tracking-widest muted">
+                      Requests per calendar month (0 = unlimited)
+                    </label>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100000000}
+                        value={quotaDraft}
+                        onChange={(e) => setQuotaDraft(e.target.value)}
+                        className="w-40 bg-black/30 border border-[var(--border)] rounded-sm px-2 py-1.5 text-[12px] mono focus:outline-none focus:border-[var(--amber)]"
+                      />
+                      <span className="text-[11px] muted">
+                        default {quotaInfo[k.id]?.default_monthly_quota ?? 0}
+                        {quotaInfo[k.id]?.is_override ? " (override active)" : ""}
+                      </span>
+                    </div>
+                    {quotaInfo[k.id] && (
+                      <div className="text-[11px] muted mono">
+                        Period {quotaInfo[k.id].period} · used {quotaInfo[k.id].used}
+                        {quotaInfo[k.id].unlimited
+                          ? " · unlimited"
+                          : ` of ${quotaInfo[k.id].monthly_quota} · remaining ${quotaInfo[k.id].remaining ?? 0}`}
+                        {" · resets "}{new Date(quotaInfo[k.id].resets_at).toUTCString()}
+                      </div>
+                    )}
+                    <p className="text-[11px] muted">
+                      Once a key passes its monthly cap, every v1 request
+                      returns 429 with code monthly_quota_exceeded until the
+                      first of the next UTC month. Standard X-Quota-Limit,
+                      X-Quota-Used, X-Quota-Remaining, X-Quota-Reset headers
+                      ride on every response.
+                    </p>
+                    {quotaErr && (
+                      <div className="flex items-start gap-2 p-2 border border-red-500/40 bg-red-500/10 rounded-sm text-[12px]">
+                        <WarningCircle size={14} weight="duotone" className="text-red-400 shrink-0 mt-0.5" />
+                        <span>{quotaErr}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onResetQuota(k.id)}
+                        disabled={savingQuota}
+                        className="px-3 py-1 text-[11px] muted hover:text-white"
+                      >
+                        Reset to default
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingQuota(null)}
+                        className="px-3 py-1 text-[11px] muted hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingQuota}
+                        onClick={() => onSaveQuota(k.id)}
+                        className="px-3 py-1 text-[11px] font-medium bg-[var(--amber)] text-black rounded-sm disabled:opacity-50"
+                      >
+                        {savingQuota ? "Saving..." : "Save quota"}
                       </button>
                     </div>
                   </div>

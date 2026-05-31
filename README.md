@@ -6,6 +6,22 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Per-API-key monthly request quota.** Enterprise contracts are written against a calendar-month allowance, not a per-minute burst. The per-minute rate limit was already in place, but a steady client could quietly burn through a contract's monthly cap without anyone noticing until the invoice. A new `web/lib/monthlyQuotaStore.ts` is the single source of truth for per-key monthly request budgets (0 = unlimited, configurable per key, defaultable via `SIGNALCLAW_MONTHLY_QUOTA`). It runs inside `web/lib/v1Guard.ts` ahead of the per-minute limiter, so every `/api/v1/*` endpoint now ships standard `X-Quota-Limit`, `X-Quota-Used`, `X-Quota-Remaining`, `X-Quota-Period`, and `X-Quota-Reset` headers on every response. Once a key passes its cap the guard returns `429 { error: { code: "monthly_quota_exceeded", limit, used, period, reset_at } }`, writes a structured audit line so SOC2 reviewers can see exactly who hit the ceiling and when, and keeps blocking until the first of the next UTC month rolls the counter. Operators manage the cap with `GET/PUT /api/admin/keys/:id/monthly-quota` and from the `/settings/keys` console, which surfaces current period usage, remaining requests, and reset time inline next to the rate limit editor. Covered by `tests/monthlyQuota.test.mjs`: unlimited-by-default behaviour, override caps that 429 once exhausted, calendar-month roll-over reset, per-key isolation across tenants, header canonicalisation for both limited and unlimited keys, validation rejection of negatives and absurd values, and a concurrent-reserve stress check that proves the file-backed counter does not lose writes under load.
+
+  Try it locally: `cd web && npm run dev` then
+  ```bash
+  # Mint a key in the UI at http://localhost:7430/settings/keys, then:
+  export SC_KEY=sc_live_xxxxxxxx
+  # Cap this key at 1000 requests / month
+  curl -s -X PUT -H "x-api-key: $SC_KEY" -H 'content-type: application/json' \
+    -d '{"quota":1000}' http://localhost:7430/api/admin/keys/<KEY_ID>/monthly-quota | jq
+  # Read current usage + cap
+  curl -s -H "x-api-key: $SC_KEY" http://localhost:7430/api/admin/keys/<KEY_ID>/monthly-quota | jq
+  # Every v1 response now carries quota headers
+  curl -s -D - -H "x-api-key: $SC_KEY" http://localhost:7430/api/v1/runs | grep -i '^x-quota'
+  ```
+  UI: visit http://localhost:7430/settings/keys and click **Monthly quota** on any key.
+
 - **Machine-readable OpenAPI 3.1 spec for the v1 surface.** Enterprise procurement and security review both ask the same first question: "hand me the API spec." A new `web/lib/openapiSpec.ts` is the single source of truth for every public `/api/v1/*` operation, served unauthenticated at `GET /api/v1/openapi.json` with public caching headers and CORS so Swagger UI, Postman, Stoplight, and `openapi-generator` can pull it without credentials. The spec declares both auth schemes (`Authorization: Bearer` and `x-api-key`), per-operation scopes (`read` / `trade` / `admin`), documents the `401`, `403`, and `429` error envelopes including the `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `Retry-After` headers, and references reusable component schemas for runs, watchlist, alerts, audit events, and the structured error envelope. `/docs` now surfaces a download button plus a raw-view link so an operator can hand it to a customer in one click. Covered by `tests/openapiSpec.test.mjs`: structural OpenAPI 3.1 conformance, every declared path resolves to a real `route.ts` on disk (drift guard), every operation declares 200/401/403/429 with the rate-limit headers, operationIds are unique, every `$ref` resolves to a declared component schema, and the `servers` block honours the caller origin.
 
   Try it locally: `cd web && npm run dev` then

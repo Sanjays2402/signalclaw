@@ -32,6 +32,7 @@ import {
   type ParsedCidr,
 } from "./ipMatch";
 import { decideKeyIpAllowed } from "./keyIpPolicy";
+import { reserve as reserveQuota, applyQuotaHeaders } from "./monthlyQuotaStore";
 
 // Returns null when the request passes the per-key IP allowlist (including
 // the trivial "no allowlist configured" case), or a 403 NextResponse when
@@ -88,6 +89,37 @@ export async function enforceRateLimit(
       observeRequest({ method, status: 403, route_class, durationMs: Date.now() - t0 });
       return ipBlock;
     }
+    // Monthly per-key quota check runs BEFORE the per-minute rate limit
+    // so a tenant that exhausts their contract allowance is told why,
+    // not just "slow down".
+    const quota = await reserveQuota(key);
+    if (!quota.allowed) {
+      const res = NextResponse.json(
+        {
+          error: {
+            code: "monthly_quota_exceeded",
+            message: `monthly quota exceeded: ${quota.limit} requests in ${quota.period}. resets at ${quota.reset_at}`,
+            limit: quota.limit,
+            used: quota.used,
+            period: quota.period,
+            reset_at: quota.reset_at,
+          },
+        },
+        { status: 429 },
+      );
+      applyQuotaHeaders(res.headers, quota);
+      if (requestId) res.headers.set("x-request-id", requestId);
+      await recordAuditEvent({
+        req,
+        route,
+        method,
+        status: 429,
+        key,
+        reason: "monthly_quota_exceeded",
+      }).catch(() => {});
+      observeRequest({ method, status: 429, route_class, durationMs: Date.now() - t0 });
+      return res;
+    }
     const decision = await consume(key);
     if (!decision.allowed) {
       const res = NextResponse.json(
@@ -102,6 +134,7 @@ export async function enforceRateLimit(
         { status: 429 },
       );
       applyRateHeaders(res.headers, decision);
+      applyQuotaHeaders(res.headers, quota);
       if (requestId) res.headers.set("x-request-id", requestId);
       await recordAuditEvent({
         req,
@@ -116,6 +149,7 @@ export async function enforceRateLimit(
     }
     const res = await handler();
     applyRateHeaders(res.headers, decision);
+    applyQuotaHeaders(res.headers, quota);
     if (requestId && !res.headers.get("x-request-id")) {
       res.headers.set("x-request-id", requestId);
     }
