@@ -205,6 +205,26 @@ curl -s -X PATCH http://localhost:7430/api/runs/<id> \
 ```
 - Next.js dashboard (pages per resource) with lightweight-charts and recharts
 
+## Try the PDF report
+
+Every saved run gets a one-page PDF report with the regime label, confidence, vol, drawdown, trend slope, a close-price sparkline, and the regime distribution. No browser print dialog, no headless Chrome, just a clean download.
+
+1. Open <http://localhost:7430/history>, hit the **PDF** button on any row.
+2. Or open a public share page like <http://localhost:7430/r/SOME_ID> and click **Download PDF**.
+
+From the command line, either the public route (matches share-page visibility):
+
+```bash
+curl -L -o report.pdf http://localhost:7430/api/runs/<id>/pdf
+```
+
+Or the authed v1 route, for pipelines that already use a minted API key:
+
+```bash
+curl -L -H "Authorization: Bearer $SC_API_KEY" \
+  -o report.pdf http://localhost:7430/api/v1/runs/<id>/pdf
+```
+
 ## Try the webhooks
 
 Real outbound HTTP delivery for pick events with HMAC signing, retries, and a delivery log. Visit `http://localhost:7430/webhooks`, paste an https URL, choose the events you want, optionally set an HMAC secret. Hit "Fire latest" to send a synthesized `entered` event from your most recent saved run. Inspect attempts in the delivery log card, filter by `all` / `ok` / `failed`, and **Replay** any failed attempt to re-deliver the exact same payload (same events, fresh HMAC timestamp and signature).

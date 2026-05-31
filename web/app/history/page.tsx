@@ -661,6 +661,13 @@ function Row({ run, onChange }: { run: RunListItem; onChange: () => void }) {
         >
           <DownloadSimple size={11} weight="bold" /> CSV
         </a>
+        <a
+          href={`/api/runs/${run.id}/pdf`}
+          className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1"
+          title="Download PDF report"
+        >
+          <DownloadSimple size={11} weight="bold" /> PDF
+        </a>
         {!editing && (
           <button
             onClick={() => setEditing(true)}

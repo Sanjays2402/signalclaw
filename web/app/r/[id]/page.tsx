@@ -89,6 +89,14 @@ export default async function SharePage({ params }: Params) {
           </div>
           <div className="flex gap-2 shrink-0 flex-wrap">
             <CopyLinkButton path={`/r/${run.id}`} />
+            <a
+              href={`/api/runs/${run.id}/pdf`}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5 focus:outline-none focus:ring-1 focus:ring-[var(--amber)]"
+              aria-label="Download PDF report for this run"
+              data-testid="download-pdf"
+            >
+              Download PDF
+            </a>
             <Link
               href="/demo"
               className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
