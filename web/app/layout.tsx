@@ -85,6 +85,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <NavLink href="/portfolio">Portfolio</NavLink>
           <NavLink href="/watchlist">Watch</NavLink>
           <NavLink href="/alerts">Alerts</NavLink>
+          <NavLink href="/watches">Watches</NavLink>
           <NavLink href="/brackets">Brackets</NavLink>
           <NavLink href="/journal">Journal</NavLink>
           <NavLink href="/backtest">Backtest</NavLink>

@@ -16,6 +16,7 @@ const NAV: CmdItem[] = [
   { id: "nav-portfolio", label: "Portfolio", group: "Navigate", run: (r) => r.push("/portfolio") },
   { id: "nav-watchlist", label: "Watchlist", group: "Navigate", run: (r) => r.push("/watchlist") },
   { id: "nav-alerts", label: "Alerts", group: "Navigate", run: (r) => r.push("/alerts") },
+  { id: "nav-watches", label: "Watches", hint: "Scheduled regime runs", group: "Navigate", run: (r) => r.push("/watches") },
   { id: "nav-brackets", label: "Brackets", group: "Navigate", run: (r) => r.push("/brackets") },
   { id: "nav-journal", label: "Journal", group: "Navigate", run: (r) => r.push("/journal") },
   { id: "nav-backtest", label: "Backtest", group: "Navigate", run: (r) => r.push("/backtest") },

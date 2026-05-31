@@ -6,7 +6,28 @@ A local-first time-series signal terminal that classifies market regime (bull / 
 
 ## What's new
 
+- **Scheduled watches** at `/watches`: pick a ticker, lookback, and cadence (hourly through weekly). Each tick classifies the regime, saves a tagged run to history, and raises an activity event on regime change. Wire any cron (Vercel scheduled function, GitHub Actions, your own box) to `POST /api/watches/run`; protect it with `WATCH_CRON_TOKEN` when set. Watches persist to `web/.data/watches.json` with atomic writes, capped at 50, deduped on (ticker, lookback, cadence). Auto-saved runs land under the `watch` tag in `/history`.
 - **Pin runs** to your home rail. Click the pin on any saved run or share page (`/r/<id>`) to keep it one click away. The `/history` page gets a Pinned-only filter and a horizontal Pinned rail at the top, so your starred work shows up the moment you land. Pinned state is exposed on `/api/runs` and `/api/v1/runs` via `?pinned=1`. Toggle by `PATCH /api/runs/<id>` with `{"pinned": true|false}`.
+
+### Try watches
+
+```bash
+# UI
+open http://localhost:7430/watches
+
+# Create a daily SPY watch
+curl -sS -X POST http://localhost:7430/api/watches \
+  -H 'content-type: application/json' \
+  -d '{"ticker":"SPY","lookback_days":180,"cadence_hours":24,"label":"SPY daily"}'
+
+# Tick the scheduler (cron entrypoint)
+curl -sS -X POST http://localhost:7430/api/watches/run \
+  -H "x-cron-token: $WATCH_CRON_TOKEN"
+
+# Peek how many are due without running
+curl -sS http://localhost:7430/api/watches/run \
+  -H "x-cron-token: $WATCH_CRON_TOKEN"
+```
 
 ### Try pinning
 
