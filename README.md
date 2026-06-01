@@ -30,6 +30,35 @@ curl -sS -X POST -H "x-api-key: $SIGNALCLAW_API_KEY" \
 # On-call engineer self-checks their elevation:
 curl -sS -H 'x-api-key: member-key-xyz' \
   'http://localhost:7431/break-glass/me' | jq
+## Also new: break-glass workspace IP allowlist bypass (time-boxed, audited)
+
+Procurement reality: enterprise IT will refuse to deploy a SaaS that gates the admin console behind an IP allowlist with no documented recovery path. When the on-call admin is on the road and needs to revoke a leaked API key, they need a way through that the buyer's security team is willing to sign off on: time-boxed, audited, single-purpose, revocable in one click. SignalClaw already shipped a workspace IP allowlist (`/settings/network`). This release ships the corresponding break-glass override so the allowlist can stay tight without trapping admins out of their own workspace during an incident.
+
+- `POST /admin/breakglass` issues a grant. Mandatory `reason` (10..500 chars stored verbatim in the audit log), `ttl_seconds` between 60 and 3600 (default 1800). Admin scope plus admin MFA gated. Issuing a new grant supersedes the previous one and audits the supersede.
+- `GET /admin/breakglass` returns the active grant plus the last 50 supersede/revoke events, with `seconds_remaining`, `uses`, and `last_used_at` per row.
+- `DELETE /admin/breakglass` revokes the active grant immediately. Returns 404 with `no_active` when nothing is active.
+- v1Guard.ts checks for an active grant only when the network policy would otherwise block the source IP. If found, the request is allowed, an audit line of reason `network_policy_break_glass_bypass` is written (with grant id, expiry, granted_by, and the blocked IP), and the use counter is incremented. Admin MFA, per-key IP allowlists, per-key route allowlists, scope checks, rate limits, quotas, freeze, residency, and rotation all remain enforced. Break-glass bypasses one thing: the workspace IP allowlist.
+- Hard ceilings: TTL caps at 60 minutes, reason floor at 10 chars, history bounded at 50 rows on disk (the full long-term trail lives in the tamper-evident audit chain at `data/audit.jsonl`).
+- Settings page at `/settings/breakglass` shows the live countdown, who granted it, why, how many times it has been used, the supersede chain, and a single revoke button. Polls every five seconds. Loading, error, and empty states wired; responsive at 375 and 1440.
+- `tests/breakGlass.test.mjs` pins the contract: empty reason rejected, short reason rejected, TTL bounds enforced, supersede audits the prior grant, revoke clears the active row, and the security guarantee that an expired grant is never returned by `getActive` (so `recordUse` cannot extend it).
+
+### Try it: break-glass emergency access
+
+```bash
+cd web && npm install && npm run dev  # Next.js on :7430
+# then open http://localhost:7430/settings/breakglass
+
+# Or drive the admin API directly:
+curl -sS -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"reason":"on-call from offsite, revoking leaked key sk_live_xxx","ttl_seconds":1800}' \
+  http://localhost:7430/admin/breakglass | jq
+
+# Check status
+curl -sS -H "x-api-key: $SIGNALCLAW_API_KEY" http://localhost:7430/admin/breakglass | jq
+
+# Revoke immediately
+curl -sS -X DELETE -H "x-api-key: $SIGNALCLAW_API_KEY" http://localhost:7430/admin/breakglass | jq
 ```
 
 ## Previously: dormant API-key watchlist (admin queue for credential review)
@@ -56,7 +85,7 @@ curl -sS -H "x-api-key: $SIGNALCLAW_API_KEY" \
   'http://localhost:7431/admin/keys/dormant?within_days=30' | jq
 ```
 
-## Previously: public Trust Center with versioned subprocessor registry
+## Earlier: public Trust Center with versioned subprocessor registry
 
 Procurement reality: GDPR Art. 28 and almost every enterprise DPA require the data controller to publish a current list of all third-party processors and to give at least 30 days' notice before adding or replacing one. A security reviewer who can't find that list refuses to sign. SignalClaw now ships a first-class, versioned, audit-logged subprocessor registry behind a public Trust Center page so reviewers can self-serve.
 

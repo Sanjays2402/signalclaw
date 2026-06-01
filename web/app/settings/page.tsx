@@ -21,6 +21,7 @@ import {
   CheckCircle,
   Key,
   Globe,
+  Lifebuoy,
   ArchiveBox,
   Scales,
   UserPlus,
@@ -128,6 +129,12 @@ function Settings() {
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
             <Globe size={14} weight="duotone" /> Network
+          </Link>
+          <Link
+            href="/settings/breakglass"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Lifebuoy size={14} weight="duotone" /> Break glass
           </Link>
           <Link
             href="/settings/webhook-allowlist"

@@ -56,6 +56,10 @@ import {
   getPolicy as getNetworkPolicy,
   decideAllowed as decideNetworkAllowed,
 } from "./networkPolicyStore";
+import {
+  getActive as getBreakGlassActive,
+  recordUse as recordBreakGlassUse,
+} from "./breakGlassStore";
 import { getFreezeState } from "./freezeStore";
 
 function applyRotationHeaders(headers: Headers, ev: RotationEvaluation): void {
@@ -286,29 +290,55 @@ export async function enforceRateLimit(
     const netPolicy = await getNetworkPolicy();
     const netDecision = decideNetworkAllowed(req, netPolicy);
     if (!netDecision.allowed) {
-      const res = NextResponse.json(
-        {
-          error: {
-            code: "network_policy_block",
-            message:
-              netDecision.reason === "no-ip"
-                ? "source IP could not be determined and workspace network policy is enforcing"
-                : `source IP ${netDecision.ip} is not in the workspace network allowlist`,
+      // Break-glass bypass: a time-boxed, admin-issued, fully audited
+      // override that only bypasses the workspace IP allowlist (it
+      // never bypasses admin MFA, per-key IP allowlists, per-key route
+      // allowlists, rate limits, or quotas). When active, we record a
+      // chained audit line so reviewers can see every request the
+      // bypass carried, then continue down the normal guard chain.
+      const bg = await getBreakGlassActive().catch(() => null);
+      if (bg) {
+        await recordBreakGlassUse().catch(() => {});
+        await recordAuditEvent({
+          req,
+          route,
+          method,
+          status: 200,
+          key,
+          reason: "network_policy_break_glass_bypass",
+          details: {
+            grant_id: bg.id,
+            expires_at: bg.expires_at,
+            granted_by: bg.granted_by,
+            blocked_ip: netDecision.ip ?? null,
+            block_reason: netDecision.reason,
           },
-        },
-        { status: 403 },
-      );
-      if (requestId) res.headers.set("x-request-id", requestId);
-      await recordAuditEvent({
-        req,
-        route,
-        method,
-        status: 403,
-        key,
-        reason: `network_policy_block:${netDecision.reason}`,
-      }).catch(() => {});
-      obs({ method, status: 403, route_class, durationMs: Date.now() - t0 });
-      return res;
+        }).catch(() => {});
+      } else {
+        const res = NextResponse.json(
+          {
+            error: {
+              code: "network_policy_block",
+              message:
+                netDecision.reason === "no-ip"
+                  ? "source IP could not be determined and workspace network policy is enforcing"
+                  : `source IP ${netDecision.ip} is not in the workspace network allowlist`,
+            },
+          },
+          { status: 403 },
+        );
+        if (requestId) res.headers.set("x-request-id", requestId);
+        await recordAuditEvent({
+          req,
+          route,
+          method,
+          status: 403,
+          key,
+          reason: `network_policy_block:${netDecision.reason}`,
+        }).catch(() => {});
+        obs({ method, status: 403, route_class, durationMs: Date.now() - t0 });
+        return res;
+      }
     }
     const ipBlock = await enforceKeyIpAllowlist(req, key, route, method, requestId);
     if (ipBlock) {
