@@ -2,7 +2,37 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-tenant outbound webhook host allowlist
+## New: public Trust Center with versioned subprocessor registry
+
+Procurement reality: GDPR Art. 28 and almost every enterprise DPA require the data controller to publish a current list of all third-party processors and to give at least 30 days' notice before adding or replacing one. A security reviewer who can't find that list refuses to sign. SignalClaw now ships a first-class, versioned, audit-logged subprocessor registry behind a public Trust Center page so reviewers can self-serve.
+
+- `GET /trust/subprocessors` returns the current registry as `{version, updated_at, entries[]}`. Intentionally unauthenticated so a prospect or DPA reviewer can fetch it without a login.
+- `GET /trust/subprocessors/history` returns the append-only change log (newest first) with full before/after snapshots and an actor hash, so customers can verify the 30-day notice window themselves.
+- `POST /admin/subprocessors`, `PUT /admin/subprocessors/{id}`, `DELETE /admin/subprocessors/{id}` are the admin CRUD. All three require the `admin` scope and the MFA-for-admin gate, validate the payload (ISO-3166 alpha-2 country, http(s) URL, 1..128 char name, 1..512 char purpose, <=32 data categories, <=256 entries), bump a monotonic `version`, and write a row to both the registry's own JSONL change log and the global hash-chained audit log.
+- `/trust/subprocessors` (Next.js) renders the public page: per-vendor card with country, purpose, data categories, vendor link, and the current version/last-change timestamp. No auth required, responsive at 375 and 1440.
+- `/settings/subprocessors` is the admin surface: add / edit / remove entries, with loading + error + empty states and inline validation that mirrors the API rules. Linked from `/settings`.
+- `tests/test_subprocessors_registry.py` pins the contract: public read works without an API key, an admin add surfaces on the public endpoint and in history, a member-scoped key is rejected by the scope middleware, invalid country / URL produce a structured 4xx, and DELETE bumps the version and appends a remove row.
+
+### Try it
+
+```bash
+make dev  # FastAPI on http://localhost:7431
+cd web && pnpm dev  # public Trust Center at http://localhost:7430/trust/subprocessors
+
+# Public, unauthenticated read (the procurement-reviewer flow).
+curl -sS http://localhost:7431/trust/subprocessors | jq
+
+# Admin adds a vendor. Audited, version bumps, history records the diff.
+curl -sS -X POST -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"name":"Acme Email Delivery","purpose":"Transactional email for password resets and alerts.","country":"US","url":"https://acme.example.com/security","data_categories":["email","name"]}' \
+  http://localhost:7431/admin/subprocessors | jq
+
+# Public change-log surfaces the add with full before/after.
+curl -sS http://localhost:7431/trust/subprocessors/history | jq
+```
+
+## Previously: per-tenant outbound webhook host allowlist
 
 Procurement reality: SOC2 CC6.6 and enterprise security questionnaires require that a tenant gates which external hosts the platform may call on its behalf. SignalClaw already shipped a global SSRF guard plus a deployment-wide `SIGNALCLAW_WEBHOOK_HOST_ALLOWLIST` env knob, but a SaaS buyer expects to manage their own allowlist without an operator round trip and without affecting another tenant. This release adds a per-tenant store keyed by `owner_key_id` (the same identity the rest of the webhooks subsystem uses) and enforces it at every choke point: subscribe (`POST /webhooks`), edit (`PATCH /webhooks/{id}`), every delivery attempt in `deliver_events`, and every replay. Composes additively with the global SSRF gate so a destination still has to pass both.
 

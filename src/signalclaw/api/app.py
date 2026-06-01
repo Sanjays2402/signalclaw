@@ -77,6 +77,26 @@ from ..quotas import get_quota_store
 from ..quotas.middleware import QuotaMiddleware
 from ..audit.retention import AuditRetentionPruner, retention_config_from_env
 from ..legal_hold import get_legal_hold_store
+from ..subprocessors import (
+    get_store as get_subprocessor_store,
+    reset_store as _reset_subprocessor_store,  # noqa: F401  (test hook re-export)
+    MAX_NAME as _SP_MAX_NAME,
+    MAX_PURPOSE as _SP_MAX_PURPOSE,
+    MAX_URL as _SP_MAX_URL,
+)
+
+
+class SubprocessorIn(BaseModel):
+    """Body for POST /admin/subprocessors and PUT updates.
+
+    Defined at module scope so pydantic resolves the ForwardRef when
+    FastAPI builds the TypeAdapter.
+    """
+    name: Optional[str] = PydField(default=None, max_length=_SP_MAX_NAME)
+    purpose: Optional[str] = PydField(default=None, max_length=_SP_MAX_PURPOSE)
+    country: Optional[str] = PydField(default=None, min_length=2, max_length=2)
+    url: Optional[str] = PydField(default=None, max_length=_SP_MAX_URL)
+    data_categories: Optional[list[str]] = PydField(default=None)
 
 
 class LegalHoldIn(BaseModel):
@@ -191,6 +211,11 @@ def create_app() -> FastAPI:
     # for eDiscovery and regulator-ordered evidence preservation.
     legal_hold_store = get_legal_hold_store(settings.data_dir / "legal_hold")
     app.state.legal_hold_store = legal_hold_store
+    # Subprocessor registry powers the public Trust Center page and
+    # the admin CRUD under /admin/subprocessors. Versioned and audit
+    # logged so customers can verify the 30-day DPA notice window.
+    subprocessor_store = get_subprocessor_store(settings.data_dir / "subprocessors.json")
+    app.state.subprocessor_store = subprocessor_store
     # Background retention pruner: enforces a maximum age on JSONL
     # files under <data_dir>/audit/ so the log volume cannot grow
     # without bound. Reads SIGNALCLAW_AUDIT_RETENTION_DAYS (default 90)
@@ -3614,6 +3639,120 @@ def create_app() -> FastAPI:
             extra={"key_hash": key_hash.strip().lower()},
         ))
         return {"ok": True, "key_hash": key_hash.strip().lower()}
+
+    # ------------------------------------------------------------------
+    # Trust Center: public subprocessor registry + admin CRUD
+    # ------------------------------------------------------------------
+    # The public reads (/trust/subprocessors and history) are
+    # intentionally unauthenticated so prospects and DPA reviewers can
+    # fetch them without a login. Mutations require admin scope + MFA
+    # and every change is recorded both in the registry's own change
+    # log and in the global audit chain.
+    @app.get("/trust/subprocessors")
+    def trust_subprocessors_public():
+        snap = subprocessor_store.snapshot()
+        return snap.to_public()
+
+    @app.get("/trust/subprocessors/history")
+    def trust_subprocessors_history(limit: int = 100):
+        return {"changes": subprocessor_store.history(limit=limit)}
+
+    @app.get(
+        "/admin/subprocessors",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_subprocessors_list():
+        snap = subprocessor_store.snapshot()
+        return snap.to_public()
+
+    @app.post(
+        "/admin/subprocessors",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_subprocessors_add(
+        request: Request,
+        body: SubprocessorIn = Body(...),
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        if not body.name or not body.purpose or not body.country or not body.url:
+            raise HTTPException(400, "name, purpose, country, and url are required")
+        try:
+            entry = subprocessor_store.add(
+                name=body.name, purpose=body.purpose, country=body.country,
+                url=body.url, data_categories=body.data_categories or [],
+                actor=actor,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="POST", path="/admin/subprocessors", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="subprocessor.add",
+            extra={"id": entry.id, "name": entry.name, "country": entry.country},
+        ))
+        return entry.to_public()
+
+    @app.put(
+        "/admin/subprocessors/{entry_id}",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_subprocessors_update(
+        entry_id: str,
+        request: Request,
+        body: SubprocessorIn = Body(...),
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        try:
+            entry = subprocessor_store.update(
+                entry_id,
+                name=body.name, purpose=body.purpose, country=body.country,
+                url=body.url, data_categories=body.data_categories,
+                actor=actor,
+            )
+        except KeyError:
+            raise HTTPException(404, f"subprocessor {entry_id!r} not found")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="PUT", path=f"/admin/subprocessors/{entry_id}", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="subprocessor.update",
+            extra={"id": entry.id},
+        ))
+        return entry.to_public()
+
+    @app.delete(
+        "/admin/subprocessors/{entry_id}",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_subprocessors_remove(
+        entry_id: str,
+        request: Request,
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        try:
+            removed = subprocessor_store.remove(entry_id, actor=actor)
+        except KeyError:
+            raise HTTPException(404, f"subprocessor {entry_id!r} not found")
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="DELETE", path=f"/admin/subprocessors/{entry_id}", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="subprocessor.remove",
+            extra={"id": removed.id, "name": removed.name},
+        ))
+        return {"ok": True, "id": removed.id}
 
     @app.get("/privacy/export",
              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
