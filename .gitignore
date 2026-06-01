@@ -28,3 +28,6 @@ data/session_revocations.json
 data/sessions.json
 data/webhook_deliveries.json
 data/sso/
+
+data/subprocessors.json
+data/webhook_host_allowlist.json
