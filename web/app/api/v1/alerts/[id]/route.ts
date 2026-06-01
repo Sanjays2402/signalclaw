@@ -38,7 +38,7 @@ export async function DELETE(
     return err(400, "bad_id", "alert id is required");
   }
   if (isDryRun(req)) {
-    const all = await listAlerts();
+    const all = await listAlerts(key.id);
     const existing = all.find((a) => a.id === id);
     if (!existing) return err(404, "not_found", "alert not found");
     const effect = {
@@ -50,7 +50,7 @@ export async function DELETE(
     await recordAuditEvent({ req, route: "/api/v1/alerts/[id]", method: req.method, status: 200, key, reason: "dry_run", details: { would: effect } });
     return dryRunResponse(effect, { status: 200 });
   }
-  const ok = await deleteAlert(id);
+  const ok = await deleteAlert(id, key.id);
   if (!ok) return err(404, "not_found", "alert not found");
   return NextResponse.json({ ok: true, id });
 

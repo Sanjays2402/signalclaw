@@ -1,6 +1,12 @@
 // File-backed alert store. Persists user-armed price/percent alerts and the
-// history of fires under web/.data/alerts.json. Single-user terminal model,
-// same pattern as watchlistStore and runStore.
+// history of fires under web/.data/alerts.json.
+//
+// Multi-tenancy: alerts and history live under per-owner buckets keyed by an
+// opaque ownerId (typically a StoredKey.id from keyStore). Callers without
+// an authenticated key (the legacy cookie-session /api/alerts surface) land
+// in the OPERATOR bucket. Legacy single-tenant payloads (top-level
+// { alerts, history }) are migrated on first read into the OPERATOR bucket
+// so installs upgrade in place without losing data.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -11,6 +17,7 @@ const DATA_FILE = path.join(DATA_DIR, "alerts.json");
 export const MAX_ALERTS = 200;
 export const MAX_HISTORY = 1000;
 export const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,15}$/;
+export const OPERATOR_OWNER_ID = "__operator__";
 
 export const CONDITIONS = [
   "price_above",
@@ -42,7 +49,8 @@ export type AlertEvent = {
   note: string;
 };
 
-type Store = { alerts: Alert[]; history: AlertEvent[] };
+type TenantBucket = { alerts: Alert[]; history: AlertEvent[] };
+type Store = { tenants: Record<string, TenantBucket> };
 
 function isCondition(x: unknown): x is Condition {
   return typeof x === "string" && (CONDITIONS as readonly string[]).includes(x);
@@ -60,6 +68,17 @@ export function normalizeNote(raw: unknown): string {
   return raw.trim().slice(0, 200);
 }
 
+function normalizeOwnerId(raw: string | null | undefined): string {
+  if (typeof raw !== "string") return OPERATOR_OWNER_ID;
+  const t = raw.trim();
+  if (!t) return OPERATOR_OWNER_ID;
+  return t.slice(0, 128);
+}
+
+function emptyBucket(): TenantBucket {
+  return { alerts: [], history: [] };
+}
+
 async function ensureDir() {
   await fs.mkdir(DATA_DIR, { recursive: true });
 }
@@ -67,13 +86,30 @@ async function ensureDir() {
 async function readStore(): Promise<Store> {
   try {
     const raw = await fs.readFile(DATA_FILE, "utf8");
-    const data = JSON.parse(raw) as Store;
-    return {
-      alerts: Array.isArray(data?.alerts) ? data.alerts : [],
-      history: Array.isArray(data?.history) ? data.history : [],
-    };
+    const data = JSON.parse(raw) as any;
+    // Migrate legacy { alerts, history } -> { tenants: { __operator__: ... } }
+    if (data && Array.isArray(data.alerts) && !data.tenants) {
+      return {
+        tenants: {
+          [OPERATOR_OWNER_ID]: {
+            alerts: data.alerts,
+            history: Array.isArray(data.history) ? data.history : [],
+          },
+        },
+      };
+    }
+    const tenants: Record<string, TenantBucket> = {};
+    if (data && typeof data.tenants === "object" && data.tenants !== null) {
+      for (const [k, v] of Object.entries<any>(data.tenants)) {
+        tenants[k] = {
+          alerts: Array.isArray(v?.alerts) ? v.alerts : [],
+          history: Array.isArray(v?.history) ? v.history : [],
+        };
+      }
+    }
+    return { tenants };
   } catch (e: any) {
-    if (e && e.code === "ENOENT") return { alerts: [], history: [] };
+    if (e && e.code === "ENOENT") return { tenants: {} };
     throw e;
   }
 }
@@ -85,9 +121,16 @@ async function writeStore(store: Store): Promise<void> {
   await fs.rename(tmp, DATA_FILE);
 }
 
-export async function listAlerts(): Promise<Alert[]> {
-  const { alerts } = await readStore();
-  return alerts.slice();
+function bucketFor(store: Store, ownerId: string): TenantBucket {
+  if (!store.tenants[ownerId]) store.tenants[ownerId] = emptyBucket();
+  return store.tenants[ownerId];
+}
+
+export async function listAlerts(ownerId?: string | null): Promise<Alert[]> {
+  const oid = normalizeOwnerId(ownerId);
+  const store = await readStore();
+  const b = store.tenants[oid];
+  return b ? b.alerts.slice() : [];
 }
 
 export type AlertInput = {
@@ -138,11 +181,16 @@ export function validateInput(body: AlertInput):
   };
 }
 
-export async function createAlert(input: AlertInput): Promise<{ ok: true; alert: Alert } | { ok: false; err: ValidationError; status: number }> {
+export async function createAlert(
+  input: AlertInput,
+  ownerId?: string | null,
+): Promise<{ ok: true; alert: Alert } | { ok: false; err: ValidationError; status: number }> {
   const v = validateInput(input);
   if (!v.ok) return { ok: false, err: v.err, status: 400 };
+  const oid = normalizeOwnerId(ownerId);
   const store = await readStore();
-  if (store.alerts.length >= MAX_ALERTS) {
+  const bucket = bucketFor(store, oid);
+  if (bucket.alerts.length >= MAX_ALERTS) {
     return { ok: false, err: { code: "limit_reached", message: `alert limit is ${MAX_ALERTS}` }, status: 409 };
   }
   const alert: Alert = {
@@ -151,23 +199,28 @@ export async function createAlert(input: AlertInput): Promise<{ ok: true; alert:
     last_fired_at: null,
     created_at: new Date().toISOString(),
   };
-  store.alerts.push(alert);
+  bucket.alerts.push(alert);
   await writeStore(store);
   return { ok: true, alert };
 }
 
-export async function deleteAlert(id: string): Promise<boolean> {
+export async function deleteAlert(id: string, ownerId?: string | null): Promise<boolean> {
+  const oid = normalizeOwnerId(ownerId);
   const store = await readStore();
-  const before = store.alerts.length;
-  store.alerts = store.alerts.filter((a) => a.id !== id);
-  if (store.alerts.length === before) return false;
+  const bucket = store.tenants[oid];
+  if (!bucket) return false;
+  const before = bucket.alerts.length;
+  bucket.alerts = bucket.alerts.filter((a) => a.id !== id);
+  if (bucket.alerts.length === before) return false;
   await writeStore(store);
   return true;
 }
 
-export async function listHistory(opts: { ticker?: string; limit: number; offset: number }):
+export async function listHistory(opts: { ticker?: string; limit: number; offset: number; ownerId?: string | null }):
   Promise<{ total: number; limit: number; offset: number; events: AlertEvent[] }> {
-  const { history } = await readStore();
+  const oid = normalizeOwnerId(opts.ownerId);
+  const store = await readStore();
+  const history = store.tenants[oid]?.history ?? [];
   const filtered = opts.ticker
     ? history.filter((e) => e.ticker === opts.ticker)
     : history;
@@ -180,12 +233,38 @@ export async function listHistory(opts: { ticker?: string; limit: number; offset
   };
 }
 
-export async function clearHistory(): Promise<number> {
+export async function clearHistory(ownerId?: string | null): Promise<number> {
+  const oid = normalizeOwnerId(ownerId);
   const store = await readStore();
-  const n = store.history.length;
-  store.history = [];
+  const bucket = store.tenants[oid];
+  if (!bucket) return 0;
+  const n = bucket.history.length;
+  bucket.history = [];
   await writeStore(store);
   return n;
+}
+
+// Admin-only aggregate view of every tenant bucket. Used by
+// /api/admin/alerts so ops can audit cross-tenant footprint without
+// leaking individual bucket contents into v1 callers.
+export async function listTenantSummary(): Promise<{
+  tenants: { owner_id: string; alert_count: number; history_count: number; armed: number }[];
+  total_alerts: number;
+  total_history: number;
+}> {
+  const store = await readStore();
+  const tenants = Object.entries(store.tenants).map(([owner_id, b]) => ({
+    owner_id,
+    alert_count: b.alerts.length,
+    history_count: b.history.length,
+    armed: b.alerts.filter((a) => a.enabled).length,
+  }));
+  tenants.sort((a, b) => a.owner_id.localeCompare(b.owner_id));
+  return {
+    tenants,
+    total_alerts: tenants.reduce((n, t) => n + t.alert_count, 0),
+    total_history: tenants.reduce((n, t) => n + t.history_count, 0),
+  };
 }
 
 // Deterministic synthetic quote for tickers when no live price source is wired.
@@ -193,8 +272,7 @@ export async function clearHistory(): Promise<number> {
 function syntheticQuote(ticker: string, anchor: number | null): { last: number; prev: number } {
   const bucket = Math.floor(Date.now() / (60 * 60 * 1000));
   const h = crypto.createHash("sha256").update(`${ticker}|${bucket}`).digest();
-  // Normalize two bytes to [-1, 1] for drift, one for base scatter.
-  const drift = ((h.readUInt16BE(0) / 0xffff) * 2 - 1) * 0.04; // +-4%
+  const drift = ((h.readUInt16BE(0) / 0xffff) * 2 - 1) * 0.04;
   const base = anchor && anchor > 0 ? anchor : 50 + (h[2] % 200);
   const prev = base;
   const last = Math.max(0.01, base * (1 + drift));
@@ -211,9 +289,13 @@ export type CheckHit = {
   note: string;
 };
 
-export async function runCheck(prices?: Record<string, number>, opts?: { dryRun?: boolean }):
-  Promise<{ hits: CheckHit[]; checked: number; quotes: Record<string, { last: number; prev: number }> }> {
+export async function runCheck(
+  prices?: Record<string, number>,
+  opts?: { dryRun?: boolean; ownerId?: string | null },
+): Promise<{ hits: CheckHit[]; checked: number; quotes: Record<string, { last: number; prev: number }> }> {
+  const oid = normalizeOwnerId(opts?.ownerId);
   const store = await readStore();
+  const bucket = bucketFor(store, oid);
   const now = new Date();
   const nowIso = now.toISOString();
   const quotes: Record<string, { last: number; prev: number }> = {};
@@ -231,9 +313,8 @@ export async function runCheck(prices?: Record<string, number>, opts?: { dryRun?
   }
 
   let mutated = false;
-  for (const a of store.alerts) {
+  for (const a of bucket.alerts) {
     if (!a.enabled) continue;
-    // Cooldown gate.
     if (a.last_fired_at) {
       const last = Date.parse(a.last_fired_at);
       if (Number.isFinite(last) && now.getTime() - last < a.cooldown_hours * 3600 * 1000) {
@@ -265,12 +346,12 @@ export async function runCheck(prices?: Record<string, number>, opts?: { dryRun?
       fired_at: nowIso,
       note: a.note,
     };
-    store.history.unshift(event);
-    if (store.history.length > MAX_HISTORY) store.history.length = MAX_HISTORY;
+    bucket.history.unshift(event);
+    if (bucket.history.length > MAX_HISTORY) bucket.history.length = MAX_HISTORY;
     a.last_fired_at = nowIso;
     hits.push(event);
     mutated = true;
   }
   if (mutated && !opts?.dryRun) await writeStore(store);
-  return { hits, checked: store.alerts.length, quotes };
+  return { hits, checked: bucket.alerts.length, quotes };
 }

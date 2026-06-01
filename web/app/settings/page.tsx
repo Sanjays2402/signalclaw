@@ -190,6 +190,12 @@ function Settings() {
             <LockKey size={14} weight="duotone" /> Auth lockout
           </Link>
           <Link
+            href="/settings/alerts-tenants"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Bell size={14} weight="duotone" /> Alert tenants
+          </Link>
+          <Link
             href="/usage"
             className="text-[11px] muted hover:text-white"
           >

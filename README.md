@@ -2,7 +2,44 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: SIEM-ready NDJSON export of the tamper-evident audit log
+## New: per-API-key alert multi-tenancy
+
+The web `alertStore` was a single flat list shared across every API key, so an alert armed by one tenant was visible to and deletable by every other tenant hitting the same install. The `/api/v1/alerts*` route comments even said the quiet part out loud: "scope filtering is by ownership of the key, not the alert." Procurement flagged this as a hard multi-tenancy finding because alerts also drive notifier deliveries.
+
+- `alertStore` now persists one bucket per `StoredKey.id` under `tenants[owner_key_id]`. The legacy `{ alerts, history }` payload migrates into the operator bucket on first read so single-tenant installs upgrade in place.
+- `GET / POST /api/v1/alerts`, `DELETE /api/v1/alerts/:id`, and `POST /api/v1/alerts/check` resolve the caller via the existing `authenticate(extractKey(req))` path and route every read, write, and runCheck through that tenant bucket.
+- New `GET /api/admin/alerts` (admin scope + MFA) exposes counts only per tenant for ops audits: `{ tenants: [{ owner_id, alert_count, armed, history_count }], total_alerts, total_history }`. Raw alert rows are never returned.
+- New `/settings/alerts-tenants` admin page renders the aggregate.
+- `tests/alertTenantIsolation.test.mjs` pins the policy: cross-tenant reads invisible, cross-tenant delete is a no-op, runCheck only sees the caller's alerts, clearHistory only clears the caller's bucket, admin aggregate omits row contents, and the legacy file shape migrates into the operator bucket.
+
+### Try it
+
+```bash
+cd web && pnpm dev    # http://localhost:7430
+
+# Mint two keys, prove isolation.
+A=$(curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"label":"tenant-a","scopes":["read","trade"]}' \
+  http://localhost:7430/api/admin/keys | jq -r .secret)
+B=$(curl -s -X POST -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"label":"tenant-b","scopes":["read","trade"]}' \
+  http://localhost:7430/api/admin/keys | jq -r .secret)
+
+curl -s -X POST -H "Authorization: Bearer $A" -H 'content-type: application/json' \
+  -d '{"ticker":"AAPL","condition":"price_above","value":200}' \
+  http://localhost:7430/api/v1/alerts
+
+curl -s -H "Authorization: Bearer $B" http://localhost:7430/api/v1/alerts | jq
+# => { alerts: [], total: 0, ... }   no cross-tenant leakage
+
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/alerts | jq
+# => per-tenant counts only, raw alerts never exposed
+```
+
+## Previously: SIEM-ready NDJSON export of the tamper-evident audit log
 
 The `/api/audit/export.csv` flow has always been good enough for a procurement spreadsheet, but Splunk / Datadog / Elastic ingest pipelines need the full structured event, not a flattened CSV row. The new NDJSON export streams the complete audit record per line, including the `details` JSON object and the `prev_hash` + `hash` chain fields, so an enterprise SOC can re-verify chain integrity after import. The export itself is appended to the audit chain as `GET /api/audit/export.jsonl`, capturing who pulled what.
 
@@ -27,7 +64,7 @@ wc -l audit.jsonl
 head -1 audit.jsonl | jq '{ts, route, method, status, key_id, prev_hash, hash}'
 ```
 
-## Previously: per-API-key watchlist multi-tenancy
+## Earlier: per-API-key watchlist multi-tenancy
 
 The Python `/watchlist`, `/picks`, and `/report.md` endpoints used to share one universe across every API key in a deployment, which meant a ticker added by one customer was visible to and removable by every other customer hitting the same backend. Procurement reviewers flagged this as a hard multi-tenancy finding because the watchlist also drives the daily report and the regime classifier output, so cross-tenant leakage at the universe layer also leaked downstream model output. SignalClaw now stores one watchlist per user-managed API key (`StoredKey.id`), seeded from the default universe on first read, and the legacy operator key keeps the original bucket so single-tenant installs upgrade in place. A new admin route exposes the aggregate view for ops.
 

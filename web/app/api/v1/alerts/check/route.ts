@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
   }
 
   const dry = isDryRun(req, body);
-  const result = await runCheck(prices, { dryRun: dry });
+  const result = await runCheck(prices, { dryRun: dry, ownerId: key.id });
   if (dry) {
     const effect = {
       action: "evaluate",

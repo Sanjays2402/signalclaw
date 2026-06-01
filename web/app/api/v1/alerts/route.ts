@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
   }
   await recordAuditEvent({ req, route: "/api/v1/alerts", method: req.method, status: 200, key });
   return enforceRateLimit(req, key, "/api/v1/alerts", async () => {
-  const alerts = await listAlerts();
+  const alerts = await listAlerts(key.id);
   return NextResponse.json({
     alerts,
     total: alerts.length,
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
     return dryRunResponse(effect, { status: 200 });
   }
 
-  const r = await createAlert(body);
+  const r = await createAlert(body, key.id);
   if (!r.ok) return err(r.status, r.err.code, r.err.message);
 
   await recordSafe({
