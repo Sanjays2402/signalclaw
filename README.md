@@ -2,7 +2,39 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: audit-log anomaly detector for the admin console
+## New: legal hold registry for eDiscovery and regulator-ordered preservation
+
+Enterprise procurement reviewers in financial services, healthcare, and government will not sign a contract without a documented way to suspend deletion when counsel issues a litigation hold. SignalClaw already pruned the hash-chained audit log on a 90-day window and exposed `POST /privacy/delete` for GDPR Article 17 erasure, which meant a routine compliance script could destroy evidence the operator was legally required to preserve. The new legal hold registry closes that gap end-to-end.
+
+- `src/signalclaw/legal_hold/` is a file-backed registry (`legal-hold.json` under `<DATA_DIR>/legal_hold/`) keyed on the same 12-char actor hash the audit log already uses, so holds compose with the existing tamper-evident chain without leaking key material.
+- Three admin endpoints, all gated by the `admin` scope and the existing MFA-for-admin dependency: `GET /admin/legal-hold` lists active holds, `POST /admin/legal-hold` places one (reason and optional `case_id` required, both length-validated by pydantic), and `DELETE /admin/legal-hold/{key_hash}` releases it. Both mutations append a structured `legal_hold.place` / `legal_hold.release` row to the audit log so the chain records who held what and when.
+- `POST /privacy/delete` refuses with HTTP 409 `legal_hold_active` while any hold is active and returns the list of held actor hashes so the caller knows exactly what to release.
+- `AuditRetentionPruner` now takes a `hold_predicate`; when truthy the daily sweep is skipped and emits `audit.retention.skipped_legal_hold`. The predicate fails closed: if the registry call raises, the sweep aborts rather than risk deleting preserved evidence.
+- `tests/test_legal_hold.py` proves the lifecycle, the admin-scope gate, that `/privacy/delete` returns 409 while held and resumes after release, and that the retention pruner preserves files synchronously while a hold is active.
+
+### Try it
+
+```bash
+make dev
+uvicorn signalclaw.api:create_app --factory --port 8000
+
+# place a hold (admin scope + MFA gate apply in production)
+curl -s -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"key_hash":"abc123def456","reason":"SEC subpoena SC-2026-1138","case_id":"SC-2026-1138"}' \
+  http://localhost:8000/admin/legal-hold | jq
+
+# deletion is now refused
+curl -s -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  'http://localhost:8000/privacy/delete?confirm=DELETE' | jq
+# => {"detail":{"error":"legal_hold_active","holds":["abc123def456"],...}}
+
+# release when counsel clears the matter
+curl -s -X DELETE -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:8000/admin/legal-hold/abc123def456 | jq
+```
+
+## Previously: audit-log anomaly detector for the admin console
 
 The append-only audit log already captures every mutating call with a hash-chained `prev_hash`/`entry_hash` pair, but a security reviewer still had to eyeball thousands of rows to spot a credential-stuffing burst or an out-of-hours admin mutation. `GET /audit/anomalies` runs four detectors directly over the live log and returns a sorted findings list the admin console renders inline on `settings/audit`.
 

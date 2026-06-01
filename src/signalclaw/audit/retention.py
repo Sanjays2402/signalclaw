@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 import structlog
 
@@ -74,12 +74,17 @@ class AuditRetentionPruner:
         audit_log: AuditLog,
         retention_days: int,
         interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
+        hold_predicate: Optional[Callable[[], bool]] = None,
     ) -> None:
         self._log = audit_log
         self._retention_days = int(retention_days)
         self._interval = max(1, int(interval_seconds))
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # If supplied, called before every sweep. Truthy return skips
+        # pruning so legal holds and other operator gates can pause
+        # retention without restarting the service.
+        self._hold_predicate = hold_predicate
 
     @property
     def enabled(self) -> bool:
@@ -89,6 +94,15 @@ class AuditRetentionPruner:
         """Run a single prune pass synchronously and return removed files."""
         if not self.enabled:
             return []
+        if self._hold_predicate is not None:
+            try:
+                if self._hold_predicate():
+                    log.info("audit.retention.skipped_legal_hold")
+                    return []
+            except Exception as e:  # pragma: no cover - defensive
+                log.warning("audit.retention.hold_check_failed", error=repr(e))
+                # Fail closed: if we cannot evaluate the hold, do not prune.
+                return []
         try:
             removed = self._log.prune(self._retention_days)
         except Exception as e:  # never let pruner kill the process

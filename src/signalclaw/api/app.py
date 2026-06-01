@@ -4,7 +4,8 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException, Header, Request, Body
+from pydantic import BaseModel, Field as PydField
 from fastapi.middleware.cors import CORSMiddleware  # noqa: F401  (kept for compat)
 from ..cors_policy import get_store as get_cors_store, normalise_origin, MAX_ORIGINS
 from ..cors_policy.middleware import StrictCorsMiddleware
@@ -74,6 +75,20 @@ from ..audit import AuditMiddleware, get_audit_log
 from ..quotas import get_quota_store
 from ..quotas.middleware import QuotaMiddleware
 from ..audit.retention import AuditRetentionPruner, retention_config_from_env
+from ..legal_hold import get_legal_hold_store
+
+
+class LegalHoldIn(BaseModel):
+    """Request body for POST /admin/legal-hold.
+
+    Defined at module scope (not inside create_app) so pydantic can
+    fully resolve the ForwardRef when FastAPI builds its TypeAdapter.
+    """
+    key_hash: str = PydField(..., min_length=4, max_length=128,
+                             description="audit actor hash to place under hold")
+    reason: str = PydField(..., min_length=1, max_length=512)
+    case_id: str = PydField(default="", max_length=128)
+
 from ..privacy import StoreBundle, collect_user_data, erase_user_data
 from ..privacy.export_formats import build_zip as _build_export_zip, export_filename as _export_filename
 from ..alerts import (Alert, AlertCondition, AlertStore, AlertEventStore,
@@ -170,6 +185,11 @@ def create_app() -> FastAPI:
     # Audit log: persist who/what/when for mutating + auth-failed requests.
     # Sits inside CORS so it sees the real request status, including 401/403.
     audit_log = get_audit_log(settings.data_dir / "audit")
+    # Legal hold registry. While any hold is active the audit pruner
+    # skips its sweep and /privacy/delete refuses with 409. Required
+    # for eDiscovery and regulator-ordered evidence preservation.
+    legal_hold_store = get_legal_hold_store(settings.data_dir / "legal_hold")
+    app.state.legal_hold_store = legal_hold_store
     # Background retention pruner: enforces a maximum age on JSONL
     # files under <data_dir>/audit/ so the log volume cannot grow
     # without bound. Reads SIGNALCLAW_AUDIT_RETENTION_DAYS (default 90)
@@ -180,6 +200,7 @@ def create_app() -> FastAPI:
         audit_log,
         retention_days=_ret_days,
         interval_seconds=_ret_interval,
+        hold_predicate=legal_hold_store.any_active,
     )
     audit_pruner.start()
     app.state.audit_pruner = audit_pruner
@@ -3010,6 +3031,73 @@ def create_app() -> FastAPI:
             audit=audit_log,
         )
 
+    # ------------------------------------------------------------------
+    # Legal hold (eDiscovery / regulator-ordered preservation)
+    # ------------------------------------------------------------------
+    from ..audit.log import AuditEvent as _AE_lh, _hash_key as _hk_lh, _utc_now_iso as _now_iso_lh
+
+    @app.get(
+        "/admin/legal-hold",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_legal_hold_list():
+        return {"holds": [h.to_dict() for h in legal_hold_store.list()]}
+
+    @app.post(
+        "/admin/legal-hold",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_legal_hold_place(
+        request: Request,
+        body: LegalHoldIn = Body(...),
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        try:
+            hold = legal_hold_store.place(
+                body.key_hash,
+                reason=body.reason,
+                placed_by=actor,
+                case_id=body.case_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="POST", path="/admin/legal-hold", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="legal_hold.place",
+            extra={"key_hash": hold.key_hash, "case_id": hold.case_id,
+                   "reason": hold.reason[:200]},
+        ))
+        return hold.to_dict()
+
+    @app.delete(
+        "/admin/legal-hold/{key_hash}",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_legal_hold_release(
+        key_hash: str,
+        request: Request,
+        x_api_key: str | None = Header(default=None),
+    ):
+        existed = legal_hold_store.release(key_hash)
+        if not existed:
+            raise HTTPException(404, "no active hold for that key_hash")
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="DELETE", path=f"/admin/legal-hold/{key_hash}", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="legal_hold.release",
+            extra={"key_hash": key_hash.strip().lower()},
+        ))
+        return {"ok": True, "key_hash": key_hash.strip().lower()}
+
     @app.get("/privacy/export",
              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def privacy_export(format: str = "json"):
@@ -3060,6 +3148,20 @@ def create_app() -> FastAPI:
         """
         if confirm != "DELETE":
             raise HTTPException(400, "pass confirm=DELETE to proceed")
+        if legal_hold_store.any_active():
+            held = [h.key_hash for h in legal_hold_store.list()]
+            raise HTTPException(
+                409,
+                {
+                    "error": "legal_hold_active",
+                    "message": (
+                        "deletion refused: one or more legal holds are "
+                        "active. Release via DELETE /admin/legal-hold/{key_hash} "
+                        "before erasing."
+                    ),
+                    "holds": held,
+                },
+            )
         summary = erase_user_data(
             _store_bundle(),
             wipe_audit=wipe_audit,
