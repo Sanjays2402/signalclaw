@@ -2,7 +2,37 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: dormant API-key watchlist (admin queue for credential review)
+## New: break-glass emergency admin elevation (time-boxed, audited)
+
+Procurement reality: on-call engineers occasionally need admin scope to resolve an incident, but handing out a permanent admin key for every incident is the kind of standing privilege auditors flag under SOC2 CC6.3 and ISO 27001 A.9.2.3. SignalClaw now ships a break-glass grant: an admin can elevate a non-admin API key to `admin` for a bounded window (60 seconds to 4 hours), with the elevation revocable at any moment and every issuance, revocation, and use written to the audit log. The grant lives next to the key, never mutates the key record, and is enforced inside the same key resolver used by every middleware check and route dependency, so it applies uniformly to env-configured keys and to keys minted via `/admin/keys`.
+
+- `POST /admin/break-glass` (FastAPI, port 7431) issues a grant against either `target_api_key` (hashed server-side) or `target_key_hash`, with a required `reason` and a `ttl_seconds` clamped to `[60, 14400]`. Returns the grant id, target hash, expiry, and reason. Admin scope plus admin MFA gated.
+- `GET /admin/break-glass` lists active and historical grants with `status` (active / expired / revoked), `created_at`, `expires_at`, `revoked_at`, `use_count`, and `last_used_at`.
+- `POST /admin/break-glass/{id}/revoke` ends a grant immediately. Subsequent requests with the target key drop back to its base scopes on the next call.
+- `GET /break-glass/me` lets the on-call engineer see whether their own key currently has an active grant without needing admin scope.
+- Enforced inside `signalclaw.api.rate_limit._resolve_key`, so the elevated scope set is visible to every `require_scope` dependency, the audit middleware, and the rate limiter at once. Each use bumps `use_count` and `last_used_at` on the grant.
+- Admin console page at `/admin/break-glass`: issue a grant, watch its countdown, revoke with one click, and review history. Loading, error, and empty states wired; responsive at 375 and 1440. Phosphor duotone icons throughout.
+- `tests/test_break_glass.py` pins the contract: grants enforce min/max TTL, elevate scope only for the live window, drop back to base scopes after revoke or expiry, and audit every issuance / revocation.
+
+### Try it: break-glass elevation
+
+```bash
+make dev  # FastAPI on :7431
+cd web && npm install && npm run dev  # Next.js on :3000
+# then open http://localhost:3000/admin/break-glass
+
+# Issue a 10-minute elevation against a non-admin key:
+curl -sS -X POST -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"target_api_key":"member-key-xyz","reason":"incident #1421","ttl_seconds":600}' \
+  'http://localhost:7431/admin/break-glass' | jq
+
+# On-call engineer self-checks their elevation:
+curl -sS -H 'x-api-key: member-key-xyz' \
+  'http://localhost:7431/break-glass/me' | jq
+```
+
+## Previously: dormant API-key watchlist (admin queue for credential review)
 
 Procurement reality: SOC2 CC6.1 and ISO 27001 A.9.2.5 require periodic review of access rights, and a credential that has not been used in months is the textbook example of access that should have been revoked. SignalClaw already tracked `last_used_at` and surfaced expiring keys. What was missing was the inverse: a queue of credentials that have gone silent long enough that an operator should rotate them or revoke them outright. This release ships that queue on both the FastAPI service and the Next.js admin, with matching classification so the two surfaces never disagree.
 

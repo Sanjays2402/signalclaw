@@ -265,6 +265,7 @@ export default function AdminConsole() {
                     ["Tenant watchlists", "/admin/watchlists"],
                     ["Expiring API keys", "/admin/keys/expiring"],
                     ["Dormant API keys", "/admin/keys/dormant"],
+                    ["Break-glass access", "/admin/break-glass"],
                     ["CORS", "/settings/cors"],
                     ["CSP", "/settings/security/csp"],
                     ["Network policy", "/settings/network"],

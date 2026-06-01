@@ -216,6 +216,12 @@ def create_app() -> FastAPI:
     # logged so customers can verify the 30-day DPA notice window.
     subprocessor_store = get_subprocessor_store(settings.data_dir / "subprocessors.json")
     app.state.subprocessor_store = subprocessor_store
+    # Break-glass emergency admin elevation: time-boxed grants that
+    # union ``admin`` into a non-admin key's scopes for the duration
+    # of an incident. Issuance, revocation, and every use are audited.
+    from ..break_glass import get_store as _get_bg_store, reset_store as _reset_bg_store  # noqa: F401
+    break_glass_store = _get_bg_store(settings.data_dir / "break_glass.json")
+    app.state.break_glass_store = break_glass_store
     # Background retention pruner: enforces a maximum age on JSONL
     # files under <data_dir>/audit/ so the log volume cannot grow
     # without bound. Reads SIGNALCLAW_AUDIT_RETENTION_DAYS (default 90)
@@ -3805,6 +3811,120 @@ def create_app() -> FastAPI:
             extra={"id": removed.id, "name": removed.name},
         ))
         return {"ok": True, "id": removed.id}
+
+    # ------------------------------------------------------------------
+    # Break-glass: time-boxed emergency admin elevation
+    # ------------------------------------------------------------------
+    # An admin grants a non-admin key the ``admin`` scope for at most
+    # ``MAX_TTL_SECONDS`` so an on-call engineer can fix an incident
+    # without the operator handing out a permanent admin key. The
+    # grant is enforced inside ``_resolve_key`` (rate_limit.py) so it
+    # applies uniformly to every middleware check and route
+    # dependency. Issuance, revocation, and use are all audited.
+    from ..break_glass import (
+        get_store as _bg_get_store,
+        hash_key as _bg_hash_key,
+        MAX_TTL_SECONDS as _BG_MAX_TTL,
+        MIN_TTL_SECONDS as _BG_MIN_TTL,
+    )
+
+    def _bg_audit(request: Request, *, action: str, status_code: int,
+                  path_: str, method_: str, actor: str,
+                  extra: dict):
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method=method_, path=path_, status=status_code,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action=action, extra=extra,
+        ))
+
+    @app.get(
+        "/admin/break-glass",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_break_glass_list(include_inactive: bool = True):
+        store_ = _bg_get_store()
+        rows = store_.list_grants(include_inactive=include_inactive)
+        return {
+            "max_ttl_seconds": _BG_MAX_TTL,
+            "min_ttl_seconds": _BG_MIN_TTL,
+            "grants": [r.to_public() for r in rows],
+        }
+
+    @app.post(
+        "/admin/break-glass",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_break_glass_grant(
+        request: Request,
+        body: dict = Body(...),
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        target_secret = (body or {}).get("target_api_key")
+        target_hash = (body or {}).get("target_key_hash")
+        target_label = str((body or {}).get("target_label", "") or "")
+        reason = (body or {}).get("reason")
+        ttl = (body or {}).get("ttl_seconds")
+        if not target_secret and not target_hash:
+            raise HTTPException(400,
+                "target_api_key or target_key_hash is required")
+        if target_secret and not target_hash:
+            target_hash = _bg_hash_key(str(target_secret))
+        try:
+            grant = _bg_get_store().grant(
+                target_key_hash=str(target_hash),
+                target_label=target_label,
+                reason=str(reason or ""),
+                ttl_seconds=int(ttl) if ttl is not None else 0,
+                granted_by_hash=actor,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        _bg_audit(request, action="break_glass.grant", status_code=200,
+                  method_="POST", path_="/admin/break-glass",
+                  actor=actor,
+                  extra={
+                      "id": grant.id,
+                      "target_key_hash": grant.target_key_hash,
+                      "expires_at": grant.expires_at,
+                      "reason": grant.reason[:120],
+                  })
+        return grant.to_public()
+
+    @app.post(
+        "/admin/break-glass/{grant_id}/revoke",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_break_glass_revoke(
+        grant_id: str,
+        request: Request,
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        store_ = _bg_get_store()
+        existing = store_.get(grant_id)
+        if existing is None:
+            raise HTTPException(404, f"grant {grant_id!r} not found")
+        revoked = store_.revoke(grant_id, revoked_by_hash=actor)
+        _bg_audit(request, action="break_glass.revoke", status_code=200,
+                  method_="POST",
+                  path_=f"/admin/break-glass/{grant_id}/revoke",
+                  actor=actor,
+                  extra={"id": grant_id,
+                         "target_key_hash": existing.target_key_hash})
+        return (revoked or existing).to_public()
+
+    @app.get("/break-glass/me")
+    def admin_break_glass_me(x_api_key: str | None = Header(default=None)):
+        if not x_api_key:
+            return {"active": False, "grant": None}
+        live = _bg_get_store().live_for(_bg_hash_key(x_api_key))
+        if live is None:
+            return {"active": False, "grant": None}
+        return {"active": True, "grant": live.to_public()}
 
     @app.get("/privacy/export",
              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])

@@ -20,6 +20,9 @@ const cfg: NextConfig = {
       // SCIM 2.0 IdP-facing endpoints (Okta / Azure AD / Google Workspace).
       // The provisioning bearer is minted from /settings/scim.
       { source: "/scim/v2/:path*", destination: "/api/scim/v2/:path*" },
+      // Break-glass self-check (non-admin scope so the on-call engineer
+      // can see their own active elevation without admin privileges).
+      { source: "/break-glass/:path*", destination: "/api/break-glass/:path*" },
     ];
   },
 };

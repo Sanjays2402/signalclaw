@@ -153,6 +153,21 @@ def set_user_key_store(store) -> None:
 def _resolve_key(api_key, *, client_ip=None, user_agent=None):
     rec = get_registry().get(api_key)
     if rec is not None:
+        # Break-glass also applies to env-configured keys so an on-call
+        # engineer with a `member` static key can be elevated without
+        # rotating env vars. Admin keys already have the scope so the
+        # union is a no-op.
+        try:
+            from ..break_glass import get_store as _bg_store, hash_key as _bg_hash
+            live = _bg_store().live_for(_bg_hash(api_key))
+            if live is not None:
+                _bg_store().record_use(_bg_hash(api_key))
+                return ApiKey(key=rec.key,
+                              scopes=set(rec.scopes) | {"admin"},
+                              label=rec.label,
+                              rate_per_minute=rec.rate_per_minute)
+        except Exception:
+            pass
         return rec
     store = _USER_STORE
     if store is not None and api_key:
@@ -170,6 +185,17 @@ def _resolve_key(api_key, *, client_ip=None, user_agent=None):
                     stored.scopes, getattr(stored, "role", None)))
             except Exception:
                 effective = set(stored.scopes)
+            # Break-glass: a live emergency grant unions ``admin`` into
+            # the effective scopes for the duration of the grant only.
+            # The underlying key/role is never mutated.
+            try:
+                from ..break_glass import get_store as _bg_store, hash_key as _bg_hash
+                live = _bg_store().live_for(_bg_hash(api_key))
+                if live is not None:
+                    effective = set(effective) | {"admin"}
+                    _bg_store().record_use(_bg_hash(api_key))
+            except Exception:
+                pass
             return ApiKey(key=api_key, scopes=effective,
                           label=stored.label)
     return None
