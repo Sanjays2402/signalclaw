@@ -84,6 +84,16 @@ from ..subprocessors import (
     MAX_PURPOSE as _SP_MAX_PURPOSE,
     MAX_URL as _SP_MAX_URL,
 )
+from ..incidents import (
+    get_store as get_incident_store,
+    reset_store as _reset_incident_store,  # noqa: F401  (test hook re-export)
+    SEVERITIES as _INC_SEVERITIES,
+    STATUSES as _INC_STATUSES,
+    MAX_TITLE as _INC_MAX_TITLE,
+    MAX_SUMMARY as _INC_MAX_SUMMARY,
+    MAX_URL as _INC_MAX_URL,
+    MAX_UPDATE_BODY as _INC_MAX_UPDATE_BODY,
+)
 
 
 class SubprocessorIn(BaseModel):
@@ -97,6 +107,24 @@ class SubprocessorIn(BaseModel):
     country: Optional[str] = PydField(default=None, min_length=2, max_length=2)
     url: Optional[str] = PydField(default=None, max_length=_SP_MAX_URL)
     data_categories: Optional[list[str]] = PydField(default=None)
+
+
+class IncidentIn(BaseModel):
+    """Body for POST /admin/incidents and PUT updates."""
+    title: Optional[str] = PydField(default=None, max_length=_INC_MAX_TITLE)
+    severity: Optional[str] = PydField(default=None, max_length=8)
+    status: Optional[str] = PydField(default=None, max_length=32)
+    summary: Optional[str] = PydField(default=None, max_length=_INC_MAX_SUMMARY)
+    affected_services: Optional[list[str]] = PydField(default=None)
+    postmortem_url: Optional[str] = PydField(default=None, max_length=_INC_MAX_URL)
+    started_at: Optional[str] = PydField(default=None, max_length=40)
+    resolved_at: Optional[str] = PydField(default=None, max_length=40)
+
+
+class IncidentUpdateIn(BaseModel):
+    """Body for POST /admin/incidents/{id}/updates."""
+    status: str = PydField(..., max_length=32)
+    body: str = PydField(..., max_length=_INC_MAX_UPDATE_BODY)
 
 
 class LegalHoldIn(BaseModel):
@@ -216,6 +244,9 @@ def create_app() -> FastAPI:
     # logged so customers can verify the 30-day DPA notice window.
     subprocessor_store = get_subprocessor_store(settings.data_dir / "subprocessors.json")
     app.state.subprocessor_store = subprocessor_store
+    # Status page: incidents registry (public reads, admin CRUD, audit logged).
+    incident_store = get_incident_store(settings.data_dir / "incidents.json")
+    app.state.incident_store = incident_store
     # Break-glass emergency admin elevation: time-boxed grants that
     # union ``admin`` into a non-admin key's scopes for the duration
     # of an incident. Issuance, revocation, and every use are audited.
@@ -3809,6 +3840,165 @@ def create_app() -> FastAPI:
             actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
             duration_ms=0.0, action="subprocessor.remove",
             extra={"id": removed.id, "name": removed.name},
+        ))
+        return {"ok": True, "id": removed.id}
+
+    # ------------------------------------------------------------------
+    # Public status page: incidents registry + admin CRUD
+    # ------------------------------------------------------------------
+    # Public reads at /status and /status/incidents are unauthenticated
+    # so prospects, customers, and TPRM reviewers can fetch the current
+    # service health and historical incident log without a login.
+    # Mutations require admin scope + MFA and are recorded in both the
+    # registry's own append-only change log and the global audit chain.
+    @app.get("/status")
+    def status_page_public(limit: int = 50):
+        return incident_store.public_view(limit=limit)
+
+    @app.get("/status/incidents")
+    def status_incidents_public(limit: int = 50):
+        return incident_store.public_view(limit=limit)
+
+    @app.get("/status/incidents/{incident_id}")
+    def status_incident_detail(incident_id: str):
+        inc = incident_store.get(incident_id)
+        if inc is None:
+            raise HTTPException(404, f"incident {incident_id!r} not found")
+        return inc.to_public()
+
+    @app.get("/status/history")
+    def status_change_log(limit: int = 100):
+        return {"changes": incident_store.history(limit=limit)}
+
+    @app.get(
+        "/admin/incidents",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_incidents_list():
+        return incident_store.public_view(limit=500)
+
+    @app.post(
+        "/admin/incidents",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_incidents_add(
+        request: Request,
+        body: IncidentIn = Body(...),
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        if not body.title or not body.severity or not body.status or not body.summary:
+            raise HTTPException(400, "title, severity, status, and summary are required")
+        try:
+            inc = incident_store.add(
+                title=body.title, severity=body.severity, status=body.status,
+                summary=body.summary,
+                affected_services=body.affected_services or [],
+                postmortem_url=body.postmortem_url,
+                started_at=body.started_at, resolved_at=body.resolved_at,
+                actor=actor,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="POST", path="/admin/incidents", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="incident.add",
+            extra={"id": inc.id, "severity": inc.severity, "status": inc.status},
+        ))
+        return inc.to_public()
+
+    @app.put(
+        "/admin/incidents/{incident_id}",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_incidents_update(
+        incident_id: str,
+        request: Request,
+        body: IncidentIn = Body(...),
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        try:
+            inc = incident_store.update(
+                incident_id,
+                title=body.title, severity=body.severity, status=body.status,
+                summary=body.summary,
+                affected_services=body.affected_services,
+                postmortem_url=body.postmortem_url,
+                started_at=body.started_at, resolved_at=body.resolved_at,
+                actor=actor,
+            )
+        except KeyError:
+            raise HTTPException(404, f"incident {incident_id!r} not found")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="PUT", path=f"/admin/incidents/{incident_id}", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="incident.update",
+            extra={"id": inc.id, "status": inc.status},
+        ))
+        return inc.to_public()
+
+    @app.post(
+        "/admin/incidents/{incident_id}/updates",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_incidents_add_update(
+        incident_id: str,
+        request: Request,
+        body: IncidentUpdateIn = Body(...),
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        try:
+            inc = incident_store.add_update(
+                incident_id, status=body.status, body=body.body, actor=actor,
+            )
+        except KeyError:
+            raise HTTPException(404, f"incident {incident_id!r} not found")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="POST", path=f"/admin/incidents/{incident_id}/updates", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="incident.update.append",
+            extra={"id": inc.id, "status": inc.status},
+        ))
+        return inc.to_public()
+
+    @app.delete(
+        "/admin/incidents/{incident_id}",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_incidents_remove(
+        incident_id: str,
+        request: Request,
+        x_api_key: str | None = Header(default=None),
+    ):
+        actor = _hk_lh(x_api_key) if x_api_key else "-"
+        try:
+            removed = incident_store.remove(incident_id, actor=actor)
+        except KeyError:
+            raise HTTPException(404, f"incident {incident_id!r} not found")
+        src_ip = (request.client.host if request.client else "-") or "-"
+        audit_log.record(_AE_lh(
+            ts=_now_iso_lh(),
+            request_id=request.headers.get("x-request-id", "-"),
+            method="DELETE", path=f"/admin/incidents/{incident_id}", status=200,
+            actor_key_hash=actor, actor_label="admin", source_ip=src_ip,
+            duration_ms=0.0, action="incident.remove",
+            extra={"id": removed.id, "title": removed.title},
         ))
         return {"ok": True, "id": removed.id}
 

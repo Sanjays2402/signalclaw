@@ -2,6 +2,36 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
+## New: public service status page with audited incident registry
+
+Enterprise procurement reviews and most vendor security questionnaires (SIG, CAIQ) explicitly ask for a real-time status page and a historical incident log with severities and post-incident reviews. SignalClaw now ships one. The registry is versioned, every mutation lands in the global audit chain, and the public reads at `/status` are intentionally unauthenticated so prospects and TPRM reviewers can fetch it without a login.
+
+- Public page: http://localhost:7430/status
+- Admin console: http://localhost:7430/admin/incidents (admin scope + MFA)
+- API: `GET /status`, `GET /status/incidents/{id}`, `GET /status/history`, `POST/PUT/DELETE /admin/incidents`, `POST /admin/incidents/{id}/updates`
+
+### Try it: incident registry
+
+```bash
+signalclaw serve &  # FastAPI on :7431
+
+# Public status (no auth)
+curl -s http://localhost:7431/status | jq
+
+# Declare an incident (admin scope + MFA in production)
+curl -sX POST http://localhost:7431/admin/incidents \
+  -H 'x-api-key: admin-key' -H 'content-type: application/json' \
+  -d '{"title":"Signal engine latency spike","severity":"sev2","status":"investigating","summary":"p95 above 2s on /signals","affected_services":["signal-engine","api"]}' | jq
+
+# Append a public timeline update, then resolve
+curl -sX POST http://localhost:7431/admin/incidents/<id>/updates \
+  -H 'x-api-key: admin-key' -H 'content-type: application/json' \
+  -d '{"status":"monitoring","body":"Cache warmed, latency recovering."}'
+curl -sX PUT http://localhost:7431/admin/incidents/<id> \
+  -H 'x-api-key: admin-key' -H 'content-type: application/json' \
+  -d '{"status":"resolved","postmortem_url":"https://example.com/pm/1"}'
+```
+
 ## New: Data Processing Agreement acceptance ledger
 
 Procurement reality: every enterprise security questionnaire and most EU/UK MSAs require evidence that the customer's authorized signatory has accepted a versioned Data Processing Agreement (GDPR Art. 28, UK GDPR, CCPA service-provider terms). Auditors and counsel want a who / when / from-where record per DPA version, with the document SHA-256 pinned at the moment of acceptance so the customer cannot later claim a different document was in force. SignalClaw now ships that ledger end to end.
