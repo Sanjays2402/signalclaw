@@ -895,6 +895,30 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "key not found")
         return updated.to_public()
 
+    @app.put("/admin/keys/{key_id}/label",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_keys_set_label(key_id: str, body: dict):
+        """Rename an API key without rotating its secret.
+
+        Body: ``{"label": "new name"}``. Trims and clamps to 80 chars;
+        rejects empty labels with a 400 so the inventory never loses a
+        human-readable name. Admin scope + MFA gated like every other
+        mutating admin route; the audit middleware records the actor,
+        path, and request id automatically.
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        label = body.get("label")
+        if not isinstance(label, str):
+            raise HTTPException(400, "label must be a string")
+        try:
+            updated = api_key_store.set_label(key_id, label)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
+
     @app.post("/admin/keys/{key_id}/rotate",
               dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_rotate(key_id: str, body: dict | None = None):

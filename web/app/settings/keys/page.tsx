@@ -60,6 +60,7 @@ export default function ApiKeysPage() {
   // or admin (those carry the admin scope automatically).
   const [role, setRole] = useState<"owner" | "admin" | "member" | "viewer">("member");
   const [changingRole, setChangingRole] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
   // Hard expiry on a new key. "0" means never expires. SOC2 hygiene
   // strongly prefers credentials with a bounded lifetime; the default
   // here is a 90-day key so the secure path is the easy path.
@@ -272,6 +273,33 @@ export default function ApiKeysPage() {
       }
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onRename(id: string, currentLabel: string) {
+    const ans = window.prompt(
+      `Rename this key.\n\nLabels are for humans, not auth; the secret keeps working. 80 char max.`,
+      currentLabel,
+    );
+    if (ans === null) return;
+    const next = ans.trim().slice(0, 80);
+    if (!next) {
+      window.alert("Label cannot be empty.");
+      return;
+    }
+    if (next === currentLabel) return;
+    setRenaming(id);
+    try {
+      await api(`/admin/keys/${id}/label`, {
+        method: "PUT",
+        body: JSON.stringify({ label: next }),
+        headers: { "Content-Type": "application/json" },
+      });
+      mutate();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRenaming(null);
     }
   }
 
@@ -601,6 +629,15 @@ export default function ApiKeysPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onRename(k.id, k.label || "")}
+                    disabled={renaming === k.id || revoking === k.id}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-[var(--border-strong)] hover:bg-white/[0.06] rounded-sm disabled:opacity-50"
+                    title="Rename this key without rotating the secret"
+                  >
+                    {renaming === k.id ? "Saving..." : "Rename"}
+                  </button>
                   <button
                     type="button"
                     onClick={() => onChangeRole(k.id, k.role || "member", k.label || k.prefix)}

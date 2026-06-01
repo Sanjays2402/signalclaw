@@ -2,7 +2,35 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: SCIM 2.0 Groups with role-mapped membership
+## New: rename API keys without rotating the secret (PUT /admin/keys/:id/label)
+
+Procurement reality: when a person leaves or a service moves owners, the security team needs to relabel the credential in their inventory without forcing a key rotation across every integration. Before this change the only way to fix a stale label like "jane laptop" was to mint a new key and revoke the old one, which causes a downtime window and loses the audit history attached to the original key id. `PUT /admin/keys/:id/label` is the boring fix: metadata-only rename, admin scope plus admin MFA, audited transition, secret unchanged.
+
+- `ApiKeyStore.set_label()` (Python) and `setKeyLabel()` (TS) trim and clamp the new label to 80 chars and reject empty / whitespace input so the inventory never loses a human readable name. Suspended keys can still be renamed (common during incident handoff). Revoked keys and the env admin are refused. The secret hash, scopes, role, IP allowlist, expiry, and rotation grace window are all untouched.
+- `PUT /admin/keys/:id/label` is wired on both the FastAPI service (`src/signalclaw/api/app.py`) and the Next.js admin route (`web/app/api/admin/keys/[id]/label/route.ts`). Both paths require admin scope and pass through the standard admin-MFA guard. The TS route writes an audit row with `label:<before>-><after>` so a reviewer can answer "who renamed which key, when, from where"; the FastAPI route inherits the same audit coverage via `AuditMiddleware`.
+- A new `Rename` button on `/settings/keys` calls the endpoint inline next to the existing `Role`, `Rotate`, and `Suspend` actions. The prompt makes it explicit that the secret keeps working, the 80 char clamp is documented in the prompt, and the row refreshes from the server response so a buyer can watch the label change live.
+- `tests/test_api_keys_label.py` proves the rename succeeds, the secret still authenticates afterward, labels are trimmed and clamped, empty input is rejected with 400, a non-admin member key is denied with 403 and the original label is unchanged (RBAC cross-check), revoked keys 404, unknown ids 404, and a non-string body 400.
+
+### Try it
+
+```bash
+make dev
+make web          # http://localhost:3000/settings/keys
+
+# rename a key in place without rotating its secret:
+curl -fsS -X PUT -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"label": "ops bot, owner: platform-eng"}' \
+  http://localhost:3000/api/admin/keys/$KEY_ID/label | jq
+
+# or against the FastAPI service directly (port 7431):
+curl -fsS -X PUT -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"label": "ops bot, owner: platform-eng"}' \
+  http://localhost:7431/admin/keys/$KEY_ID/label | jq
+```
+
+## Previously: SCIM 2.0 Groups with role-mapped membership
 
 User provisioning landed in a prior pass, but Okta and Azure AD reviewers immediately ask the next question: "can we drive role assignment from an IdP group instead of asking your operator to PATCH every user?" Without `/scim/v2/Groups` the answer was no, and the procurement loop stalled on "how do we promote the on-call engineer to admin without a console click?". SignalClaw now ships SCIM Groups with a real role binding so an IdP membership change is the only source of truth.
 
@@ -50,7 +78,7 @@ Procurement reality: every enterprise security questionnaire ends with "send us 
 - `web/app/settings/evidence-pack/page.tsx` shows the filename, size, SHA-256 and build time before download, exposes the verification command, and is reachable from the settings nav, the admin landing surface list, and the `/admin/controls` inventory.
 - `tests/evidencePack.test.mjs` parses the generated archive with a hand-rolled central-directory reader, proves every documented file is present, that every manifest hash matches the on-disk bytes inside the archive, that two consecutive builds produce identical content for every non-timestamped file, and that the control inventory exposes the new row.
 
-### Verify the evidence pack
+### Try it
 
 ```bash
 make dev

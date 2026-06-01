@@ -165,6 +165,32 @@ export async function setKeyRole(
   return k;
 }
 
+// Rename a key without rotating its secret. Labels are trimmed and
+// clamped to 80 chars so the inventory always shows a readable name.
+// Empty / whitespace-only input raises so a slipped form submission
+// cannot blank out an owner name. Refuses the env admin (label is
+// hard-coded) and revoked keys.
+export async function setKeyLabel(
+  id: string,
+  label: string,
+): Promise<StoredKey | null> {
+  if (id === "env-admin") return null;
+  if (typeof label !== "string") {
+    throw new Error("invalid_label: must be a string");
+  }
+  const next = label.trim().slice(0, 80);
+  if (!next) {
+    throw new Error("invalid_label: must not be empty");
+  }
+  const store = await readStore();
+  const k = store.keys.find((x) => x.id === id);
+  if (!k) return null;
+  if (k.revoked) return null;
+  k.label = next;
+  await writeStore(store);
+  return k;
+}
+
 export async function setKeySuspended(
   id: string,
   suspended: boolean,

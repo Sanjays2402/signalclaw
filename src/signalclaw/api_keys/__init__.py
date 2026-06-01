@@ -426,6 +426,34 @@ class ApiKeyStore:
                 self._reload_index()
             return updated
 
+    def set_label(self, key_id: str, label: str) -> Optional[StoredKey]:
+        """Rename an API key without rotating its secret.
+
+        Labels are free-form (1..80 chars). Empty/whitespace input is
+        rejected with ``ValueError`` so an admin cannot accidentally
+        blank out a key's name and lose track of who owns it. Returns
+        the updated record or ``None`` if the key is missing or revoked.
+        Suspended keys can still be relabelled; that's a common case
+        when handing off ownership during an incident.
+        """
+        if not isinstance(label, str):
+            raise ValueError("label must be a string")
+        new_label = label.strip()[:80]
+        if not new_label:
+            raise ValueError("label must not be empty")
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    r.label = new_label
+                    updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
+
     def set_ip_allowlist(self, key_id: str, cidrs: Iterable[str]) -> Optional[StoredKey]:
         """Replace the IP allowlist on a key. Validates every CIDR.
 
