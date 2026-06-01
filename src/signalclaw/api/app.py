@@ -919,6 +919,82 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "key not found")
         return updated.to_public()
 
+    # --- Access reviews (SOC2 CC6.3 / ISO 27001 A.9.2.5) ---------------
+    # Every live API key must be re-attested by an admin on a cadence
+    # (default 90 days). The two endpoints below let an operator record
+    # an attestation and list every key that is overdue, so the access
+    # review program is enforceable and auditable from one place. All
+    # writes pass through AuditMiddleware so the actor, target key id,
+    # and timestamp land in the immutable audit log automatically.
+    @app.get(
+        "/admin/keys/review-overdue",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_keys_review_overdue():
+        """List API keys whose access review is past due.
+
+        Used by the admin console queue and the SOC2 evidence pack to
+        prove that periodic access reviews are being executed on the
+        configured cadence.
+        """
+        rows = api_key_store.list_review_overdue()
+        return {"keys": [k.to_public() for k in rows], "count": len(rows)}
+
+    @app.post(
+        "/admin/keys/{key_id}/review",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_keys_review(
+        key_id: str,
+        request: Request,
+        body: dict | None = None,
+    ):
+        """Record an access-review attestation for ``key_id``.
+
+        Stamps ``last_reviewed_at`` to now and ``last_reviewed_by`` to
+        the calling key's prefix so an auditor can trace each
+        attestation back to a person. Optional ``interval_days``
+        (1..365) updates the review cadence in the same call so an
+        admin can extend or tighten a key's window without a second
+        round trip.
+        """
+        b = body or {}
+        # Identify the reviewer from the active credential. We never log
+        # the raw secret; the prefix is enough to disambiguate keys in
+        # the audit trail and is already shown in /admin/keys.
+        actor_key = request.headers.get("x-api-key", "") or ""
+        reviewer = (actor_key[:12] + "...") if actor_key else None
+        if "interval_days" in b and b.get("interval_days") is not None:
+            try:
+                api_key_store.set_review_interval(key_id, b.get("interval_days"))
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+        updated = api_key_store.attest_review(key_id, reviewer=reviewer)
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
+
+    @app.put(
+        "/admin/keys/{key_id}/review-interval",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_keys_set_review_interval(key_id: str, body: dict):
+        """Change the access-review cadence for a key.
+
+        Body: ``{"days": <1..365>}``. Does not record an attestation;
+        use ``POST /admin/keys/{id}/review`` for that.
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        days = body.get("days")
+        try:
+            updated = api_key_store.set_review_interval(key_id, days)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
+
     @app.post("/admin/keys/{key_id}/rotate",
               dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_rotate(key_id: str, body: dict | None = None):

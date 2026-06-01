@@ -16,7 +16,7 @@ import json
 import secrets
 import threading
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -161,6 +161,51 @@ def is_expired(stored: "StoredKey") -> bool:
         return True
 
 
+def review_due_at(stored: "StoredKey") -> Optional[str]:
+    """Return the ISO-8601 UTC instant when this key's next access
+    review is due, or ``None`` if it has no creation timestamp.
+
+    The clock starts at the most recent of ``last_reviewed_at`` and
+    ``created_at`` (so a brand-new key is not instantly overdue; it
+    has the full window to be attested) and ticks forward by
+    ``review_interval_days`` (clamped to a sane 1..365). Unparseable
+    timestamps fail closed: we treat them as due immediately so an
+    auditor sees the row in the overdue list rather than silently
+    losing it.
+    """
+    anchor = (stored.last_reviewed_at or stored.created_at or "").strip()
+    if not anchor:
+        return None
+    try:
+        base = datetime.strptime(anchor, "%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        # Surface as immediately due; an admin can re-attest and the
+        # next call recomputes from a known-good timestamp.
+        return _now_iso()
+    days = int(getattr(stored, "review_interval_days", 90) or 90)
+    days = max(1, min(365, days))
+    return (base + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def is_review_overdue(stored: "StoredKey") -> bool:
+    """Return True if the next review is due in the past.
+
+    Revoked keys are never overdue (you don't attest a dead credential)
+    so the admin queue stays focused on live access. Suspended keys are
+    still listed because they may be unsuspended; an auditor wants to
+    know they exist.
+    """
+    if getattr(stored, "revoked", False):
+        return False
+    due = review_due_at(stored)
+    if not due:
+        return False
+    try:
+        return due <= _now_iso()
+    except Exception:
+        return True
+
+
 def is_ip_allowed(stored: "StoredKey", client_ip: str) -> bool:
     """Return True if ``client_ip`` matches the key's allowlist.
 
@@ -238,6 +283,18 @@ class StoredKey:
     suspended_at: Optional[str] = None
     suspended_reason: Optional[str] = None
     suspended_by: Optional[str] = None
+    # Periodic access review (SOC2 CC6.3 / ISO 27001 A.9.2.5). Each key
+    # must be re-attested by an admin every ``review_interval_days``;
+    # ``last_reviewed_at`` records the most recent attestation ISO-8601
+    # UTC. ``review_interval_days`` defaults to 90 (the standard SOC2
+    # cadence) and is clamped to 1..365 by ``set_review_interval``.
+    # ``last_reviewed_by`` stores the actor id/prefix that performed
+    # the review so an auditor can trace each attestation back to a
+    # person, not just a system event. ``None`` means the key has
+    # never been reviewed (it was created and never attested).
+    last_reviewed_at: Optional[str] = None
+    last_reviewed_by: Optional[str] = None
+    review_interval_days: int = 90
 
     def to_public(self) -> Dict:
         d = asdict(self)
@@ -250,6 +307,8 @@ class StoredKey:
         # what an older on-disk row happens to list.
         d["role"] = normalise_role(self.role)
         d["effective_scopes"] = cap_scopes_to_role(self.scopes, self.role)
+        d["review_due_at"] = review_due_at(self)
+        d["review_overdue"] = is_review_overdue(self)
         return d
 
 
@@ -314,6 +373,9 @@ class ApiKeyStore:
                 suspended_at=r.get("suspended_at") or None,
                 suspended_reason=r.get("suspended_reason") or None,
                 suspended_by=r.get("suspended_by") or None,
+                last_reviewed_at=r.get("last_reviewed_at") or None,
+                last_reviewed_by=r.get("last_reviewed_by") or None,
+                review_interval_days=int(r.get("review_interval_days", 90) or 90),
             ))
         return out
 
@@ -453,6 +515,72 @@ class ApiKeyStore:
                 self._write(rows)
                 self._reload_index()
             return updated
+
+    def attest_review(
+        self,
+        key_id: str,
+        reviewer: Optional[str] = None,
+    ) -> Optional[StoredKey]:
+        """Record an access-review attestation for ``key_id``.
+
+        Stamps ``last_reviewed_at`` to now and ``last_reviewed_by`` to
+        ``reviewer`` (truncated to 64 chars). Returns the updated key,
+        or ``None`` if the key is missing or revoked. Suspended keys
+        can still be reviewed: an auditor may want to attest "yes, we
+        looked at this credential and confirmed it stays suspended".
+        """
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    r.last_reviewed_at = _now_iso()
+                    r.last_reviewed_by = (reviewer or "").strip()[:64] or None
+                    updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
+
+    def set_review_interval(
+        self,
+        key_id: str,
+        days: int,
+    ) -> Optional[StoredKey]:
+        """Change how often this key must be re-attested.
+
+        Clamps to 1..365 days. Raises ``ValueError`` for non-integer
+        input so the API can return a structured 400. Does not move
+        ``last_reviewed_at``; the next-due timestamp recomputes off
+        the existing anchor.
+        """
+        try:
+            n = int(days)
+        except (TypeError, ValueError):
+            raise ValueError("days must be an integer")
+        if n < 1 or n > 365:
+            raise ValueError("days must be between 1 and 365")
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    r.review_interval_days = n
+                    updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
+
+    def list_review_overdue(self) -> List[StoredKey]:
+        """Return every live key whose access review is past due.
+
+        Used by the admin console queue and the SOC2 evidence pack to
+        prove the access-review program is being executed on cadence.
+        """
+        return [r for r in self._read() if is_review_overdue(r)]
 
     def set_ip_allowlist(self, key_id: str, cidrs: Iterable[str]) -> Optional[StoredKey]:
         """Replace the IP allowlist on a key. Validates every CIDR.

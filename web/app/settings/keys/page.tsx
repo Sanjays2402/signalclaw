@@ -39,6 +39,11 @@ type StoredKey = {
   suspended?: boolean;
   suspended_at?: string | null;
   suspended_reason?: string | null;
+  last_reviewed_at?: string | null;
+  last_reviewed_by?: string | null;
+  review_interval_days?: number;
+  review_due_at?: string | null;
+  review_overdue?: boolean;
 };
 
 type KeyList = { keys: StoredKey[] };
@@ -71,6 +76,7 @@ export default function ApiKeysPage() {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [rotating, setRotating] = useState<string | null>(null);
   const [suspending, setSuspending] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState<string | null>(null);
   const [editingAllowlist, setEditingAllowlist] = useState<string | null>(null);
   const [allowlistDraft, setAllowlistDraft] = useState("");
   const [allowlistErr, setAllowlistErr] = useState<string | null>(null);
@@ -377,6 +383,38 @@ export default function ApiKeysPage() {
     }
   }
 
+  async function onAttestReview(
+    id: string,
+    displayLabel: string,
+    intervalDays: number | undefined,
+  ) {
+    const currentInterval = intervalDays && intervalDays > 0 ? intervalDays : 90;
+    const ans = window.prompt(
+      `Attest access review for "${displayLabel}"?\n\nConfirms you have validated the owner, scope, and continued business need for this credential. Records your actor id in the audit trail. Optional: change the review cadence (days, 1..365).`,
+      String(currentInterval),
+    );
+    if (ans === null) return;
+    const body: { interval_days?: number } = {};
+    const parsed = parseInt(ans.trim() || "0", 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      const clamped = Math.max(1, Math.min(365, parsed));
+      if (clamped !== currentInterval) body.interval_days = clamped;
+    }
+    setReviewing(id);
+    try {
+      await api(`/admin/keys/${id}/review`, {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: { "Content-Type": "application/json" },
+      });
+      mutate();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReviewing(null);
+    }
+  }
+
   async function onRotate(id: string, displayLabel: string) {
     const ans = window.prompt(
       `Rotate "${displayLabel}"?\n\nEnter grace seconds to keep the old secret valid during cutover (0..604800).\nLeave empty or 0 for immediate rotation.`,
@@ -607,11 +645,23 @@ export default function ApiKeysPage() {
                         suspended{k.suspended_reason ? ` · ${k.suspended_reason}` : ""}
                       </Badge>
                     )}
+                    {k.review_overdue && (
+                      <Badge tone="warn">
+                        review overdue
+                      </Badge>
+                    )}
                   </div>
                   <div className="text-[11px] muted mono mt-0.5">
                     {k.prefix}… · created {fmtDate(k.created_at)}
                     {k.last_used_at ? ` · last used ${fmtDate(k.last_used_at)}` : " · never used"}
                     {k.expires_at ? ` · expires ${fmtDate(k.expires_at)}` : " · no expiry"}
+                  </div>
+                  <div className="text-[11px] muted mono mt-0.5">
+                    {k.last_reviewed_at
+                      ? `reviewed ${fmtDate(k.last_reviewed_at)}${k.last_reviewed_by ? ` by ${k.last_reviewed_by}` : ""}`
+                      : "never reviewed"}
+                    {k.review_due_at ? ` · next due ${fmtDate(k.review_due_at)}` : ""}
+                    {k.review_interval_days ? ` · every ${k.review_interval_days}d` : ""}
                   </div>
                   {(k.last_used_ip || k.last_used_user_agent) && (
                     <div
@@ -637,6 +687,23 @@ export default function ApiKeysPage() {
                     title="Rename this key without rotating the secret"
                   >
                     {renaming === k.id ? "Saving..." : "Rename"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onAttestReview(k.id, k.label || k.prefix, k.review_interval_days)}
+                    disabled={reviewing === k.id || revoking === k.id}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] border rounded-sm disabled:opacity-50 ${
+                      k.review_overdue
+                        ? "border-amber-500/60 text-amber-300 hover:bg-amber-500/10"
+                        : "border-[var(--border-strong)] hover:bg-white/[0.06]"
+                    }`}
+                    title={
+                      k.review_overdue
+                        ? "Access review overdue. Click to attest."
+                        : "Record an access review attestation for this key"
+                    }
+                  >
+                    {reviewing === k.id ? "Recording..." : k.review_overdue ? "Review now" : "Review"}
                   </button>
                   <button
                     type="button"

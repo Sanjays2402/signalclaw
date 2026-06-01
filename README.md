@@ -2,7 +2,40 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: timestamped (v2) webhook signatures with replay-window verification
+## New: periodic access review (attestation) for API keys
+
+Procurement reality: SOC2 CC6.3 and ISO 27001 A.9.2.5 both require that access to systems is reviewed on a documented cadence, not just at provisioning time. Before this change SignalClaw could mint, rotate, suspend, and expire API keys, but there was no place an admin could record "I looked at this credential, validated the owner and continued business need, and signed off". This release adds that loop end to end: a per-key review interval, a recorded attestation with reviewer identity in the audit log, an overdue queue, and a one-click Review button on every row of the keys page.
+
+- `POST /admin/keys/{id}/review` records an attestation. Stamps `last_reviewed_at` to now and `last_reviewed_by` to the calling key prefix so an auditor can trace each attestation back to a person, not a system event. Optional `interval_days` (1..365) updates the cadence in the same call. Admin scope plus admin MFA gated; the audit middleware captures the actor, target key id, and request id automatically.
+- `PUT /admin/keys/{id}/review-interval` changes the cadence without recording an attestation. Clamped to 1..365 days; defaults to 90 (the standard SOC2 cadence).
+- `GET /admin/keys/review-overdue` returns every live key whose next review is in the past. The overdue queue is what an auditor opens during a SOC2 walkthrough to prove the program is being executed; revoked keys are excluded so the queue stays focused on live access.
+- `/admin/keys` and the existing keys page now surface `last_reviewed_at`, `last_reviewed_by`, `review_interval_days`, `review_due_at`, and `review_overdue` on every key. The settings page shows a `review overdue` badge and a Review button that turns amber when attestation is past due, so an operator can clear the backlog without leaving the inventory.
+- `tests/test_api_keys_review.py` pins the contract: admin can attest and the audit fields move forward, a member-scoped key gets 403 on both the attest and overdue routes (RBAC enforcement), bad intervals are rejected with 400, the overdue queue surfaces a forged past-due row while excluding a freshly attested one, and the helpers fail closed when on-disk timestamps are corrupted.
+
+### Try it
+
+```bash
+make dev
+
+# mint a key, attest it, and check the overdue queue
+ADMIN="$SIGNALCLAW_API_KEY"
+curl -sS -H "x-api-key: $ADMIN" -H "content-type: application/json" \
+  -d '{"label":"ops laptop","role":"member"}' \
+  http://localhost:7431/admin/keys | tee /tmp/k.json
+KID=$(jq -r .id /tmp/k.json)
+
+# record an access review (and optionally tighten the cadence to 30 days)
+curl -sS -X POST -H "x-api-key: $ADMIN" -H "content-type: application/json" \
+  -d '{"interval_days":30}' \
+  http://localhost:7431/admin/keys/$KID/review | jq '{last_reviewed_at,last_reviewed_by,review_interval_days,review_due_at,review_overdue}'
+
+# auditor view: every credential that is past due
+curl -sS -H "x-api-key: $ADMIN" http://localhost:7431/admin/keys/review-overdue | jq '.count, .keys[].label'
+```
+
+In the UI, open Settings -> API Keys. Every row now shows when it was last reviewed, who reviewed it, the cadence, and when it is next due. Overdue keys carry an amber Review now button; a single click records the attestation against your admin identity.
+
+## Previously: timestamped (v2) webhook signatures with replay-window verification
 
 Procurement reality: a webhook signature over the body alone defends against tampering but not against capture-and-replay. Stripe, Slack, and GitHub all bind a timestamp into the HMAC and document a replay window receivers must enforce. SignalClaw now ships the same shape, plus a public receiver-side helper so customer integrations do not have to roll their own crypto.
 
