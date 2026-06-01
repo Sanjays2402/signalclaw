@@ -134,6 +134,45 @@ def diff_picks(
 # legacy data does not silently leak to a newly-created user key.
 LEGACY_OWNER: Optional[str] = None
 
+# Circuit breaker: number of consecutive failed logical deliveries
+# (after per-delivery retries) before a subscription is auto-disabled.
+# Stripe uses ~16, GitHub uses 3. We pick 5 for a self-hosted low-volume
+# signal stream so dead endpoints stop being hammered.
+AUTO_DISABLE_FAILURE_THRESHOLD: int = 5
+
+
+def _is_success(status: Optional[int]) -> bool:
+    return status is not None and 200 <= int(status) < 300
+
+
+OutcomeFn = Callable[["WebhookSubscription", str, Dict[str, Any]], None]
+
+
+def _apply_outcome(sub: "WebhookSubscription", status: Optional[int],
+                   err: Optional[str], now_iso: str) -> Optional[str]:
+    """Update circuit-breaker state in-place on ``sub``.
+
+    Returns ``"auto_disabled"`` when this call flipped the subscription
+    to auto-disabled, ``"recovered"`` when it cleared a prior
+    auto-disable, otherwise ``None``.
+    """
+    if _is_success(status):
+        recovered = sub.auto_disabled_at is not None
+        sub.consecutive_failures = 0
+        if recovered:
+            sub.auto_disabled_at = None
+            sub.auto_disable_reason = None
+        return "recovered" if recovered else None
+    sub.consecutive_failures = int(sub.consecutive_failures or 0) + 1
+    if (sub.enabled and sub.auto_disabled_at is None
+            and sub.consecutive_failures >= AUTO_DISABLE_FAILURE_THRESHOLD):
+        sub.enabled = False
+        sub.auto_disabled_at = now_iso
+        reason = err or (f"http_{status}" if status else "transport_error")
+        sub.auto_disable_reason = str(reason)[:200]
+        return "auto_disabled"
+    return None
+
 
 @dataclass
 class WebhookSubscription:
@@ -158,6 +197,19 @@ class WebhookSubscription:
     previous_secret: str = ""
     previous_secret_expires_at: Optional[str] = None
     secret_rotated_at: Optional[str] = None
+    # Circuit-breaker state. ``consecutive_failures`` counts back-to-back
+    # non-2xx logical deliveries (after the per-delivery retry budget
+    # is exhausted). When it reaches :data:`AUTO_DISABLE_FAILURE_THRESHOLD`
+    # the subscription is flipped to ``enabled=False`` and the
+    # ``auto_disabled_at`` / ``auto_disable_reason`` fields are
+    # populated. An operator must reactivate via
+    # ``POST /webhooks/{id}/reactivate`` once the receiver is healthy.
+    # A 2xx delivery resets the counter and clears the auto-disable
+    # fields. Required for enterprise procurement so a dead endpoint
+    # cannot be hammered or hold a queue indefinitely.
+    consecutive_failures: int = 0
+    auto_disabled_at: Optional[str] = None
+    auto_disable_reason: Optional[str] = None
     # Tenant-isolation field. Holds the ``StoredKey.id`` of the API key
     # that created the subscription. ``None`` is the legacy / admin
     # bucket: rows that predate this field, or that were created by the
@@ -186,6 +238,9 @@ class WebhookSubscription:
             previous_secret=str(d.get("previous_secret", "") or ""),
             previous_secret_expires_at=d.get("previous_secret_expires_at"),
             secret_rotated_at=d.get("secret_rotated_at"),
+            consecutive_failures=int(d.get("consecutive_failures", 0) or 0),
+            auto_disabled_at=d.get("auto_disabled_at"),
+            auto_disable_reason=d.get("auto_disable_reason"),
             owner_key_id=d.get("owner_key_id"),
         )
 
@@ -457,6 +512,7 @@ def deliver_events(
     log_store: Optional[DeliveryLogStore] = None,
     max_attempts: int = 3,
     sleep: Optional[Callable[[float], None]] = None,
+    on_outcome: Optional[OutcomeFn] = None,
 ) -> List[Dict[str, Any]]:
     """Send events to every matching subscriber with retries + delivery log.
 
@@ -497,7 +553,18 @@ def deliver_events(
         sub.last_status = int(status)
         sub.last_error = err or None
         sub.last_delivered_at = delivered_at
+        transition = _apply_outcome(sub, int(status) if status else None,
+                                    err or None, delivered_at)
         store.update(sub)
+        if on_outcome and transition:
+            try:
+                on_outcome(sub, transition,
+                           {"status": int(status) if status else None,
+                            "error": err or None,
+                            "consecutive_failures": sub.consecutive_failures,
+                            "delivered_at": delivered_at})
+            except Exception:
+                pass
         if log_store is not None:
             log_store.append(DeliveryAttempt(
                 id=uuid.uuid4().hex[:12],
@@ -527,6 +594,7 @@ def replay_delivery(
     timeout: int = 5,
     max_attempts: int = 3,
     sleep: Optional[Callable[[float], None]] = None,
+    on_outcome: Optional[OutcomeFn] = None,
 ) -> Optional[DeliveryAttempt]:
     """Re-send a previously logged attempt byte-for-byte.
 
@@ -553,7 +621,19 @@ def replay_delivery(
     sub.last_status = int(status)
     sub.last_error = err or None
     sub.last_delivered_at = delivered_at
+    transition = _apply_outcome(sub, int(status) if status else None,
+                                err or None, delivered_at)
     sub_store.update(sub)
+    if on_outcome and transition:
+        try:
+            on_outcome(sub, transition,
+                       {"status": int(status) if status else None,
+                        "error": err or None,
+                        "consecutive_failures": sub.consecutive_failures,
+                        "delivered_at": delivered_at,
+                        "replay_of": attempt_id})
+        except Exception:
+            pass
     return log_store.append(DeliveryAttempt(
         id=uuid.uuid4().hex[:12],
         subscription_id=sub.id,

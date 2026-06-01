@@ -2,7 +2,31 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: discoverable observability and security surface for SRE and procurement reviewers
+## New: webhook circuit breaker auto-disables dead delivery endpoints
+
+SignalClaw already retried each outbound webhook with exponential backoff, signed every payload with HMAC SHA-256, kept a per-attempt replay log, and isolated subscriptions per API key. What it did not do is stop. A receiver that returned 500 forever (DNS gone, app retired, customer firewalled us) kept burning retries and audit space on every fan-out, and a procurement reviewer had no answer to "what stops a dead endpoint from being hammered." The circuit breaker closes that gap.
+
+- `src/signalclaw/webhooks/__init__.py` tracks `consecutive_failures` on each subscription and flips `enabled` to `false` with `auto_disabled_at` and `auto_disable_reason` after `AUTO_DISABLE_FAILURE_THRESHOLD` (5) back-to-back failed logical deliveries. Any 2xx response resets the counter and clears the auto-disable fields, so a transient blip recovers on the next success. The same path runs for both `deliver_events` and `replay_delivery` so manual replays cannot bypass the breaker.
+- `POST /webhooks/{id}/reactivate` (FastAPI) clears the breaker, with the same per-tenant ownership gate used elsewhere on the `/webhooks` surface: a non-owner gets a flat 404 so cross-tenant existence does not leak, and an admin-scope key can act on any subscription. Every auto-disable, recovery, and manual reactivation appends a structured row to the hash-chained audit log (`webhook.auto_disabled`, `webhook.recovered`, `webhook.reactivated`) for SOC2 traceability.
+- `WebhookOut` now ships `consecutive_failures`, `auto_disabled_at`, and `auto_disable_reason` so dashboards and the admin console can surface the breaker state without reaching into private storage.
+- `tests/test_webhooks_circuit_breaker.py` proves the threshold flip, the success-resets-counter recovery path, that a non-owner cannot reactivate someone else's webhook (404, not 403), and that an admin can.
+
+### Try it
+
+```bash
+make dev
+make api          # http://localhost:7431
+
+# inspect circuit-breaker state on your subscriptions:
+curl -fsS -H "x-api-key: $SIGNALCLAW_API_KEY" http://localhost:7431/webhooks \
+  | jq '.subscriptions[] | {id, url, enabled, consecutive_failures, auto_disabled_at, auto_disable_reason}'
+
+# manually reactivate after fixing the receiver:
+curl -fsS -X POST -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  http://localhost:7431/webhooks/$SUB_ID/reactivate | jq
+```
+
+## Previously: discoverable observability and security surface for SRE and procurement reviewers
 
 SignalClaw already exposed `/healthz`, `/readyz`, and `/metrics` (Prometheus text exposition) from the dashboard process, propagated `X-Request-Id` through edge middleware into every audit row, and shipped settings pages for SSO, SCIM, audit, freeze, and the admin console. None of those pages were linked from `/settings`, so a buyer's security or SRE reviewer could not find them without grepping the repo. That is the difference between "we have it" and "we pass review". This change makes the surface discoverable.
 
