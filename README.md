@@ -2,7 +2,36 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: API-key RBAC roles (owner / admin / member / viewer) with audited role changes
+## New: reversible API key suspend on the FastAPI service (POST /admin/keys/:id/suspend)
+
+The Next.js admin console already had a Suspend / Resume button on every API key row, but it only flipped state in the TypeScript shadow store. The FastAPI service that customers actually call (`/admin/keys`, `/v1/runs`, `/picks`, `/watchlist`, every other authenticated route) had no suspend surface at all, so a leaked or compromised key could only be permanently revoked. That is an incident-response gap enterprise procurement asks about explicitly: "can you pause this credential without destroying its scopes / ip-allowlist / forensic fingerprint while we investigate, and lift the hold in one click after?"
+
+- `src/signalclaw/api_keys/__init__.py` adds four `suspended_*` fields on `StoredKey`, a `suspend(key_id, reason, actor)` method and a matching `resume(key_id)` on `ApiKeyStore`. Suspended rows are dropped from the auth lookup index so every request signed with the key fails 401 on the very next call, while the row keeps its scopes, role, ip-allowlist, expiry, last-used IP / UA, and rotation history. Resume clears all four fields so the post-resume row is indistinguishable from one that was never suspended.
+- `POST /admin/keys/{id}/suspend` and `POST /admin/keys/{id}/resume` are gated by admin scope plus the existing admin-MFA guard used by every other mutating admin route. Suspend accepts an optional `{ "reason": "<=200 chars" }` that is persisted on the row and surfaced in `GET /admin/keys`. Both routes flow through `AuditMiddleware`, so the actor key, source IP, request id, and timestamp land on the hash-chained audit log without extra plumbing. Suspending an already-suspended row is a 200 no-op; suspending a revoked row returns 404 (revocation is terminal).
+- `tests/test_api_keys_suspend.py` proves the contract end to end against the real FastAPI app: baseline auth works, suspend returns 401 on the next request, the admin listing still shows the suspended row with its reason, idempotent re-suspend is a no-op, resume restores both read and trade access on the original secret, non-admin callers get 403, missing keys return 404, a non-string reason is rejected 400, and a revoked key cannot be suspended.
+
+### Try it
+
+```bash
+make dev
+make api          # http://localhost:7431
+make web          # http://localhost:3000/settings/keys
+
+# pause a possibly-compromised key during incident response:
+curl -fsS -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"reason": "incident-2026-IR-42"}' \
+  http://localhost:7431/admin/keys/$KEY_ID/suspend | jq
+
+# confirm the key now fails auth (expect HTTP 401):
+curl -i -H "x-api-key: $SUSPECT_SECRET" http://localhost:7431/watchlist
+
+# lift the hold after the investigation clears:
+curl -fsS -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7431/admin/keys/$KEY_ID/resume | jq
+```
+
+## Previously: API-key RBAC roles (owner / admin / member / viewer) with audited role changes
 
 The admin console already exposed a `Role` button on every API key row, but the backend route it called did not exist, so every click 404'd and the `role` field on key listings was always blank. That is an enterprise procurement blocker: a reviewer asking "can you downgrade a leaked trading key to read-only without rotating it?" needs a real answer. This change wires RBAC roles end to end.
 

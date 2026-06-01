@@ -834,6 +834,42 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "key not found")
         return {"revoked": key_id}
 
+    @app.post("/admin/keys/{key_id}/suspend",
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_keys_suspend(key_id: str, body: dict | None = None):
+        """Reversibly disable an API key.
+
+        Body (optional): ``{"reason": "<=200 chars"}``. Different from
+        ``DELETE /admin/keys/{id}`` (revoke), which is a permanent
+        tombstone. Suspended keys fail auth immediately (next request
+        returns 401) but keep their scopes, role, ip-allowlist, expiry,
+        and forensic last-use fingerprint so an operator can resume
+        them in one click after the incident clears. The mutation is
+        captured by AuditMiddleware (actor / IP / target / timestamp).
+        """
+        b = body or {}
+        reason = b.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            raise HTTPException(400, "reason must be a string")
+        updated = api_key_store.suspend(key_id, reason=reason)
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
+
+    @app.post("/admin/keys/{key_id}/resume",
+              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_keys_resume(key_id: str):
+        """Lift a prior :func:`admin_keys_suspend`.
+
+        Clears all ``suspended_*`` fields so the key returns to its
+        pre-suspension posture. No-op on rows that are not suspended.
+        Refuses revoked rows. Returns 404 if the key is missing.
+        """
+        updated = api_key_store.resume(key_id)
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
+
     @app.put("/admin/keys/{key_id}/role",
              dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
     def admin_keys_set_role(key_id: str, body: dict):

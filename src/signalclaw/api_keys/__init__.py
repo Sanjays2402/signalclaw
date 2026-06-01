@@ -227,12 +227,24 @@ class StoredKey:
     # Both default to ``None`` so legacy rows on disk keep deserialising.
     last_used_ip: Optional[str] = None
     last_used_user_agent: Optional[str] = None
+    # Reversible disable, distinct from ``revoked`` (which is a
+    # permanent tombstone). A suspended key is dropped from the auth
+    # index so every request authenticated with it fails 401, but the
+    # row keeps its scopes, role, ip-allowlist, expiry, and forensic
+    # fingerprint so an operator can resume it in one click after an
+    # incident review. SOC2-style hygiene: incident responders need a
+    # "pause this credential" surface that is not destructive.
+    suspended: bool = False
+    suspended_at: Optional[str] = None
+    suspended_reason: Optional[str] = None
+    suspended_by: Optional[str] = None
 
     def to_public(self) -> Dict:
         d = asdict(self)
         d.pop("hash")
         d.pop("previous_hash", None)
         d["expired"] = is_expired(self)
+        d["suspended"] = bool(self.suspended)
         # Expose the effective scopes after the role cap so the UI and
         # any operator script sees what the key can actually do, not
         # what an older on-disk row happens to list.
@@ -259,6 +271,11 @@ class ApiKeyStore:
         idx: Dict[str, StoredKey] = {}
         for r in rows:
             if r.revoked:
+                continue
+            if r.suspended:
+                # Suspended keys must fail auth without being removed:
+                # keep them out of the lookup index. ``list``/``get``
+                # still surface them in admin views.
                 continue
             if is_expired(r):
                 # Treat hard-expired keys exactly like revoked ones: never
@@ -293,6 +310,10 @@ class ApiKeyStore:
                 role=normalise_role(r.get("role")),
                 last_used_ip=r.get("last_used_ip") or None,
                 last_used_user_agent=r.get("last_used_user_agent") or None,
+                suspended=bool(r.get("suspended", False)),
+                suspended_at=r.get("suspended_at") or None,
+                suspended_reason=r.get("suspended_reason") or None,
+                suspended_by=r.get("suspended_by") or None,
             ))
         return out
 
@@ -460,6 +481,63 @@ class ApiKeyStore:
             self._write(rows)
             self._reload_index()
         return updated, new_secret
+
+    def suspend(self, key_id: str, reason: Optional[str] = None,
+                actor: Optional[str] = None) -> Optional[StoredKey]:
+        """Reversibly disable a key. Returns the updated row or None.
+
+        A suspended key is dropped from the auth index so any request
+        signed with it fails 401. Scopes, role, ip-allowlist, expiry,
+        and forensic fingerprint are preserved so :meth:`resume`
+        restores the exact prior posture. No-ops on already-suspended
+        rows. Refuses revoked rows (revocation is terminal).
+        """
+        clean_reason = (reason or "").strip()[:200] or None
+        clean_actor = (actor or "").strip()[:64] or None
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    if not r.suspended:
+                        r.suspended = True
+                        r.suspended_at = _now_iso()
+                        r.suspended_reason = clean_reason
+                        r.suspended_by = clean_actor
+                    updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
+
+    def resume(self, key_id: str, actor: Optional[str] = None) -> Optional[StoredKey]:
+        """Lift a prior :meth:`suspend`. No-op on non-suspended rows.
+
+        Clears all four ``suspended_*`` fields so the resumed row
+        looks indistinguishable from one that was never suspended.
+        Returns the updated row, or ``None`` if the key is missing or
+        revoked. ``actor`` is accepted for symmetry with
+        :meth:`suspend` but is not persisted: the audit log is the
+        canonical record of who resumed a key and when.
+        """
+        del actor  # audit-log responsibility, not store responsibility
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    if r.suspended:
+                        r.suspended = False
+                        r.suspended_at = None
+                        r.suspended_reason = None
+                        r.suspended_by = None
+                    updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
 
     def revoke(self, key_id: str) -> bool:
         with self._lock:

@@ -1,0 +1,13 @@
+{
+  "enabled": false,
+  "issuer": "",
+  "client_id": "",
+  "client_secret": "",
+  "redirect_uri": "",
+  "allowed_email_domains": [],
+  "default_role": "viewer",
+  "default_scopes": [
+    "read"
+  ],
+  "updated_at": null
+}
