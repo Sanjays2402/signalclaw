@@ -27,3 +27,4 @@ data/quotas.json
 data/session_revocations.json
 data/sessions.json
 data/webhook_deliveries.json
+data/sso/
