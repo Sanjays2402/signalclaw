@@ -2,7 +2,32 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-API-key watchlist multi-tenancy
+## New: SIEM-ready NDJSON export of the tamper-evident audit log
+
+The `/api/audit/export.csv` flow has always been good enough for a procurement spreadsheet, but Splunk / Datadog / Elastic ingest pipelines need the full structured event, not a flattened CSV row. The new NDJSON export streams the complete audit record per line, including the `details` JSON object and the `prev_hash` + `hash` chain fields, so an enterprise SOC can re-verify chain integrity after import. The export itself is appended to the audit chain as `GET /api/audit/export.jsonl`, capturing who pulled what.
+
+- `GET /api/audit/export.jsonl` streams matching events as NDJSON. Same filters as `/api/audit` (`key_id`, `method`, `route`, `ok`, `since`, `limit`). Default cap 100k rows; max 1M. Sends `Content-Type: application/x-ndjson` and an `x-signalclaw-audit-format: ndjson;chain=hmac-sha256` hint for SIEM-side verifiers.
+- Bypasses the 1000-row UI cap on `queryAudit`, so a full workspace can be exfiltrated to the buyer's log lake in one request without paging.
+- Admin-scoped when `SIGNALCLAW_ADMIN_KEY` is set; mirrors local-mode behavior otherwise. Denials are audited with `reason: "forbidden:admin-required"`.
+- New `streamAuditFiltered()` helper in `lib/auditStore.ts` is unit-tested for newest-first ordering, predicate correctness, full event shape (chain fields preserved), and the 1000-row cap bypass.
+- UI surface: `/settings/audit` gained an `Export JSONL` button next to the existing CSV button. Same filters apply.
+
+### Try it
+
+```bash
+cd web && pnpm dev    # http://localhost:7430
+
+# Pull every audited event from the last 24h as NDJSON.
+curl -s -H "Authorization: Bearer $SIGNALCLAW_ADMIN_KEY" \
+  "http://localhost:7430/api/audit/export.jsonl?since=$(date -u -v-1d +%Y-%m-%dT%H:%M:%SZ)" \
+  -o audit.jsonl
+wc -l audit.jsonl
+
+# Each line is a full event including the hash chain.
+head -1 audit.jsonl | jq '{ts, route, method, status, key_id, prev_hash, hash}'
+```
+
+## Previously: per-API-key watchlist multi-tenancy
 
 The Python `/watchlist`, `/picks`, and `/report.md` endpoints used to share one universe across every API key in a deployment, which meant a ticker added by one customer was visible to and removable by every other customer hitting the same backend. Procurement reviewers flagged this as a hard multi-tenancy finding because the watchlist also drives the daily report and the regime classifier output, so cross-tenant leakage at the universe layer also leaked downstream model output. SignalClaw now stores one watchlist per user-managed API key (`StoredKey.id`), seeded from the default universe on first read, and the legacy operator key keeps the original bucket so single-tenant installs upgrade in place. A new admin route exposes the aggregate view for ops.
 

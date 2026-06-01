@@ -399,6 +399,51 @@ export async function queryAudit(
   return { events: slice, total: filtered.length, limit, offset };
 }
 
+export type StreamFilter = {
+  key_id?: string;
+  method?: string;
+  route?: string;
+  ok?: boolean;
+  since?: string;
+  limit?: number; // hard cap, default 1_000_000
+};
+
+// Yields matching audit events newest-first, unbounded by the queryAudit
+// 1000-row UI cap. Used by /api/audit/export.jsonl so SIEM imports can pull
+// the full event including hash chain fields. Each event already lives in
+// memory after readAllLines, so this is an O(N) scan; that is fine for the
+// 50k-line cap enforced by maybeRotate().
+export async function* streamAuditFiltered(
+  filter: StreamFilter = {},
+): AsyncGenerator<AuditEvent> {
+  try {
+    await maybeAutoSweep();
+  } catch {}
+  const all = await readAllLines();
+  let filtered = all;
+  if (filter.key_id) filtered = filtered.filter((e) => e.key_id === filter.key_id);
+  if (filter.method) {
+    const m = filter.method.toUpperCase();
+    filtered = filtered.filter((e) => e.method === m);
+  }
+  if (filter.route) {
+    const r = filter.route;
+    filtered = filtered.filter((e) => e.route.includes(r));
+  }
+  if (typeof filter.ok === "boolean") {
+    filtered = filtered.filter((e) => e.ok === filter.ok);
+  }
+  if (filter.since) {
+    const t = filter.since;
+    filtered = filtered.filter((e) => e.ts >= t);
+  }
+  filtered.sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  const cap = Math.min(Math.max(filter.limit ?? 1_000_000, 1), 1_000_000);
+  for (let i = 0; i < filtered.length && i < cap; i++) {
+    yield filtered[i];
+  }
+}
+
 export async function clearAudit(): Promise<void> {
   // Test-only helper; not exposed via any route.
   try {

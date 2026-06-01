@@ -144,6 +144,21 @@ export default function AuditPage() {
         >
           <DownloadSimple size={14} weight="duotone" /> Export CSV
         </a>
+        <a
+          href={`/api/audit/export.jsonl${qs({
+            key_id: keyId,
+            method,
+            route,
+            ok: okFilter,
+            limit: String(Math.max(limit, 1000)),
+          })}`}
+          download
+          className="btn-ghost text-[11px] uppercase tracking-wider inline-flex items-center gap-1"
+          aria-label="Download filtered audit log as NDJSON for SIEM ingest"
+          title="NDJSON for Splunk / Datadog / Elastic ingest. Preserves details JSON and hash chain."
+        >
+          <DownloadSimple size={14} weight="duotone" /> Export JSONL
+        </a>
       </header>
 
       <Card title="Chain Integrity">
