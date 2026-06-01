@@ -2,7 +2,33 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-workspace Service Level Agreement register
+## New: self-service API session view and revoke
+
+The operator-only `/admin/sessions` console was already shipping the active (key, IP, user-agent) ledger and a force-logout button. Procurement reviewers (SOC 2 CC6.2, ISO 27001 A.9.2.6) also expect every end user to be able to see *their own* sessions and revoke any that look wrong without paging an operator. SignalClaw now ships that surface. The endpoints are strictly scoped to the caller's own `key_id` so one tenant cannot enumerate or revoke another tenant's sessions; cross-tenant probes return 404, never 403, so the endpoint cannot be used as an oracle. Revocations land in the existing force-logout ledger and are enforced by the session middleware on the very next request.
+
+- UI: http://localhost:7430/settings/api-sessions
+- API: `GET /me/sessions`, `DELETE /me/sessions/{session_id}`, `POST /me/sessions/revoke-others`
+- Isolation test: `tests/test_me_sessions_self_service.py` (cross-tenant revoke must 404 + revoked sessions are 401'd by the middleware)
+
+### Try it: see and sign out your sessions
+
+```bash
+signalclaw serve &  # FastAPI on :7431
+
+# List every session for the calling key (each row is one IP+UA pair).
+curl -s http://localhost:7431/me/sessions \
+  -H 'x-api-key: your-key' | jq
+
+# Sign out one session (use the id from the list above).
+curl -sX DELETE http://localhost:7431/me/sessions/<id> \
+  -H 'x-api-key: your-key' | jq
+
+# Sign out every other session for this key, keep the current one alive.
+curl -sX POST http://localhost:7431/me/sessions/revoke-others \
+  -H 'x-api-key: your-key' | jq
+```
+
+## Also new: per-workspace Service Level Agreement register
 
 Procurement reality: every enterprise MSA negotiation hits an SLA addendum, and procurement teams will not sign without a written monthly uptime commitment, a tiered incident response time matrix, and a credit policy that says what the customer gets when targets are missed. SignalClaw now ships a versioned SLA register that an admin publishes once and a buyer or auditor can cite by version on any future date.
 

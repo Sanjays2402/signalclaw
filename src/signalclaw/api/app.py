@@ -1563,6 +1563,143 @@ def create_app() -> FastAPI:
             "enforced": True,
         }
 
+    # --- Self-service sessions (caller-owned view + revoke) ------------
+    # Procurement reviewers expect every authenticated user to be able
+    # to see their own active sessions and force-logout any that look
+    # wrong, without going through an operator. The /admin/sessions
+    # surface above is operator-only; these /me/sessions endpoints are
+    # the end-user equivalent and are strictly scoped to the caller's
+    # own key_id so one tenant cannot enumerate or revoke another
+    # tenant's sessions.
+    def _caller_key_id(x_api_key: str | None) -> str:
+        """Resolve the caller's key_id using the same logic the session
+        tracking middleware uses, so the id returned here matches the
+        row written into the session ledger.
+        """
+        if not x_api_key:
+            return ""
+        store_ = getattr(app.state, "api_key_store", None)
+        if store_ is not None:
+            stored = store_.lookup(x_api_key)
+            if stored is not None:
+                return stored.id
+        try:
+            from ..api_keys import _hash as _hk
+            return "env:" + _hk(x_api_key)[:12]
+        except Exception:
+            return ""
+
+    def _caller_session_id(request: Request, key_id: str) -> str:
+        """Recompute the fingerprint for the calling request so the UI
+        can mark "this is you" and so revoke-others can skip the
+        current session.
+        """
+        if not key_id:
+            return ""
+        from ..sessions import _fingerprint as _fp
+        client = request.client.host if request.client else ""
+        ip = request.headers.get(
+            "x-forwarded-for", client).split(",")[0].strip() or client
+        ua = request.headers.get("user-agent", "")[:256]
+        return _fp(key_id, ip, ua or "")
+
+    @app.get("/me/sessions", dependencies=[Depends(require_api_key)])
+    def me_sessions_list(
+        request: Request,
+        x_api_key: str | None = Header(default=None),
+    ):
+        key_id = _caller_key_id(x_api_key)
+        if not key_id:
+            raise HTTPException(401, "unable to resolve caller")
+        current_id = _caller_session_id(request, key_id)
+        active_rev = {r.session_id for r in revocation_store.list()
+                      if r.scope == "session"}
+        rows = []
+        for s in session_store.list():
+            if s.key_id != key_id:
+                continue
+            row = s.to_public()
+            row["revoked"] = row["id"] in active_rev
+            row["current"] = (row["id"] == current_id)
+            rows.append(row)
+        return {
+            "key_id": key_id,
+            "current_session_id": current_id,
+            "sessions": rows,
+        }
+
+    @app.delete("/me/sessions/{session_id}",
+                dependencies=[Depends(require_api_key)])
+    def me_sessions_revoke(
+        session_id: str,
+        request: Request,
+        x_api_key: str | None = Header(default=None),
+    ):
+        key_id = _caller_key_id(x_api_key)
+        if not key_id:
+            raise HTTPException(401, "unable to resolve caller")
+        # Only allow the caller to revoke a session bound to their own
+        # key_id. If the row exists under a different key_id we return
+        # 404, never 403, so the caller cannot probe other tenants.
+        target = next(
+            (s for s in session_store.list()
+             if s.id == session_id and s.key_id == key_id),
+            None,
+        )
+        if target is None:
+            raise HTTPException(404, "session not found")
+        actor = _actor_label(x_api_key)
+        revocation_store.revoke_session(
+            session_id=session_id,
+            key_id=key_id,
+            reason="self_revoke",
+            revoked_by=actor,
+        )
+        session_store.revoke(session_id)
+        current_id = _caller_session_id(request, key_id)
+        return {
+            "revoked": session_id,
+            "key_id": key_id,
+            "self_logged_out": session_id == current_id,
+            "enforced": True,
+        }
+
+    @app.post("/me/sessions/revoke-others",
+              dependencies=[Depends(require_api_key)])
+    def me_sessions_revoke_others(
+        request: Request,
+        x_api_key: str | None = Header(default=None),
+    ):
+        """Force-logout every session bound to the caller's key except
+        the current one. Useful after a suspected device theft.
+        """
+        key_id = _caller_key_id(x_api_key)
+        if not key_id:
+            raise HTTPException(401, "unable to resolve caller")
+        current_id = _caller_session_id(request, key_id)
+        actor = _actor_label(x_api_key)
+        revoked: list[str] = []
+        for s in session_store.list():
+            if s.key_id != key_id:
+                continue
+            if s.id == current_id:
+                continue
+            revocation_store.revoke_session(
+                session_id=s.id,
+                key_id=key_id,
+                reason="self_revoke_others",
+                revoked_by=actor,
+            )
+            session_store.revoke(s.id)
+            revoked.append(s.id)
+        return {
+            "key_id": key_id,
+            "current_session_id": current_id,
+            "revoked": revoked,
+            "count": len(revoked),
+            "enforced": True,
+        }
+
     # --- Workspace network policy (global IP allowlist) -----------------
     # Surfaced under /admin/network-policy so the admin console can
     # manage it. Audited automatically by AuditMiddleware because the
