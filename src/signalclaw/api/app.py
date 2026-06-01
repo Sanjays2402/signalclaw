@@ -2559,6 +2559,34 @@ def create_app() -> FastAPI:
             return None, ("admin" in env_rec.scopes)
         return None, False
 
+    def _webhook_outcome(sub, transition: str, info: dict) -> None:
+        """Audit-log circuit-breaker transitions for a webhook delivery."""
+        from ..audit.log import AuditEvent as _AE_wh, _utc_now_iso as _iso_wh
+        from ..webhooks import AUTO_DISABLE_FAILURE_THRESHOLD as _THR
+        action = ("webhook.auto_disabled" if transition == "auto_disabled"
+                  else "webhook.recovered")
+        extra = {
+            "subscription_id": sub.id,
+            "url": sub.url,
+            "owner_key_id": sub.owner_key_id,
+            "consecutive_failures": int(sub.consecutive_failures or 0),
+            "reason": sub.auto_disable_reason,
+            "last_status": info.get("status"),
+            "last_error": (info.get("error") or "")[:200] or None,
+            "threshold": _THR,
+        }
+        try:
+            audit_log.record(_AE_wh(
+                ts=_iso_wh(), request_id="-",
+                method="-", path="/webhooks/_circuit",
+                status=200 if transition == "recovered" else 503,
+                actor_key_hash="-", actor_label="webhook_circuit",
+                source_ip="-", duration_ms=0.0,
+                action=action, extra=extra,
+            ))
+        except Exception:
+            pass
+
     @app.get("/webhooks", response_model=WebhookListOut, dependencies=[Depends(require_api_key)])
     def webhooks_list(x_api_key: str | None = Header(default=None)):
         owner_id, is_admin = _webhook_caller(x_api_key)
@@ -2669,7 +2697,8 @@ def create_app() -> FastAPI:
         visible_subs = webhooks_store.list_for(owner_id, is_admin=is_admin)
         scoped_store = _ScopedWebhookStore(webhooks_store, visible_subs)
         deliveries = deliver_events(events, scoped_store,
-                                    log_store=webhook_log_store)
+                                    log_store=webhook_log_store,
+                                    on_outcome=_webhook_outcome)
         return WebhookDeliveryOut(
             events=[PickEventOut(**e.to_dict()) for e in events],
             deliveries=deliveries,
@@ -2716,10 +2745,56 @@ def create_app() -> FastAPI:
         if sub is None or not sub.is_visible_to(owner_id, is_admin=is_admin):
             raise HTTPException(404, "attempt not found or no payload to replay")
         replayed = replay_delivery(
-            attempt_id, webhooks_store, webhook_log_store)
+            attempt_id, webhooks_store, webhook_log_store,
+            on_outcome=_webhook_outcome)
         if replayed is None:
             raise HTTPException(404, "attempt not found or no payload to replay")
         return WebhookDeliveryLogItemOut(**replayed.to_dict())
+
+    @app.post("/webhooks/{sub_id}/reactivate",
+              response_model=WebhookOut,
+              dependencies=[Depends(require_api_key)])
+    def webhooks_reactivate(sub_id: str,
+                            request: Request,
+                            x_api_key: str | None = Header(default=None)):
+        """Clear the circuit breaker on an auto-disabled subscription.
+
+        Returns 404 (not 403) for non-visible subscriptions so existence
+        does not leak across tenants. Audit-logs the manual reactivation
+        with the prior auto-disable reason for SOC2 traceability.
+        """
+        sub = webhooks_store.get(sub_id)
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        if sub is None or not sub.is_visible_to(owner_id, is_admin=is_admin):
+            raise HTTPException(404, "subscription not found")
+        prior_reason = sub.auto_disable_reason
+        prior_auto_at = sub.auto_disabled_at
+        sub.enabled = True
+        sub.auto_disabled_at = None
+        sub.auto_disable_reason = None
+        sub.consecutive_failures = 0
+        webhooks_store.update(sub)
+        try:
+            from ..audit.log import AuditEvent as _AE_wh, _utc_now_iso as _iso_wh, _hash_key as _hk_wh
+            src_ip = (request.client.host if request.client else "-") or "-"
+            audit_log.record(_AE_wh(
+                ts=_iso_wh(),
+                request_id=request.headers.get("x-request-id", "-"),
+                method="POST", path=f"/webhooks/{sub_id}/reactivate",
+                status=200,
+                actor_key_hash=_hk_wh(x_api_key or ""),
+                actor_label="admin" if is_admin else "owner",
+                source_ip=src_ip, duration_ms=0.0,
+                action="webhook.reactivated",
+                extra={"subscription_id": sub.id,
+                       "url": sub.url,
+                       "owner_key_id": sub.owner_key_id,
+                       "prior_auto_disabled_at": prior_auto_at,
+                       "prior_reason": prior_reason},
+            ))
+        except Exception:
+            pass
+        return WebhookOut(**sub.to_dict())
 
     def _drawdown_price_history():
         hist = {}
