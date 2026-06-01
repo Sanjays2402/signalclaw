@@ -1394,26 +1394,78 @@ def create_app() -> FastAPI:
             "disclaimer": "SignalClaw is NOT financial advice. Educational demo only.",
         }
 
+    def _tenant_caller(x_api_key: Optional[str]) -> tuple[Optional[str], bool]:
+        """Resolve ``(owner_key_id, is_admin)`` for tenant-scoped routes.
+
+        Mirrors ``_webhook_caller`` (defined later) so per-tenant routes
+        (watchlist, picks) share one tenancy model. Returns:
+
+        - user-managed key: that key's ``StoredKey.id`` and admin=True iff
+          the role grants the ``admin`` scope,
+        - env-registry admin key: ``(None, True)`` (operator/CI view),
+        - operator-default ``SIGNALCLAW_API_KEY``: ``(None, True)``.
+
+        ``require_api_key`` has already rejected unknown callers.
+        """
+        if not x_api_key:
+            return None, False
+        store_ = api_key_store
+        if store_ is not None:
+            stored = store_.lookup(x_api_key)
+            if stored is not None:
+                try:
+                    from ..api_keys import cap_scopes_to_role
+                    eff = set(cap_scopes_to_role(
+                        stored.scopes, getattr(stored, "role", None)))
+                except Exception:
+                    eff = set(stored.scopes)
+                return stored.id, ("admin" in eff)
+        if x_api_key == settings.api_key:
+            return None, True
+        env_rec = get_registry().get(x_api_key)
+        if env_rec is not None:
+            return None, ("admin" in env_rec.scopes)
+        return None, False
+
     @app.get("/watchlist", response_model=WatchlistOut, dependencies=[Depends(require_api_key)])
-    def get_watchlist():
-        return WatchlistOut(tickers=store.list())
+    def get_watchlist(x_api_key: str | None = Header(default=None)):
+        owner_id, _ = _tenant_caller(x_api_key)
+        return WatchlistOut(tickers=store.list_for(owner_id))
 
     @app.post("/watchlist", response_model=WatchlistOut, dependencies=[Depends(require_api_key)])
-    def add_watchlist(body: WatchlistIn):
-        return WatchlistOut(tickers=store.add(body.ticker))
+    def add_watchlist(body: WatchlistIn,
+                      x_api_key: str | None = Header(default=None)):
+        owner_id, _ = _tenant_caller(x_api_key)
+        return WatchlistOut(tickers=store.add_for(owner_id, body.ticker))
 
     @app.delete("/watchlist/{ticker}", response_model=WatchlistOut, dependencies=[Depends(require_api_key)])
-    def remove_watchlist(ticker: str):
-        return WatchlistOut(tickers=store.remove(ticker))
+    def remove_watchlist(ticker: str,
+                         x_api_key: str | None = Header(default=None)):
+        owner_id, _ = _tenant_caller(x_api_key)
+        return WatchlistOut(tickers=store.remove_for(owner_id, ticker))
+
+    @app.get("/admin/watchlists",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_watchlists():
+        """Admin aggregate view of every tenant's watchlist.
+
+        Returns ``{tenants: {owner_key_id: [tickers...]}}``. The
+        ``__default__`` key holds the legacy/operator bucket.
+        """
+        return {"tenants": store.all_tenants()}
 
     @app.get("/picks", response_model=DailyReportOut, dependencies=[Depends(require_api_key)])
-    def picks(refresh: bool = False):
-        rep = run_daily(store.list(), refresh=refresh)
+    def picks(refresh: bool = False,
+              x_api_key: str | None = Header(default=None)):
+        owner_id, _ = _tenant_caller(x_api_key)
+        rep = run_daily(store.list_for(owner_id), refresh=refresh)
         return DailyReportOut(as_of=rep.as_of, picks=[Pick(**p.to_dict()) for p in rep.picks])
 
     @app.get("/report.md", dependencies=[Depends(require_api_key)])
-    def picks_markdown(refresh: bool = False):
-        rep = run_daily(store.list(), refresh=refresh)
+    def picks_markdown(refresh: bool = False,
+                       x_api_key: str | None = Header(default=None)):
+        owner_id, _ = _tenant_caller(x_api_key)
+        rep = run_daily(store.list_for(owner_id), refresh=refresh)
         return {"markdown": render_markdown(rep)}
 
     @app.get("/backtest/{ticker}", response_model=BacktestOut, dependencies=[Depends(require_api_key)])

@@ -2,7 +2,35 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-run RBAC ownership on /api/v1/runs
+## New: per-API-key watchlist multi-tenancy
+
+The Python `/watchlist`, `/picks`, and `/report.md` endpoints used to share one universe across every API key in a deployment, which meant a ticker added by one customer was visible to and removable by every other customer hitting the same backend. Procurement reviewers flagged this as a hard multi-tenancy finding because the watchlist also drives the daily report and the regime classifier output, so cross-tenant leakage at the universe layer also leaked downstream model output. SignalClaw now stores one watchlist per user-managed API key (`StoredKey.id`), seeded from the default universe on first read, and the legacy operator key keeps the original bucket so single-tenant installs upgrade in place. A new admin route exposes the aggregate view for ops.
+
+- `GET/POST/DELETE /watchlist` scope reads and writes to the calling key's tenant bucket.
+- `GET /picks` and `GET /report.md` score the caller's own watchlist, not the global one.
+- `GET /admin/watchlists` (admin scope + MFA) returns `{tenants: {key_id: [tickers]}}` so an operator can audit every tenant from one surface.
+- Mutations flow through the existing `AuditMiddleware`, so every add and remove lands in the tamper-evident audit chain with the actor key id.
+- `tests/test_watchlist_tenant_isolation.py` pins the policy: cross-tenant reads invisible, cross-tenant deletes no-op, admin aggregate sees every tenant.
+
+### Try it
+
+```bash
+# Two member keys minted from POST /admin/keys.
+export ALICE=sk_alice...
+export BOB=sk_bob...
+
+curl -s -X POST http://localhost:7431/watchlist \
+  -H "x-api-key: $ALICE" -H "content-type: application/json" \
+  -d '{"ticker":"NVDA"}'
+
+# Bob does not see NVDA in his own list.
+curl -s http://localhost:7431/watchlist -H "x-api-key: $BOB" | jq .
+
+# Admin aggregate view.
+curl -s http://localhost:7431/admin/watchlists -H "x-api-key: $ADMIN_KEY" | jq .
+```
+
+## Previously: per-run RBAC ownership on /api/v1/runs
 
 Procurement reality: any team that issues more than one API key for SignalClaw eventually asks the obvious question: can a `trade`-scoped key delete or rename a run that a different `trade`-scoped key created? Until now the answer was yes, which fails the SOC2 "least privilege" review the first time a buyer asks. SignalClaw now stamps every run created through `POST /api/v1/runs` with the api key id and label of its creator, and mutating routes under `/api/v1/runs/:id` enforce per-key ownership. A `trade` key can only delete or modify runs it created. The `admin` scope still bypasses ownership for operational recovery, and legacy unowned runs (created before this shipped, or via the local dashboard) remain mutable for back-compat.
 
