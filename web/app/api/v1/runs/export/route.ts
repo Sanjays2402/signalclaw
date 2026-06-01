@@ -3,6 +3,7 @@ import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { queryRuns, runsToCSV } from "@/lib/runStore";
+import { ownerFilterForKey } from "@/lib/runAcl";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,6 +46,7 @@ export async function GET(req: NextRequest) {
     ticker: sp.get("ticker") ?? "",
     limit,
     offset: 0,
+    ownerFilter: ownerFilterForKey(key),
   });
 
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");

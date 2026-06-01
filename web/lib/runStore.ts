@@ -297,6 +297,14 @@ export type QueryOpts = {
   pinned?: boolean;
   limit?: number;
   offset?: number;
+  // Per-API-key tenant filter. Applied BEFORE search/regime/ticker filters
+  // so totals reported to the caller reflect only rows the caller can see.
+  // Shape: { mode: "all" } | { mode: "owner_or_unowned", keyId }
+  // Built by ownerFilterForKey() in runAcl.ts. Omitting it preserves the
+  // legacy admin-wide behavior used by internal callers (digest, watches).
+  ownerFilter?:
+    | { mode: "all" }
+    | { mode: "owner_or_unowned"; keyId: string };
 };
 
 export type QueryResult = {
@@ -317,6 +325,13 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
   const offset = Math.max(opts.offset ?? 0, 0);
 
   let filtered = s.runs.map(ensureTags);
+  if (opts.ownerFilter && opts.ownerFilter.mode === "owner_or_unowned") {
+    const keyId = opts.ownerFilter.keyId;
+    filtered = filtered.filter((r) => {
+      const owner = r.created_by_key_id ?? null;
+      return owner === null || owner === keyId;
+    });
+  }
   if (q) {
     filtered = filtered.filter(
       (r) =>

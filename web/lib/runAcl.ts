@@ -29,3 +29,48 @@ export function decideRunMutation(
   if (owner === key.id) return { allowed: true, reason: "owner" };
   return { allowed: false, reason: "not_owner", ownerKeyId: owner };
 }
+
+// Per-run RBAC for the /api/v1/runs/* READ surface.
+//
+// Policy mirrors decideRunMutation so list/get/export/pdf can never leak
+// another tenant's row to a different API key:
+//   1. admin scope sees every run.
+//   2. Legacy/dashboard rows (no created_by_key_id) stay readable by any
+//      read-scoped key. These predate the per-key tenancy model.
+//   3. Otherwise only the api key that created the run can read it.
+//
+// Callers should translate a denial to HTTP 404 (not 403) so the existence
+// of another tenant's run id is not observable via probing.
+export function decideRunRead(
+  run: Pick<SavedRun, "created_by_key_id">,
+  key: Pick<StoredKey, "id" | "scopes">,
+): RunAclDecision {
+  if (key.scopes.includes("admin")) return { allowed: true, reason: "admin" };
+  const owner = run.created_by_key_id ?? null;
+  if (!owner) return { allowed: true, reason: "unowned" };
+  if (owner === key.id) return { allowed: true, reason: "owner" };
+  return { allowed: false, reason: "not_owner", ownerKeyId: owner };
+}
+
+// Tenant filter for queryRuns({ ownerFilter }). Admin keys see everything;
+// other keys see their own owned runs plus legacy unowned rows.
+export type RunOwnerFilter =
+  | { mode: "all" }
+  | { mode: "owner_or_unowned"; keyId: string };
+
+export function ownerFilterForKey(
+  key: Pick<StoredKey, "id" | "scopes">,
+): RunOwnerFilter {
+  if (key.scopes.includes("admin")) return { mode: "all" };
+  return { mode: "owner_or_unowned", keyId: key.id };
+}
+
+export function runMatchesOwnerFilter(
+  run: Pick<SavedRun, "created_by_key_id">,
+  filter: RunOwnerFilter,
+): boolean {
+  if (filter.mode === "all") return true;
+  const owner = run.created_by_key_id ?? null;
+  if (!owner) return true;
+  return owner === filter.keyId;
+}

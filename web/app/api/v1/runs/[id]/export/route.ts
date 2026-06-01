@@ -3,6 +3,7 @@ import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { getRun, runsToCSV } from "@/lib/runStore";
+import { decideRunRead } from "@/lib/runAcl";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +39,19 @@ export async function GET(
   const { id } = await ctx.params;
   const run = await getRun(id);
   if (!run) return err(404, "not_found", "run not found");
+  const readAcl = decideRunRead(run, key);
+  if (!readAcl.allowed) {
+    await recordAuditEvent({
+      req,
+      route: "/api/v1/runs/[id]/export",
+      method: req.method,
+      status: 404,
+      key,
+      reason: "forbidden:not_owner",
+      details: { run_id: id, owner_key_id: readAcl.ownerKeyId },
+    });
+    return err(404, "not_found", "run not found");
+  }
 
   const safeTicker = run.ticker.replace(/[^A-Za-z0-9._-]/g, "_");
   const base = `signalclaw-${safeTicker}-${run.id}`;

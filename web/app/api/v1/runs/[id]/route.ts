@@ -3,7 +3,7 @@ import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { deleteRun, getRun } from "@/lib/runStore";
-import { decideRunMutation } from "@/lib/runAcl";
+import { decideRunMutation, decideRunRead } from "@/lib/runAcl";
 import { recordSafe } from "@/lib/activityStore";
 import { isDryRun, dryRunResponse } from "@/lib/dryRun";
 import { withIdempotency } from "@/lib/idempotency";
@@ -35,6 +35,19 @@ export async function GET(
   const { id } = await ctx.params;
   const run = await getRun(id);
   if (!run) return err(404, "not_found", "run not found");
+  const readAcl = decideRunRead(run, key);
+  if (!readAcl.allowed) {
+    await recordAuditEvent({
+      req,
+      route: "/api/v1/runs/[id]",
+      method: req.method,
+      status: 404,
+      key,
+      reason: "forbidden:not_owner",
+      details: { run_id: id, owner_key_id: readAcl.ownerKeyId },
+    });
+    return err(404, "not_found", "run not found");
+  }
   return NextResponse.json({
     id: run.id,
     label: run.label,
@@ -70,6 +83,20 @@ export async function DELETE(
   const { id } = await ctx.params;
   const existing = await getRun(id);
   if (!existing) return err(404, "not_found", "run not found");
+  // Don't leak existence of another tenant's run through DELETE either.
+  const readAcl = decideRunRead(existing, key);
+  if (!readAcl.allowed) {
+    await recordAuditEvent({
+      req,
+      route: "/api/v1/runs/[id]",
+      method: req.method,
+      status: 404,
+      key,
+      reason: "forbidden:not_owner",
+      details: { run_id: id, owner_key_id: readAcl.ownerKeyId },
+    });
+    return err(404, "not_found", "run not found");
+  }
   const acl = decideRunMutation(existing, key);
   if (!acl.allowed) {
     await recordAuditEvent({

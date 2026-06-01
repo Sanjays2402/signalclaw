@@ -3,6 +3,7 @@ import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
 import { queryRuns, createRun, normalizeTags } from "@/lib/runStore";
+import { ownerFilterForKey } from "@/lib/runAcl";
 import { classifyRegime } from "@/lib/regimeClassify";
 import { recordSafe } from "@/lib/activityStore";
 import { dispatchEvents, type PickEvent } from "@/lib/webhookStore";
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest) {
   const offset = Math.max(parseIntParam(sp.get("offset"), 0), 0);
 
   const { runs, total, limit: appliedLimit, offset: appliedOffset } =
-    await queryRuns({ q, ticker, regime, pinned: pinnedOnly ? true : undefined, limit, offset });
+    await queryRuns({ q, ticker, regime, pinned: pinnedOnly ? true : undefined, limit, offset, ownerFilter: ownerFilterForKey(key) });
 
   const items = runs.map((r) => ({
     id: r.id,

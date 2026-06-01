@@ -2,7 +2,45 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: tamper-evident audit log with /audit/verify
+## New: per-API-key tenant scoping on the /v1/runs read surface
+
+Mutating runs via `/api/v1/runs*` already enforced per-key ownership (see `decideRunMutation` in `lib/runAcl.ts`), but every `read` or `admin` key could list, fetch, export, and download the PDF of every other tenant's run on the same install. `queryRuns` returned a global view and the GET-by-id handler had no ownership check at all. Procurement flagged this as a hard cross-tenant data leak because saved runs carry the customer's full price series and notes.
+
+- `lib/runAcl.ts` adds `decideRunRead` (mirrors `decideRunMutation`) and `ownerFilterForKey` so routes share one policy: admin keys see everything, other keys see only runs they created, plus legacy/dashboard rows that have no `created_by_key_id`.
+- `lib/runStore.ts` `queryRuns` accepts `ownerFilter` and applies it before search filters, so `total` reflects the caller's tenant view and never leaks counts from sibling tenants. Internal callers (digest, watches, cron) keep the un-filtered behavior by omitting the option.
+- `GET /api/v1/runs`, `GET /api/v1/runs/export`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/export`, `GET /api/v1/runs/:id/pdf`, and `DELETE /api/v1/runs/:id` all run through the new ACL. Denials are translated to HTTP 404 (not 403) so a probing client cannot enumerate sibling tenant ids; the audit log still captures the real reason as `forbidden:not_owner` for the operator.
+- The cookie-session dashboard (`/api/runs/*`) and public share pages (`/r/:id`, OG image, share-PDF) are intentionally unchanged: those are operator-local and shareable by design.
+- `tests/runReadTenantIsolation.test.mjs` pins the policy: cross-tenant list returns only the caller's rows, totals exclude foreign tenants, admin sees everything, legacy unowned rows stay readable, and non-owner reads translate to denial (route maps to 404).
+### Try it
+
+```bash
+cd web && pnpm dev    # http://localhost:7430
+
+# Mint two keys.
+export ADMIN=$SIGNALCLAW_ADMIN_KEY
+A=$(curl -s -X POST -H "Authorization: Bearer $ADMIN" \
+  -H 'content-type: application/json' \
+  -d '{"label":"tenant-a","scopes":["read","trade"]}' \
+  http://localhost:7430/api/admin/keys | jq -r .secret)
+B=$(curl -s -X POST -H "Authorization: Bearer $ADMIN" \
+  -H 'content-type: application/json' \
+  -d '{"label":"tenant-b","scopes":["read","trade"]}' \
+  http://localhost:7430/api/admin/keys | jq -r .secret)
+
+# Tenant A saves a run.
+RUN=$(curl -s -X POST -H "Authorization: Bearer $A" -H 'content-type: application/json' \
+  -d '{"ticker":"AAPL","close":[100,101,102,103,104,105,106,107,108,109,110]}' \
+  http://localhost:7430/api/v1/runs | jq -r .id)
+
+# Tenant B cannot see it.
+curl -s -H "Authorization: Bearer $B" http://localhost:7430/api/v1/runs | jq '.total'
+# => 0
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $B" "http://localhost:7430/api/v1/runs/$RUN"
+# => 404
+```
+
+## Previously: tamper-evident audit log with /audit/verify
 
 The Python backend audit log was append-only JSONL but had no integrity binding between rows, so a privileged operator with disk access could quietly edit a past entry without anyone being able to prove it. Procurement reviewers (SOC2 CC7.2, ISO 27001 A.12.4) want on-demand evidence that the audit trail has not been altered. Every persisted audit row now carries `prev_hash` and `entry_hash` fields forming a sha256 chain, and a new admin endpoint recomputes the chain across the requested window and reports the first break.
 
