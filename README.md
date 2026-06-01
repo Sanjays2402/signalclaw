@@ -2,7 +2,45 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: SOC2 evidence pack at /settings/evidence-pack
+## New: SCIM 2.0 Groups with role-mapped membership
+
+User provisioning landed in a prior pass, but Okta and Azure AD reviewers immediately ask the next question: "can we drive role assignment from an IdP group instead of asking your operator to PATCH every user?" Without `/scim/v2/Groups` the answer was no, and the procurement loop stalled on "how do we promote the on-call engineer to admin without a console click?". SignalClaw now ships SCIM Groups with a real role binding so an IdP membership change is the only source of truth.
+
+- `GET|POST /scim/v2/Groups` and `GET|PUT|PATCH|DELETE /scim/v2/Groups/{id}` cover the full lifecycle. Each group carries a `displayName`, an optional IdP `externalId`, and a SignalClaw role (`owner` / `admin` / `member` / `viewer`) under the `urn:signalclaw:scim:extension:1.0` extension schema. PATCH accepts both Okta's filter syntax (`members[value eq "<uid>"]` remove) and Azure AD's value-array shape (`{ op: "add", path: "members", value: [{ value: "<uid>" }] }`).
+- Membership is the authoritative source for the bound API key's role. When a SCIM user is added to an admin-role group their key is promoted within the request; when removed, the highest remaining group role wins, falling back to the SCIM default role. Every reconciliation writes a `scim.group.role_reconcile` row to the tamper-evident audit chain with the before / after role, the actor (`scim:group:<displayName>`), the source IP, and the request id.
+- `GET /scim/v2/ResourceTypes` now advertises Group alongside User, so an IdP introspecting the SCIM surface discovers the new resource without manual config. `ServiceProviderConfig` already declared `patch.supported = true`, which Okta requires before it will push group operations.
+- Deleting a SCIM user cascades into every group they belonged to, so a deprovisioning race never leaves dangling member ids for the next reconcile loop to trip on. Deleting a group demotes every former member back to the SCIM default role before the 204 returns.
+- `GET /admin/scim/groups` and the extended `GET /admin/scim/users` surface every group, every membership, and the role each user inherits, gated by the same admin scope plus admin-MFA contract as every other admin route. No new permission surface.
+- `tests/test_scim.py` pins the security properties: the bearer is required on every group method, an unknown role is refused with `400 invalidValue`, a duplicate `displayName` returns `409 uniqueness`, adding and removing a user from an admin-role group flips their key's role both directions, deleting the group demotes them back to `member`, and deleting a user cleans them out of every group they belonged to.
+
+### Try it
+
+```bash
+make dev
+make api          # http://localhost:7431
+
+# 1. mint the SCIM bearer (admin scope required)
+BEARER=$(curl -fsS -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7431/admin/scim/rotate | jq -r .bearer)
+
+# 2. provision a user (Okta / Entra style)
+USER_ID=$(curl -fsS -X POST -H "authorization: Bearer $BEARER" \
+  -H "content-type: application/scim+json" \
+  -d '{"userName":"alice@example.com","active":true}' \
+  http://localhost:7431/scim/v2/Users | jq -r .id)
+
+# 3. create an admin-role group and put alice in it
+curl -fsS -X POST -H "authorization: Bearer $BEARER" \
+  -H "content-type: application/scim+json" \
+  -d "{\"displayName\":\"platform-admins\",
+       \"urn:signalclaw:scim:extension:1.0\":{\"role\":\"admin\"},
+       \"members\":[{\"value\":\"$USER_ID\"}]}" \
+  http://localhost:7431/scim/v2/Groups | jq
+
+# alice's bound api key is now admin; remove her from the group to demote.
+```
+
+## Previously: SOC2 evidence pack at /settings/evidence-pack
 
 Procurement reality: every enterprise security questionnaire ends with "send us evidence your controls are operating effectively". Before this change a security owner had to screenshot half a dozen admin pages, paste them into a Google Doc, attach an audit log export, and hope the reviewer trusted the screenshots. `/settings/evidence-pack` replaces that with one button that produces a deterministic, hash-manifested .zip an auditor can open and verify themselves.
 
@@ -12,7 +50,7 @@ Procurement reality: every enterprise security questionnaire ends with "send us 
 - `web/app/settings/evidence-pack/page.tsx` shows the filename, size, SHA-256 and build time before download, exposes the verification command, and is reachable from the settings nav, the admin landing surface list, and the `/admin/controls` inventory.
 - `tests/evidencePack.test.mjs` parses the generated archive with a hand-rolled central-directory reader, proves every documented file is present, that every manifest hash matches the on-disk bytes inside the archive, that two consecutive builds produce identical content for every non-timestamped file, and that the control inventory exposes the new row.
 
-### Try it
+### Verify the evidence pack
 
 ```bash
 make dev

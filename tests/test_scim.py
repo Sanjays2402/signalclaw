@@ -185,3 +185,163 @@ def test_scim_filter_by_username():
     body = r.json()
     assert body["totalResults"] == 1
     assert body["Resources"][0]["userName"] == "bob@example.com"
+
+
+def _make_user(c: TestClient, auth: dict, uname: str) -> str:
+    r = c.post(
+        "/scim/v2/Users",
+        headers={**auth, "content-type": "application/scim+json"},
+        json={"userName": uname, "active": True},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _fetch_key_role(key_id: str) -> str | None:
+    from pathlib import Path
+    store = ApiKeyStore(Path(_TMP) / "api_keys.json")
+    for k in store.list():
+        if k.id == key_id:
+            return k.role
+    return None
+
+
+def test_scim_group_lifecycle_promotes_and_demotes_role():
+    """Adding a user to an admin-role group promotes their key;
+    removing them demotes it back to the SCIM default."""
+    c = TestClient(app)
+    bearer = _rotate_bearer(c)
+    auth = {"authorization": f"Bearer {bearer}"}
+    sjson = {**auth, "content-type": "application/scim+json"}
+
+    user_id = _make_user(c, auth, "dana@example.com")
+    user_resp = c.get(f"/scim/v2/Users/{user_id}", headers=auth).json()
+    key_id = None
+    # extension carries apiKeyId on create response; re-fetch from admin view
+    admin_users = c.get("/admin/scim/users", headers=ADMIN).json()
+    for u in admin_users["users"]:
+        if u["id"] == user_id:
+            key_id = u["key_id"]
+    assert key_id, admin_users
+    # default role from SCIM policy is "member"
+    assert _fetch_key_role(key_id) == "member"
+
+    # create admin-role group with this user as initial member
+    r = c.post("/scim/v2/Groups", headers=sjson, json={
+        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        "displayName": "platform-admins",
+        "externalId": "okta:grp:platform-admins",
+        "urn:signalclaw:scim:extension:1.0": {"role": "admin"},
+        "members": [{"value": user_id}],
+    })
+    assert r.status_code == 201, r.text
+    group_id = r.json()["id"]
+    assert _fetch_key_role(key_id) == "admin", "membership should promote role"
+
+    # PATCH remove the member -> role falls back to member
+    r = c.patch(f"/scim/v2/Groups/{group_id}", headers=sjson, json={
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        "Operations": [
+            {"op": "remove", "path": f'members[value eq "{user_id}"]'},
+        ],
+    })
+    assert r.status_code == 200, r.text
+    assert _fetch_key_role(key_id) == "member", "removal should demote role"
+
+    # PATCH add them back -> promoted again
+    r = c.patch(f"/scim/v2/Groups/{group_id}", headers=sjson, json={
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        "Operations": [
+            {"op": "add", "path": "members",
+             "value": [{"value": user_id, "display": "dana"}]},
+        ],
+    })
+    assert r.status_code == 200, r.text
+    assert _fetch_key_role(key_id) == "admin"
+
+    # delete the group -> demoted
+    r = c.delete(f"/scim/v2/Groups/{group_id}", headers=auth)
+    assert r.status_code == 204
+    assert _fetch_key_role(key_id) == "member"
+
+    # admin surface lists groups (now empty)
+    r = c.get("/admin/scim/groups", headers=ADMIN)
+    assert r.status_code == 200
+    assert r.json()["groups"] == []
+
+    # audit log captured the reconciliation events
+    from signalclaw.audit import get_audit_log
+    from pathlib import Path as _P
+    al = get_audit_log(_P(_TMP) / "audit")
+    actions = {e.get("action") for e in al.tail(limit=1000)}
+    assert "scim.group.create" in actions
+    assert "scim.group.patch" in actions
+    assert "scim.group.delete" in actions
+    assert "scim.group.role_reconcile" in actions
+
+
+def test_scim_group_requires_bearer_and_validates_role():
+    c = TestClient(app)
+    bearer = _rotate_bearer(c)
+    auth = {"authorization": f"Bearer {bearer}"}
+    sjson = {**auth, "content-type": "application/scim+json"}
+
+    # bearer required
+    r = c.get("/scim/v2/Groups")
+    assert r.status_code == 401
+    r = c.post("/scim/v2/Groups", json={})
+    assert r.status_code == 401
+
+    # bad role rejected
+    r = c.post("/scim/v2/Groups", headers=sjson, json={
+        "displayName": "bad-group",
+        "urn:signalclaw:scim:extension:1.0": {"role": "superuser"},
+    })
+    assert r.status_code == 400, r.text
+
+    # duplicate displayName rejected
+    r = c.post("/scim/v2/Groups", headers=sjson, json={
+        "displayName": "ops",
+        "urn:signalclaw:scim:extension:1.0": {"role": "member"},
+    })
+    assert r.status_code == 201
+    r = c.post("/scim/v2/Groups", headers=sjson, json={
+        "displayName": "ops",
+        "urn:signalclaw:scim:extension:1.0": {"role": "viewer"},
+    })
+    assert r.status_code == 409
+
+
+def test_scim_group_deactivating_user_cascades_membership_cleanup():
+    """Deleting a SCIM user removes them from any groups so reconcile
+    loops never trip on dangling member ids."""
+    c = TestClient(app)
+    bearer = _rotate_bearer(c)
+    auth = {"authorization": f"Bearer {bearer}"}
+    sjson = {**auth, "content-type": "application/scim+json"}
+
+    user_id = _make_user(c, auth, "eve@example.com")
+    r = c.post("/scim/v2/Groups", headers=sjson, json={
+        "displayName": "analytics",
+        "urn:signalclaw:scim:extension:1.0": {"role": "admin"},
+        "members": [{"value": user_id}],
+    })
+    assert r.status_code == 201, r.text
+    gid = r.json()["id"]
+
+    # hard-delete the user
+    r = c.delete(f"/scim/v2/Users/{user_id}", headers=auth)
+    assert r.status_code == 204
+
+    # group must no longer contain the deleted user
+    r = c.get(f"/scim/v2/Groups/{gid}", headers=auth)
+    assert r.status_code == 200
+    assert all(m["value"] != user_id for m in r.json().get("members", []))
+
+
+def test_scim_resource_types_lists_group():
+    c = TestClient(app)
+    r = c.get("/scim/v2/ResourceTypes")
+    assert r.status_code == 200
+    ids = {item["id"] for item in r.json()["Resources"]}
+    assert {"User", "Group"} <= ids

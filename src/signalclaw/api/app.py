@@ -326,19 +326,24 @@ def create_app() -> FastAPI:
     from ..scim import (
         ScimConfigStore as _ScimCfg,
         ScimUserStore as _ScimUsr,
+        ScimGroupStore as _ScimGrp,
         build_scim_user as _scim_user,
+        build_scim_group as _scim_group,
         scim_error as _scim_error,
         service_provider_config as _scim_spc,
         resource_types as _scim_rts,
         parse_userName as _scim_uname,
         parse_primary_email as _scim_email,
         apply_patch_ops as _scim_patch,
+        apply_group_patch_ops as _scim_group_patch,
         SCIM_LIST_SCHEMA as _SCIM_LIST,
     )
     scim_cfg_store = _ScimCfg(settings.data_dir / "scim" / "config.json")
     scim_user_store = _ScimUsr(settings.data_dir / "scim" / "users.json")
+    scim_group_store = _ScimGrp(settings.data_dir / "scim" / "groups.json")
     app.state.scim_cfg_store = scim_cfg_store
     app.state.scim_user_store = scim_user_store
+    app.state.scim_group_store = scim_group_store
     set_user_key_store(api_key_store)
     # MFA (TOTP) for admin actions. Enrolled keys must present a fresh
     # ``x-mfa-code`` on every admin call. When SIGNALCLAW_MFA_REQUIRED_FOR_ADMIN=1
@@ -3833,6 +3838,288 @@ def create_app() -> FastAPI:
             "user_id": user_id, "key_id": existing.key_id,
             "user_name": existing.user_name,
         }, label=f"scim:{existing.user_name}")
+        # Cascade: drop the deleted user from any groups so reconcilers
+        # never see dangling members.
+        for g in scim_group_store.groups_for_user(user_id):
+            scim_group_store.remove_member(g.id, user_id)
+        from fastapi.responses import Response as _NCResp
+        return _NCResp(status_code=204)
+
+    # -------------------------------------------------------------------
+    # SCIM Groups: bind role to membership.
+    # -------------------------------------------------------------------
+    # Role precedence (higher wins) when a user belongs to multiple groups.
+    _ROLE_RANK = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
+
+    def _reconcile_user_role(user_id: str, *, request: _ScimReq) -> None:
+        """Recompute the bound api key's role from group membership.
+
+        Picks the highest-precedence role across all groups the user
+        belongs to; if the user is in no groups, falls back to the
+        SCIM default role. Writes an audit row only if the role
+        actually changed.
+        """
+        user = scim_user_store.get(user_id)
+        if user is None or not user.active:
+            return
+        groups = scim_group_store.groups_for_user(user_id)
+        if groups:
+            best = max(
+                groups,
+                key=lambda g: _ROLE_RANK.get(g.role, -1),
+            )
+            target_role = best.role if best.role in _ROLES else "member"
+        else:
+            cfg = scim_cfg_store.get()
+            target_role = cfg.default_role if cfg.default_role in _ROLES else "member"
+        try:
+            stored = next(
+                (k for k in api_key_store.list() if getattr(k, "id", None) == user.key_id),
+                None,
+            )
+        except Exception:
+            stored = None
+        current_role = getattr(stored, "role", None) if stored is not None else None
+        if current_role == target_role:
+            return
+        try:
+            api_key_store.set_role(user.key_id, target_role)
+        except Exception as exc:
+            _scim_audit(request, "scim.group.role_reconcile_failed", 500, {
+                "user_id": user_id, "key_id": user.key_id,
+                "target_role": target_role, "error": str(exc),
+            }, label=f"scim:{user.user_name}")
+            return
+        _scim_audit(request, "scim.group.role_reconcile", 200, {
+            "user_id": user_id, "key_id": user.key_id,
+            "from": current_role, "to": target_role,
+        }, label=f"scim:{user.user_name}")
+
+    def _validate_group_role(payload: dict) -> str:
+        ext = payload.get("urn:signalclaw:scim:extension:1.0") or {}
+        role_in = (ext.get("role") if isinstance(ext, dict) else None) or payload.get("role") or "member"
+        role = str(role_in).strip().lower()
+        if role not in _ROLES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"role must be one of {sorted(_ROLES)}",
+            )
+        return role
+
+    @app.get("/scim/v2/Groups", include_in_schema=False,
+             dependencies=[Depends(_require_scim)])
+    def scim_list_groups(request: _ScimReq, filter: str | None = None,
+                         startIndex: int = 1, count: int = 100):
+        display: str | None = None
+        if filter:
+            f = filter.strip()
+            if f.lower().startswith("displayname eq "):
+                rhs = f[len("displayName eq "):].strip()
+                if rhs.startswith('"') and rhs.endswith('"'):
+                    display = rhs[1:-1]
+        rows = scim_group_store.list(filter_display_name=display)
+        base = _scim_base(request)
+        try:
+            start = max(1, int(startIndex))
+            cnt = max(0, min(int(count), 200))
+        except (TypeError, ValueError):
+            start, cnt = 1, 100
+        page = rows[start - 1 : start - 1 + cnt]
+        return _scim_resp({
+            "schemas": [_SCIM_LIST],
+            "totalResults": len(rows),
+            "startIndex": start,
+            "itemsPerPage": len(page),
+            "Resources": [
+                _scim_group(g, location_base=base, member_resolver=scim_user_store.get)
+                for g in page
+            ],
+        })
+
+    @app.get("/scim/v2/Groups/{group_id}", include_in_schema=False,
+             dependencies=[Depends(_require_scim)])
+    def scim_get_group(group_id: str, request: _ScimReq):
+        g = scim_group_store.get(group_id)
+        if not g:
+            return _scim_resp(_scim_error("Group not found", 404), 404)
+        return _scim_resp(_scim_group(g, location_base=_scim_base(request),
+                                     member_resolver=scim_user_store.get))
+
+    @app.post("/scim/v2/Groups", include_in_schema=False,
+              dependencies=[Depends(_require_scim)])
+    async def scim_create_group(request: _ScimReq):
+        try:
+            payload = await request.json()
+        except Exception:
+            return _scim_resp(_scim_error("body must be JSON", 400, "invalidSyntax"), 400)
+        if not isinstance(payload, dict):
+            return _scim_resp(_scim_error("body must be a JSON object", 400, "invalidSyntax"), 400)
+        display_name = payload.get("displayName")
+        if not isinstance(display_name, str) or not display_name.strip():
+            return _scim_resp(_scim_error("displayName required", 400, "invalidValue"), 400)
+        display_name = display_name.strip()
+        if scim_group_store.get_by_display_name(display_name) is not None:
+            return _scim_resp(_scim_error("displayName already exists", 409, "uniqueness"), 409)
+        try:
+            role = _validate_group_role(payload)
+        except HTTPException as exc:
+            return _scim_resp(_scim_error(exc.detail, exc.status_code, "invalidValue"), exc.status_code)
+        external_id = str(payload.get("externalId") or "")
+        members_in = payload.get("members") or []
+        member_ids: list[str] = []
+        if isinstance(members_in, list):
+            for m in members_in:
+                if isinstance(m, dict) and isinstance(m.get("value"), str):
+                    if scim_user_store.get(m["value"]) is not None:
+                        member_ids.append(m["value"])
+        try:
+            row = scim_group_store.create(
+                display_name=display_name,
+                external_id=external_id,
+                role=role,
+                members=member_ids,
+            )
+        except ValueError as exc:
+            return _scim_resp(_scim_error(str(exc), 409, "uniqueness"), 409)
+        _scim_audit(request, "scim.group.create", 201, {
+            "group_id": row.id, "display_name": display_name,
+            "role": role, "members": list(member_ids),
+            "external_id": external_id,
+        }, label=f"scim:group:{display_name}")
+        for uid in member_ids:
+            _reconcile_user_role(uid, request=request)
+        return _scim_resp(
+            _scim_group(row, location_base=_scim_base(request),
+                       member_resolver=scim_user_store.get),
+            201,
+        )
+
+    @app.put("/scim/v2/Groups/{group_id}", include_in_schema=False,
+             dependencies=[Depends(_require_scim)])
+    async def scim_replace_group(group_id: str, request: _ScimReq):
+        existing = scim_group_store.get(group_id)
+        if not existing:
+            return _scim_resp(_scim_error("Group not found", 404), 404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return _scim_resp(_scim_error("body must be JSON", 400, "invalidSyntax"), 400)
+        if not isinstance(payload, dict):
+            return _scim_resp(_scim_error("body must be a JSON object", 400, "invalidSyntax"), 400)
+        display_name_in = payload.get("displayName")
+        display_name = (display_name_in.strip() if isinstance(display_name_in, str) and display_name_in.strip()
+                        else existing.display_name)
+        external_id = str(payload.get("externalId") or existing.external_id)
+        try:
+            role = _validate_group_role(payload) if (
+                payload.get("urn:signalclaw:scim:extension:1.0") or payload.get("role")
+            ) else existing.role
+        except HTTPException as exc:
+            return _scim_resp(_scim_error(exc.detail, exc.status_code, "invalidValue"), exc.status_code)
+        prior_members = set(existing.members)
+        members_in = payload.get("members")
+        if isinstance(members_in, list):
+            new_members: list[str] = []
+            for m in members_in:
+                if isinstance(m, dict) and isinstance(m.get("value"), str):
+                    if scim_user_store.get(m["value"]) is not None:
+                        new_members.append(m["value"])
+        else:
+            new_members = list(existing.members)
+        row = scim_group_store.replace(
+            group_id,
+            display_name=display_name,
+            external_id=external_id,
+            role=role,
+            members=new_members,
+        )
+        touched = prior_members | set(new_members)
+        _scim_audit(request, "scim.group.replace", 200, {
+            "group_id": group_id, "display_name": display_name,
+            "role": role, "members": list(new_members),
+            "role_changed": role != existing.role,
+        }, label=f"scim:group:{display_name}")
+        for uid in touched:
+            _reconcile_user_role(uid, request=request)
+        return _scim_resp(_scim_group(row, location_base=_scim_base(request),
+                                     member_resolver=scim_user_store.get))
+
+    @app.patch("/scim/v2/Groups/{group_id}", include_in_schema=False,
+               dependencies=[Depends(_require_scim)])
+    async def scim_patch_group(group_id: str, request: _ScimReq):
+        existing = scim_group_store.get(group_id)
+        if not existing:
+            return _scim_resp(_scim_error("Group not found", 404), 404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return _scim_resp(_scim_error("body must be JSON", 400, "invalidSyntax"), 400)
+        if not isinstance(payload, dict):
+            return _scim_resp(_scim_error("body must be a JSON object", 400, "invalidSyntax"), 400)
+        changes = _scim_group_patch(payload)
+        touched: set[str] = set()
+        prior_role = existing.role
+        # 1. attribute updates
+        attr_changes: dict = {}
+        for k in ("display_name", "external_id"):
+            if k in changes and changes[k] is not None:
+                attr_changes[k] = changes[k]
+        # role may arrive via urn extension at top level, not via patch ops
+        if "role" in changes and isinstance(changes["role"], str):
+            cand = str(changes["role"]).lower()
+            if cand in _ROLES:
+                attr_changes["role"] = cand
+        # 2. membership changes
+        if "replace_members" in changes:
+            new_members: list[str] = []
+            for uid in changes["replace_members"]:
+                if scim_user_store.get(uid) is not None:
+                    new_members.append(uid)
+            touched |= set(existing.members) | set(new_members)
+            attr_changes["members"] = new_members
+        else:
+            current = list(existing.members)
+            for uid in changes.get("add_members", []):
+                if scim_user_store.get(uid) is not None and uid not in current:
+                    current.append(uid)
+                    touched.add(uid)
+            for uid in changes.get("remove_members", []):
+                if uid in current:
+                    current = [m for m in current if m != uid]
+                    touched.add(uid)
+            attr_changes["members"] = current
+        row = scim_group_store.replace(group_id, **attr_changes)
+        new_role = row.role if row is not None else existing.role
+        if new_role != prior_role:
+            # role flipped, every current member needs reconciliation
+            touched |= set(row.members if row is not None else existing.members)
+        _scim_audit(request, "scim.group.patch", 200, {
+            "group_id": group_id,
+            "add": changes.get("add_members", []),
+            "remove": changes.get("remove_members", []),
+            "replace": changes.get("replace_members"),
+            "attrs": {k: v for k, v in attr_changes.items() if k != "members"},
+            "role_changed": new_role != prior_role,
+        }, label=f"scim:group:{existing.display_name}")
+        for uid in touched:
+            _reconcile_user_role(uid, request=request)
+        return _scim_resp(_scim_group(row, location_base=_scim_base(request),
+                                     member_resolver=scim_user_store.get))
+
+    @app.delete("/scim/v2/Groups/{group_id}", include_in_schema=False,
+                dependencies=[Depends(_require_scim)])
+    def scim_delete_group(group_id: str, request: _ScimReq):
+        existing = scim_group_store.get(group_id)
+        if not existing:
+            return _scim_resp(_scim_error("Group not found", 404), 404)
+        members_snapshot = list(existing.members)
+        scim_group_store.delete(group_id)
+        _scim_audit(request, "scim.group.delete", 204, {
+            "group_id": group_id, "display_name": existing.display_name,
+            "members": members_snapshot, "role": existing.role,
+        }, label=f"scim:group:{existing.display_name}")
+        for uid in members_snapshot:
+            _reconcile_user_role(uid, request=request)
         from fastapi.responses import Response as _NCResp
         return _NCResp(status_code=204)
 
@@ -3887,8 +4174,38 @@ def create_app() -> FastAPI:
                     "external_id": u.external_id, "display_name": u.display_name,
                     "email": u.email, "active": u.active, "key_id": u.key_id,
                     "created_at": u.created_at, "updated_at": u.updated_at,
+                    "groups": [
+                        {"id": g.id, "display_name": g.display_name, "role": g.role}
+                        for g in scim_group_store.groups_for_user(u.id)
+                    ],
                 }
                 for u in scim_user_store.list()
+            ]
+        }
+
+    @app.get("/admin/scim/groups",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_scim_groups():
+        return {
+            "groups": [
+                {
+                    "id": g.id,
+                    "display_name": g.display_name,
+                    "external_id": g.external_id,
+                    "role": g.role,
+                    "member_count": len(g.members),
+                    "members": [
+                        {
+                            "user_id": uid,
+                            "user_name": (scim_user_store.get(uid).user_name
+                                          if scim_user_store.get(uid) else uid),
+                        }
+                        for uid in g.members
+                    ],
+                    "created_at": g.created_at,
+                    "updated_at": g.updated_at,
+                }
+                for g in scim_group_store.list()
             ]
         }
 
