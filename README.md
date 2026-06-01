@@ -2,6 +2,40 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
+## New: Data Processing Agreement acceptance ledger
+
+Procurement reality: every enterprise security questionnaire and most EU/UK MSAs require evidence that the customer's authorized signatory has accepted a versioned Data Processing Agreement (GDPR Art. 28, UK GDPR, CCPA service-provider terms). Auditors and counsel want a who / when / from-where record per DPA version, with the document SHA-256 pinned at the moment of acceptance so the customer cannot later claim a different document was in force. SignalClaw now ships that ledger end to end.
+
+- `GET /api/admin/dpa` returns the current published DPA (version, effective date, URL, SHA-256), the latest active acceptance, `needs_re_acceptance`, and the full append-only history (most recent first). Admin scope gated.
+- `POST /api/admin/dpa` records an acceptance. Body: `signatory_name`, `signatory_title`, `customer_entity`, optional `note`. The route pins the current DPA `version` and `sha256` on the row, captures actor key id, hashed client IP, and user agent, and writes a tamper-evident audit line. Admin MFA enforced.
+- `DELETE /api/admin/dpa` records a withdrawal of the active acceptance with a mandatory reason. The original acceptance row is preserved; a new `action: "withdrawn"` row is appended.
+- `HEAD /api/admin/dpa` returns `x-dpa-version` and `x-dpa-sha256` headers so external compliance tooling can poll the pinned document hash without auth.
+- IP addresses are hashed with a domain-separated SHA-256 prefix and stored as the first 32 hex chars; the raw IP never lands on disk.
+- Ledger file `.data/dpa-ledger.json` is append-only by construction: no path mutates or deletes prior rows. Concurrent writes are serialized through an in-process queue.
+- Admin console card at `/settings/dpa` shows the pinned current version, the active signatory, a re-accept banner when the active acceptance is for an older version, the acceptance form, and the full ledger. Loading, error, and empty states wired; responsive at 375 and 1440. Phosphor duotone icons throughout.
+- Surfaced inside the SOC2 evidence pack (`/api/admin/evidence-pack` produces `policies/dpa-ledger.json`) and the admin control inventory (`/api/admin/index` returns a `dpa` row with `enforcing` / `off` status and a summary line), so a procurement reviewer can confirm DPA coverage in one click without digging.
+- `tests/dpaLedger.test.mjs` pins the contract: empty signatory rejected, missing customer entity rejected, accepting pins the current version + sha256, a second acceptance is recorded as a superseding row without deleting the prior one, IP hashes are stable across calls but do not contain the raw IP, withdraw requires a 4+ char reason and clears `active`, withdraw with no active row returns `no_active`, and the on-disk file is append-only across writes.
+
+### Try it: DPA acceptance ledger
+
+```bash
+cd web && npm install && npm run dev  # Next.js on :7430
+# then open http://localhost:7430/settings/dpa
+
+# Or drive the admin API directly:
+curl -sS -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  http://localhost:7430/api/admin/dpa | jq
+
+# Record an acceptance
+curl -sS -X POST -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"signatory_name":"Maria Chen","signatory_title":"Head of Security","customer_entity":"Acme Capital, Inc.","note":"MSA-2026-051"}' \
+  http://localhost:7430/api/admin/dpa | jq
+
+# Confirm the pinned version exposed for compliance tooling
+curl -sI http://localhost:7430/api/admin/dpa | grep -i x-dpa
+```
+
 ## New: break-glass emergency admin elevation (time-boxed, audited)
 
 Procurement reality: on-call engineers occasionally need admin scope to resolve an incident, but handing out a permanent admin key for every incident is the kind of standing privilege auditors flag under SOC2 CC6.3 and ISO 27001 A.9.2.3. SignalClaw now ships a break-glass grant: an admin can elevate a non-admin API key to `admin` for a bounded window (60 seconds to 4 hours), with the elevation revocable at any moment and every issuance, revocation, and use written to the audit log. The grant lives next to the key, never mutates the key record, and is enforced inside the same key resolver used by every middleware check and route dependency, so it applies uniformly to env-configured keys and to keys minted via `/admin/keys`.

@@ -48,6 +48,7 @@ import { getConfig as getLockoutConfig } from "./authLockoutStore.ts";
 import { getConcurrencyPolicy } from "./concurrencyStore.ts";
 import { getSettings } from "./settingsStore.ts";
 import { listHolds } from "./legalHoldStore.ts";
+import { getState as getDpaState } from "./dpaStore.ts";
 import { getSink as getSiemSink } from "./siemSinkStore.ts";
 import { getFreezeState } from "./freezeStore.ts";
 import { buildZip, type ZipEntry } from "./zipBuilder.ts";
@@ -164,6 +165,7 @@ export async function buildEvidencePack(actorId: string | null = null): Promise<
     concurrency,
     settings,
     holds,
+    dpa,
     siem,
     freeze,
   ] = await Promise.all([
@@ -183,6 +185,7 @@ export async function buildEvidencePack(actorId: string | null = null): Promise<
     safeCall(() => getConcurrencyPolicy()),
     safeCall(() => getSettings()),
     safeCall(() => listHolds()),
+    safeCall(() => getDpaState()),
     safeCall(() => getSiemSink()),
     safeCall(() => getFreezeState()),
   ]);
@@ -215,6 +218,16 @@ export async function buildEvidencePack(actorId: string | null = null): Promise<
     { name: "policies/concurrency.json", body: stableJson(concurrency) },
     { name: "policies/workspace-defaults.json", body: stableJson(settings) },
     { name: "policies/legal-holds.json", body: stableJson({ count: (holds ?? []).length, holds: holds ?? [] }) },
+    {
+      name: "policies/dpa-ledger.json",
+      body: stableJson({
+        current: dpa?.current ?? null,
+        active: dpa?.active ?? null,
+        needs_re_acceptance: dpa?.needs_re_acceptance ?? true,
+        count: dpa?.acceptances?.length ?? 0,
+        acceptances: dpa?.acceptances ?? [],
+      }),
+    },
     { name: "policies/siem-sink.json", body: stableJson(siem) },
     { name: "policies/freeze.json", body: stableJson(freeze) },
   ];
