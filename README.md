@@ -2,7 +2,36 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: SSO session idle + absolute timeout policy
+## New: proactive API-key expiry warnings on the FastAPI service
+
+Procurement reality: SOC2 CC6.1 and ISO 27001 A.9.2.6 require time-bound credentials, but rejecting an expired key at 03:00 on a Sunday is too late. The Next.js admin already surfaced an expiry watchlist; the FastAPI service (port 7431) had nothing, so a tenant talking only to the Python API got no advance warning. This release adds parity: a watchlist endpoint plus advisory response headers on every authenticated request so an SDK can fire its rotation runbook before automation breaks.
+
+- `GET /admin/keys/expiring?within_days=30` returns the keys that will lapse inside the window, sorted soonest-first, with per-row `expires_in_seconds`, `expires_in_days`, and a `bucket` (critical / soon / upcoming) that matches the web taxonomy. Admin scope + admin MFA gated, audited. `within_days` is validated to 1..365 and returns a structured 400 on out-of-range input.
+- `KeyExpiryWarningMiddleware` attaches `Sunset` (RFC 8594 HTTP-date), `X-Key-Expires-At` (ISO-8601 UTC), `X-Key-Expires-In-Seconds`, and `X-Key-Expiry-Bucket` to every authenticated response whose key falls inside the warning window. Healthcheck and docs paths are exempt so monitoring never gets noisy; unauthenticated traffic and env-registry keys are unaffected.
+- Pure helpers `is_expiring_soon`, `expiry_bucket`, and `seconds_until_expiry` ship in `signalclaw.api_keys` so other surfaces (admin console, SOC2 evidence pack) classify a row the same way the route handler does.
+- `tests/test_api_keys_expiry_warning.py` pins the contract: helpers classify expired / revoked / no-expiry rows correctly, the route enforces RBAC and rejects bad `within_days`, the middleware attaches `Sunset` + `X-Key-Expires-*` to a real authenticated request that uses a soon-to-expire key, and stays silent for a key with no expiry.
+
+### Try it
+
+```bash
+make dev  # FastAPI on :7431
+ADMIN="$SIGNALCLAW_API_KEY"
+
+# Mint a key that expires in two days.
+curl -sS -H "x-api-key: $ADMIN" -H "content-type: application/json" \
+  -d '{"label":"nightly","role":"member","expires_in_seconds":172800}' \
+  http://localhost:7431/admin/keys | tee /tmp/k.json
+SCOPED=$(jq -r .secret /tmp/k.json)
+
+# Watchlist surfaces the new key in the "soon" bucket.
+curl -sS -H "x-api-key: $ADMIN" \
+  'http://localhost:7431/admin/keys/expiring?within_days=7' | jq
+
+# Any authenticated call carries Sunset + X-Key-Expires-* on the response.
+curl -sSI -H "x-api-key: $SCOPED" http://localhost:7431/picks | grep -iE 'sunset|x-key-'
+```
+
+## Previously: SSO session idle + absolute timeout policy
 
 Procurement reality: SOC2 CC6.1 and every enterprise security questionnaire expect that an SSO browser session is killed after N minutes of inactivity, and that even an active session is forced through re-auth at an absolute upper bound. Until this change the SSO session cookie carried a fixed 12h `exp` and `ssoSessionRegistry` tracked `last_seen_at` per row but never compared it against a configurable timeout, so a tenant could not enforce a tighter window than the cookie's own TTL. This release adds a per-deployment policy (`enforce`, `idle_timeout_s`, `absolute_timeout_s`) that is consulted on every `verifySessionCookie` call. An idle-expired or past-absolute session is rejected the same way a revoked one is and the registry row is marked revoked so `/settings/sessions` shows the reason (`idle-timeout` or `absolute-timeout`). Defaults are off so an upgrade does not log out an existing tenant; an admin opts in from `/settings/sessions`.
 

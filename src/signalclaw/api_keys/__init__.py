@@ -249,6 +249,72 @@ def is_expired(stored: "StoredKey") -> bool:
         return True
 
 
+# Default early-warning window for the expiry watchlist. SOC2 reviewers
+# typically cite a 30-day rotation cadence, so we mirror that as the
+# default and let admins narrow or widen per request. The hard cap
+# protects against pathological inputs hitting the listing endpoint.
+DEFAULT_EXPIRY_WARNING_DAYS: int = 30
+MAX_EXPIRY_WARNING_DAYS: int = 365
+
+
+def seconds_until_expiry(stored: "StoredKey") -> Optional[int]:
+    """Return integer seconds until ``stored.expires_at``.
+
+    ``None`` if the key has no expiry. Negative if the key already
+    expired. Malformed timestamps return ``None`` (caller treats them
+    as "unknown"; ``is_expired`` already fails them closed at auth).
+    """
+    exp = (getattr(stored, "expires_at", None) or "").strip()
+    if not exp:
+        return None
+    try:
+        t = datetime.strptime(exp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    delta = t - datetime.now(timezone.utc)
+    return int(delta.total_seconds())
+
+
+def is_expiring_soon(stored: "StoredKey", within_days: int = DEFAULT_EXPIRY_WARNING_DAYS) -> bool:
+    """True when ``stored`` has an expiry inside the next ``within_days``.
+
+    Already-expired and revoked rows return False: the caller fields
+    those through other surfaces (``is_expired`` / revocation). A key
+    with no expiry never warns. Negative or zero ``within_days``
+    disables the check.
+    """
+    if within_days <= 0:
+        return False
+    if getattr(stored, "revoked", False):
+        return False
+    if is_expired(stored):
+        return False
+    secs = seconds_until_expiry(stored)
+    if secs is None or secs <= 0:
+        return False
+    return secs <= within_days * 86400
+
+
+def expiry_bucket(stored: "StoredKey") -> str:
+    """Return the watchlist bucket for ``stored``: critical/soon/upcoming/ok.
+
+    Matches the web/lib/keyExpiry.ts taxonomy so the FastAPI and
+    Next.js surfaces classify a row the same way.
+    """
+    secs = seconds_until_expiry(stored)
+    if secs is None:
+        return "ok"
+    if secs <= 0:
+        return "expired"
+    if secs <= 86400:
+        return "critical"
+    if secs <= 7 * 86400:
+        return "soon"
+    if secs <= 30 * 86400:
+        return "upcoming"
+    return "ok"
+
+
 def review_due_at(stored: "StoredKey") -> Optional[str]:
     """Return the ISO-8601 UTC instant when this key's next access
     review is due, or ``None`` if it has no creation timestamp.
@@ -674,6 +740,19 @@ class ApiKeyStore:
                 self._reload_index()
             return updated
 
+    def list_expiring(self, within_days: int = DEFAULT_EXPIRY_WARNING_DAYS) -> List[StoredKey]:
+        """Return every live (non-revoked, non-expired) key whose
+        ``expires_at`` falls inside the next ``within_days``.
+
+        Sorted soonest-first so the admin console queue surfaces the
+        most urgent rotation work at the top. Used by
+        ``GET /admin/keys/expiring`` and by the ``X-Key-Expires-*``
+        response-header path to decide when to nag the caller.
+        """
+        rows = [r for r in self._read() if is_expiring_soon(r, within_days)]
+        rows.sort(key=lambda r: seconds_until_expiry(r) or 0)
+        return rows
+
     def list_review_overdue(self) -> List[StoredKey]:
         """Return every live key whose access review is past due.
 
@@ -907,6 +986,11 @@ __all__ = [
     "normalise_paths",
     "is_path_allowed",
     "is_expired",
+    "is_expiring_soon",
+    "expiry_bucket",
+    "seconds_until_expiry",
+    "DEFAULT_EXPIRY_WARNING_DAYS",
+    "MAX_EXPIRY_WARNING_DAYS",
     "is_review_overdue",
     "review_due_at",
     "ROLES",

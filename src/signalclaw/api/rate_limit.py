@@ -420,6 +420,71 @@ class PathAllowlistMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class KeyExpiryWarningMiddleware(BaseHTTPMiddleware):
+    """Attach expiry-warning headers when an authenticated request uses
+    a user-managed key that will expire inside the configured window.
+
+    Enterprise customers need a programmatic, in-band signal that a
+    credential is about to lapse so their rotation runbooks fire
+    before the 4xx wave hits. RFC 8594 ``Sunset`` is the standard
+    advisory header for resource deprecation and SDKs already log it;
+    we reuse it for credentials and add SignalClaw-specific
+    ``X-Key-Expires-At`` / ``X-Key-Expires-In-Seconds`` /
+    ``X-Key-Expiry-Bucket`` so a client can branch without parsing the
+    HTTP-date.
+
+    Exempts healthcheck/docs paths so monitoring never gets noisy.
+    Unauthenticated traffic and env-registry keys are unaffected.
+    """
+
+    def __init__(self, app,
+                 within_days: int = 30,
+                 exempt_paths: Iterable[str] = (
+                     "/health", "/ready", "/healthz", "/readyz",
+                     "/metrics", "/disclaimer",
+                     "/docs", "/openapi.json", "/redoc",
+                     "/docs/oauth2-redirect",
+                 )) -> None:
+        super().__init__(app)
+        self.within_days = max(0, int(within_days))
+        self.exempt = tuple(exempt_paths)
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if self.within_days <= 0:
+            return response
+        path = request.url.path
+        if any(path == p or path.startswith(p + "/") for p in self.exempt):
+            return response
+        api_key = request.headers.get("x-api-key")
+        store = _USER_STORE
+        if not api_key or store is None:
+            return response
+        try:
+            stored = store.lookup(api_key)
+        except Exception:
+            return response
+        if stored is None:
+            return response
+        from ..api_keys import is_expiring_soon, seconds_until_expiry, expiry_bucket
+        if not is_expiring_soon(stored, self.within_days):
+            return response
+        secs = seconds_until_expiry(stored) or 0
+        exp_iso = (getattr(stored, "expires_at", None) or "").strip()
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            from email.utils import format_datetime
+            dt = _dt.strptime(exp_iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc)
+            response.headers["Sunset"] = format_datetime(dt, usegmt=True)
+        except Exception:
+            pass
+        if exp_iso:
+            response.headers["X-Key-Expires-At"] = exp_iso
+        response.headers["X-Key-Expires-In-Seconds"] = str(secs)
+        response.headers["X-Key-Expiry-Bucket"] = expiry_bucket(stored)
+        return response
+
+
 class IPAllowlistMiddleware(BaseHTTPMiddleware):
     """Enforce per-key IP allowlists for user-managed API keys.
 

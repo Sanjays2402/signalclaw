@@ -61,7 +61,7 @@ from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .dry_run import DryRunMiddleware
 from .request_context import RequestContextMiddleware
-from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware, GlobalIPAllowlistMiddleware, PathAllowlistMiddleware
+from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware, GlobalIPAllowlistMiddleware, PathAllowlistMiddleware, KeyExpiryWarningMiddleware
 from .security_headers import SecurityHeadersMiddleware, build_header_policy
 from .body_limit import (
     BodyLimitMiddleware,
@@ -265,6 +265,11 @@ def create_app() -> FastAPI:
     # unrestricted behaviour. Added next to the IP allowlist so the
     # two per-key policies are evaluated together.
     app.add_middleware(PathAllowlistMiddleware)
+    # Advisory expiry headers for user-managed keys. Runs after path
+    # allowlist so a rejected request still tells the caller when their
+    # credential is about to lapse. Window matches /admin/keys/expiring
+    # default so a client polling either surface sees the same horizon.
+    app.add_middleware(KeyExpiryWarningMiddleware, within_days=30)
     # Workspace-level global IP allowlist. Added near the outer edge
     # so it runs before auth/audit/rbac on the inbound chain and drops
     # off-network traffic before any handler or store work occurs.
@@ -972,6 +977,57 @@ def create_app() -> FastAPI:
     # review program is enforceable and auditable from one place. All
     # writes pass through AuditMiddleware so the actor, target key id,
     # and timestamp land in the immutable audit log automatically.
+    # ----- Expiry watchlist -------------------------------------------------
+    # SOC2 CC6.1 + ISO 27001 A.9.2.6 require time-bound credentials and
+    # proactive rotation. Expired keys are already rejected at auth, but
+    # the admin needs a queue so they can rotate *before* the lapse takes
+    # automation down at 03:00 on a Sunday. This endpoint mirrors the
+    # Next.js /api/admin/keys/expiring shape so a single dashboard can
+    # poll either surface.
+    @app.get(
+        "/admin/keys/expiring",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_keys_expiring(within_days: int = 30):
+        from ..api_keys import (
+            DEFAULT_EXPIRY_WARNING_DAYS,
+            MAX_EXPIRY_WARNING_DAYS,
+            expiry_bucket,
+            seconds_until_expiry,
+        )
+        if not isinstance(within_days, int) or within_days < 1 or within_days > MAX_EXPIRY_WARNING_DAYS:
+            raise HTTPException(
+                400,
+                {
+                    "scope": "bad_within_days",
+                    "message": f"within_days must be an integer between 1 and {MAX_EXPIRY_WARNING_DAYS}",
+                },
+            )
+        rows = api_key_store.list_expiring(within_days)
+        out = []
+        for r in rows:
+            d = r.to_public()
+            secs = seconds_until_expiry(r) or 0
+            d["expires_in_seconds"] = secs
+            d["expires_in_days"] = secs // 86400
+            d["bucket"] = expiry_bucket(r)
+            out.append(d)
+        counts = {
+            "critical": sum(1 for k in out if k["bucket"] == "critical"),
+            "soon": sum(1 for k in out if k["bucket"] == "soon"),
+            "upcoming": sum(1 for k in out if k["bucket"] == "upcoming"),
+        }
+        return {
+            "window_days": within_days,
+            "default_window_days": DEFAULT_EXPIRY_WARNING_DAYS,
+            "count": len(out),
+            "counts": counts,
+            "keys": out,
+        }
+
+    # The control inventory enumerates every enterprise policy with a
+    # live status. Surface this one too so a SOC2 reviewer can see at a
+    # glance that proactive expiry monitoring is wired and enforcing.
     @app.get(
         "/admin/keys/review-overdue",
         dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
