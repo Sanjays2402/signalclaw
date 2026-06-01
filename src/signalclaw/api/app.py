@@ -938,6 +938,47 @@ def create_app() -> FastAPI:
             "history": {m: int(v) for m, v in sorted(all_usage.items())},
         }
 
+    # --- Caller-facing self-usage ---------------------------------------
+    # Every customer dashboard wants to render "you have used N of M
+    # calls this month, resets at X" without ever needing an admin
+    # scope or pulling /admin/usage (which lists every tenant). This
+    # endpoint scopes strictly to the caller's own key id resolved
+    # from x-api-key and is the canonical billing-self-service surface.
+    # Cross-tenant isolation is guaranteed because the key id used to
+    # look up the quota row is derived from the secret the caller
+    # presented; there is no path that lets a query parameter or
+    # body field redirect the lookup to another tenant.
+    @app.get("/usage/me", dependencies=[Depends(require_api_key)])
+    def usage_me(x_api_key: str | None = Header(default=None)):
+        from ..quotas.middleware import _key_id_for as _qkid
+        from ..quotas import month_key as _mk, seconds_until_next_month
+        scoped = _qkid(x_api_key)
+        if scoped is None:
+            # require_api_key already rejected anonymous callers, so
+            # the only way to land here without a scoped id is an env
+            # key that the quota module cannot resolve. Treat as an
+            # explicit unsupported case rather than a silent 200.
+            raise HTTPException(404, "caller key is not tracked for usage")
+        plan = quota_store.plan_for(scoped)
+        all_usage = quota_store.usage_all().get(scoped, {})
+        current = _mk()
+        used = int(all_usage.get(current, 0))
+        remaining, _ = quota_store.remaining(scoped, current)
+        reset_seconds = seconds_until_next_month()
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        reset_at = (_dt.now(_tz.utc) + _td(seconds=reset_seconds)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        return {
+            "key_id": scoped,
+            "plan": plan.to_public(),
+            "current_month": current,
+            "used": used,
+            "remaining": int(remaining),
+            "reset_at": reset_at,
+            "reset_in_seconds": int(reset_seconds),
+            "history": {m: int(v) for m, v in sorted(all_usage.items())},
+        }
+
     # --- Active sessions ------------------------------------------------
     # Resolve the calling key into a short, audit-friendly label so a
     # revocation row records WHO placed the block. Falls back to the

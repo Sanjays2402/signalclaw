@@ -44,6 +44,11 @@ DEFAULT_EXEMPT = (
     "/docs", "/openapi.json", "/redoc",
     "/docs/oauth2-redirect",
     "/public",
+    # Self-usage introspection must not burn the quota it reports on,
+    # otherwise a dashboard polling every minute would shrink the very
+    # number it is rendering. Cross-tenant isolation is enforced inside
+    # the handler by deriving the key id from x-api-key.
+    "/usage/me",
 )
 
 

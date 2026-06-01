@@ -2,7 +2,26 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-API-key tenant scoping on the /v1/runs read surface
+## New: caller-facing /usage/me self-service billing surface
+
+Every customer dashboard needs to render "you have used N of M calls this month, resets at X" without granting the dashboard an admin scope or exposing other tenants' usage. Procurement reviewers also expect a documented self-service endpoint so customers can reconcile invoices without filing a support ticket.
+
+- `GET /usage/me` (requires only a valid `x-api-key`) returns the caller's `plan`, `current_month`, `used`, `remaining`, `reset_at`, `reset_in_seconds`, and per-month `history`.
+- The lookup key is derived strictly from the presented `x-api-key`. Query params and body fields cannot redirect the lookup to another tenant, so the surface is safe to expose to first-party dashboards.
+- Added to the quota middleware exempt list so polling the endpoint does not consume the quota it reports on.
+- `tests/test_usage_me.py` proves cross-tenant isolation (key A's poll shows only key A's counter even when spoofing `?key_id=`), that anonymous callers are rejected, and that self-polling is free.
+
+### Try it
+
+```bash
+make dev
+uvicorn signalclaw.api:create_app --factory --port 8000
+
+curl -s -H "x-api-key: $SIGNALCLAW_API_KEY" http://localhost:8000/usage/me | jq
+# => {"key_id":"key:...","plan":{"id":"free",...},"used":3,"remaining":2,"reset_at":"...Z",...}
+```
+
+## Previously: per-API-key tenant scoping on the /v1/runs read surface
 
 Mutating runs via `/api/v1/runs*` already enforced per-key ownership (see `decideRunMutation` in `lib/runAcl.ts`), but every `read` or `admin` key could list, fetch, export, and download the PDF of every other tenant's run on the same install. `queryRuns` returned a global view and the GET-by-id handler had no ownership check at all. Procurement flagged this as a hard cross-tenant data leak because saved runs carry the customer's full price series and notes.
 
@@ -39,6 +58,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   -H "Authorization: Bearer $B" "http://localhost:7430/api/v1/runs/$RUN"
 # => 404
 ```
+
 
 ## Previously: tamper-evident audit log with /audit/verify
 
