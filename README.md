@@ -2,7 +2,30 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: legal hold registry for eDiscovery and regulator-ordered preservation
+## New: discoverable observability and security surface for SRE and procurement reviewers
+
+SignalClaw already exposed `/healthz`, `/readyz`, and `/metrics` (Prometheus text exposition) from the dashboard process, propagated `X-Request-Id` through edge middleware into every audit row, and shipped settings pages for SSO, SCIM, audit, freeze, and the admin console. None of those pages were linked from `/settings`, so a buyer's security or SRE reviewer could not find them without grepping the repo. That is the difference between "we have it" and "we pass review". This change makes the surface discoverable.
+
+- `web/app/settings/observability/page.tsx` is a new admin page that live-probes `/healthz`, `/readyz`, and `/metrics` from the browser, shows latency and HTTP status per probe, displays the `X-Request-Id` returned by the last liveness call, and renders a copy-to-clipboard Prometheus scrape config and ready-to-run `curl` commands keyed to the current origin. Loading, empty, and error states are wired for each probe card and the layout is responsive at 375px and 1440px.
+- `web/app/settings/page.tsx` now links the four previously orphaned enterprise pages (SSO, SCIM, Audit log, Freeze) plus the new Observability page and the existing `/admin` console, so every customer-facing security feature is one click from `/settings`.
+- `web/tests/settingsIndexDiscoverability.test.mjs` is a regression test that walks `web/app/settings/*/page.tsx` and fails the build if any top-level page is missing an `href` on the index, plus pins that the observability page surfaces `/healthz`, `/readyz`, `/metrics`, and the `X-Request-Id` propagation story. 443/443 web tests pass; `next build` succeeds.
+
+### Try it
+
+```bash
+make dev
+cd web && npm run dev          # http://localhost:3000
+
+# the three SRE endpoints, unauthenticated and safe to scrape:
+curl -fsS http://localhost:3000/healthz
+curl -fsS http://localhost:3000/readyz
+curl -fsS http://localhost:3000/metrics | head -40
+
+# open the new console:
+open http://localhost:3000/settings/observability
+```
+
+## Previously: legal hold registry for eDiscovery and regulator-ordered preservation
 
 Enterprise procurement reviewers in financial services, healthcare, and government will not sign a contract without a documented way to suspend deletion when counsel issues a litigation hold. SignalClaw already pruned the hash-chained audit log on a 90-day window and exposed `POST /privacy/delete` for GDPR Article 17 erasure, which meant a routine compliance script could destroy evidence the operator was legally required to preserve. The new legal hold registry closes that gap end-to-end.
 

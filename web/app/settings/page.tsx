@@ -28,6 +28,12 @@ import {
   FileLock,
   LockKey,
   Gauge,
+  Pulse,
+  Snowflake,
+  Users,
+  SignIn,
+  ListMagnifyingGlass,
+  Wrench,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -194,6 +200,42 @@ function Settings() {
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
             <Bell size={14} weight="duotone" /> Alert tenants
+          </Link>
+          <Link
+            href="/settings/sso"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <SignIn size={14} weight="duotone" /> SSO
+          </Link>
+          <Link
+            href="/settings/scim"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Users size={14} weight="duotone" /> SCIM
+          </Link>
+          <Link
+            href="/settings/audit"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <ListMagnifyingGlass size={14} weight="duotone" /> Audit log
+          </Link>
+          <Link
+            href="/settings/freeze"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Snowflake size={14} weight="duotone" /> Freeze
+          </Link>
+          <Link
+            href="/settings/observability"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Pulse size={14} weight="duotone" /> Observability
+          </Link>
+          <Link
+            href="/admin"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Wrench size={14} weight="duotone" /> Admin console
           </Link>
           <Link
             href="/usage"
