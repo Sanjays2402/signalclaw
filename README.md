@@ -2,7 +2,35 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-API-key path-prefix allowlist (least privilege at the endpoint level)
+## New: SSO session idle + absolute timeout policy
+
+Procurement reality: SOC2 CC6.1 and every enterprise security questionnaire expect that an SSO browser session is killed after N minutes of inactivity, and that even an active session is forced through re-auth at an absolute upper bound. Until this change the SSO session cookie carried a fixed 12h `exp` and `ssoSessionRegistry` tracked `last_seen_at` per row but never compared it against a configurable timeout, so a tenant could not enforce a tighter window than the cookie's own TTL. This release adds a per-deployment policy (`enforce`, `idle_timeout_s`, `absolute_timeout_s`) that is consulted on every `verifySessionCookie` call. An idle-expired or past-absolute session is rejected the same way a revoked one is and the registry row is marked revoked so `/settings/sessions` shows the reason (`idle-timeout` or `absolute-timeout`). Defaults are off so an upgrade does not log out an existing tenant; an admin opts in from `/settings/sessions`.
+
+- `GET /api/admin/session-timeout` returns `{policy:{enforce, idle_timeout_s, absolute_timeout_s, updated_at, updated_by}}`. Admin-scoped, audited.
+- `PUT /api/admin/session-timeout` updates any subset of the three fields. Admin scope + admin MFA gated. Validates `0` or `[60s, 30d]` for idle and `0` or `[5m, 30d]` for absolute, returns structured 400 on out-of-range. Writes an audit line with before/after values so a SOC2 reviewer can prove who tightened the window and when.
+- `ssoSessionRegistry.checkSession` calls the policy on the hot path. Idle/absolute hits flip the row to `revoked_at = now, revoked_by = "session-timeout-policy", revoked_reason = "idle-timeout"|"absolute-timeout"` so the same cookie short-circuits cheaply on the next request and the offboarding ledger surfaces it.
+- `/settings/sessions` ships a Timeout policy card with idle (minutes) and absolute (hours) inputs, a live status badge, and the last actor + timestamp. Wires into `/admin/controls` so the control inventory shows it as `enforcing` or `off`.
+- `tests/sessionTimeoutPolicy.test.mjs` pins the contract: the pure `decideTimeout` helper handles idle, absolute, and disabled cases; `updatePolicy` rejects out-of-range input and persists valid input across cache resets; `verifySessionCookie` rejects an idle-expired cookie end-to-end and marks the registry row revoked with the right reason; absolute timeout rejects a session that is actively used but past its issuance window.
+
+### Try it
+
+```bash
+cd web && pnpm dev  # http://localhost:7430
+
+# Read the current policy (defaults: enforce=false, idle 30m, absolute 12h).
+curl -sS -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:7430/api/admin/session-timeout | jq
+
+# Enforce a 15-minute idle window and an 8-hour absolute cap.
+curl -sS -X PUT \
+  -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  -H "x-mfa-code: $(oathtool --totp -b $SIGNALCLAW_ADMIN_TOTP_SECRET)" \
+  -H "content-type: application/json" \
+  -d '{"enforce":true,"idle_timeout_s":900,"absolute_timeout_s":28800}' \
+  http://localhost:7430/api/admin/session-timeout | jq
+```
+
+## Previously: per-API-key path-prefix allowlist (least privilege at the endpoint level)
 
 Procurement reality: PCI-DSS 7.1 and SOC2 CC6.1 both require that production credentials carry the minimum access needed for the job, not the full surface of the platform. Before this change a SignalClaw API key was capped by its role (owner / admin / member / viewer) and scopes (read / trade / admin), but a `member` key issued to a customer's nightly report runner could still hit any non-admin route in the API. This release adds a per-key path-prefix allowlist that enforces least privilege at the endpoint level: a key minted with `path_allowlist=["/v1/runs", "/picks"]` is rejected with `403 per-key-path` on any other path, even if its scopes would otherwise permit it. Empty allowlist preserves the legacy unrestricted behaviour, so rows that predate this field keep working untouched.
 

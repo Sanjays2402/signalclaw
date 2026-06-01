@@ -171,6 +171,8 @@ function Inner() {
         </div>
       ) : null}
 
+      <TimeoutPolicyCard onChange={() => mutate()} onError={setErrMsg} onOk={setOkMsg} />
+
       <Card>
         <div className="space-y-3 p-1">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -338,5 +340,143 @@ function Inner() {
         </form>
       </Card>
     </div>
+  );
+}
+
+type TimeoutPolicy = {
+  enforce: boolean;
+  idle_timeout_s: number;
+  absolute_timeout_s: number;
+  updated_at: string | null;
+  updated_by: string | null;
+};
+
+function fmtDur(s: number): string {
+  if (!s) return "off";
+  if (s % 3600 === 0) return `${s / 3600}h`;
+  if (s % 60 === 0) return `${s / 60}m`;
+  return `${s}s`;
+}
+
+function TimeoutPolicyCard(props: {
+  onChange: () => void;
+  onError: (m: string) => void;
+  onOk: (m: string) => void;
+}) {
+  const { data, error, isLoading, mutate } = useSWR<{ policy: TimeoutPolicy }>(
+    "/admin/session-timeout",
+    swrFetcher,
+  );
+  const [enforce, setEnforce] = useState<boolean>(false);
+  const [idleMin, setIdleMin] = useState<string>("30");
+  const [absHr, setAbsHr] = useState<string>("12");
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  // Hydrate the form once when the policy first loads.
+  if (data && !dirty && data.policy && idleMin === "30" && absHr === "12" && !enforce && data.policy.enforce) {
+    setEnforce(data.policy.enforce);
+    setIdleMin(String(Math.round(data.policy.idle_timeout_s / 60)));
+    setAbsHr(String(Math.round(data.policy.absolute_timeout_s / 3600)));
+  }
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const idle_s = Math.max(0, Math.floor(Number(idleMin) || 0) * 60);
+      const abs_s = Math.max(0, Math.floor(Number(absHr) || 0) * 3600);
+      const res: { policy: TimeoutPolicy } = await api("/admin/session-timeout", {
+        method: "PUT",
+        body: JSON.stringify({
+          enforce,
+          idle_timeout_s: idle_s,
+          absolute_timeout_s: abs_s,
+        }),
+      });
+      props.onOk(
+        `Session timeout ${res.policy.enforce ? "enforcing" : "disabled"} (idle ${fmtDur(res.policy.idle_timeout_s)}, absolute ${fmtDur(res.policy.absolute_timeout_s)}).`,
+      );
+      setDirty(false);
+      await mutate();
+      props.onChange();
+    } catch (e) {
+      props.onError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (isLoading) return <Loading label="Loading timeout policy" />;
+  if (error) return <ErrorBox err={error} />;
+  if (!data) return null;
+  const p = data.policy;
+
+  return (
+    <Card>
+      <form onSubmit={save} className="space-y-4 p-1">
+        <div className="flex items-start gap-3">
+          <ClockCounterClockwise size={22} weight="duotone" className="mt-0.5 text-sky-500" />
+          <div className="flex-1">
+            <h2 className="text-base font-semibold">Session timeout policy</h2>
+            <p className="mt-1 text-sm text-neutral-500">
+              Idle timeout kills any session that has not made a request
+              for the specified window. Absolute timeout kills any session
+              that has been open past the cap regardless of activity.
+              Updates take effect on the very next authenticated request.
+            </p>
+            <div className="mt-2 flex items-center gap-2 text-xs">
+              <Badge tone={p.enforce ? "up" : "neutral"}>
+                {p.enforce ? "enforcing" : "off"}
+              </Badge>
+              <span className="text-neutral-500">
+                idle {fmtDur(p.idle_timeout_s)} · absolute {fmtDur(p.absolute_timeout_s)}
+              </span>
+              {p.updated_at ? (
+                <span className="text-neutral-500">
+                  · updated {fmtAgo(Math.floor(new Date(p.updated_at).getTime() / 1000))} by {p.updated_by ?? "unknown"}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={enforce}
+              onChange={(e) => { setEnforce(e.target.checked); setDirty(true); }}
+              className="h-4 w-4"
+            />
+            <span>Enforce</span>
+          </label>
+          <Field label="Idle timeout (minutes, 0 to disable)">
+            <input
+              type="number"
+              min={0}
+              value={idleMin}
+              onChange={(e) => { setIdleMin(e.target.value); setDirty(true); }}
+              className="w-full rounded-md border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-700"
+            />
+          </Field>
+          <Field label="Absolute timeout (hours, 0 to disable)">
+            <input
+              type="number"
+              min={0}
+              value={absHr}
+              onChange={(e) => { setAbsHr(e.target.value); setDirty(true); }}
+              className="w-full rounded-md border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-700"
+            />
+          </Field>
+        </div>
+
+        <div className="flex justify-end">
+          <Button type="submit" disabled={saving}>
+            {saving ? "Saving" : "Save policy"}
+          </Button>
+        </div>
+      </form>
+    </Card>
   );
 }

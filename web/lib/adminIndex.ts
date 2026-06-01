@@ -27,6 +27,7 @@ import { getConfig as getLockoutConfig } from "./authLockoutStore.ts";
 import { getConcurrencyPolicy, getInFlight } from "./concurrencyStore.ts";
 import { listHolds } from "./legalHoldStore.ts";
 import { listSessions } from "./ssoSessionRegistry.ts";
+import { getPolicy as getSessionTimeoutPolicy } from "./sessionTimeoutPolicy.ts";
 
 export type ControlStatus = "enforcing" | "monitoring" | "configured" | "off" | "warning";
 
@@ -75,6 +76,7 @@ export async function buildAdminIndex(
     concurrency,
     holds,
     sessions,
+    sessionTimeout,
   ] = await Promise.all([
     safe(() => getResidencyPolicy()),
     safe(() => getNetworkPolicy()),
@@ -90,6 +92,7 @@ export async function buildAdminIndex(
     safe(() => getConcurrencyPolicy()),
     safe(() => listHolds()),
     safe(() => listSessions({ limit: 1 })),
+    safe(() => getSessionTimeoutPolicy()),
   ]);
 
   const cors = (() => {
@@ -172,6 +175,18 @@ export async function buildAdminIndex(
     summary: sessions
       ? `${sessions.active_count} active, force-logout available`
       : "Ledger empty",
+  });
+  controls.push({
+    key: "session-timeout",
+    label: "Session idle + absolute timeout",
+    href: "/settings/sessions",
+    category: "identity",
+    status: sessionTimeout?.enforce ? "enforcing" : "off",
+    summary: sessionTimeout
+      ? sessionTimeout.enforce
+        ? `Idle ${Math.round(sessionTimeout.idle_timeout_s / 60)}m, absolute ${Math.round(sessionTimeout.absolute_timeout_s / 3600)}h`
+        : `Configured (idle ${Math.round(sessionTimeout.idle_timeout_s / 60)}m, absolute ${Math.round(sessionTimeout.absolute_timeout_s / 3600)}h) but not enforcing`
+      : "Default policy",
   });
   controls.push({
     key: "keys",

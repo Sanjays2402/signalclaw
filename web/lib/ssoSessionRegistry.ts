@@ -175,7 +175,7 @@ export async function getSession(jti: string): Promise<SsoSessionRecord | null> 
 
 export type RevocationStatus =
   | { revoked: false }
-  | { revoked: true; reason: "revoked" | "global-epoch" | "expired" | "unknown-jti" };
+  | { revoked: true; reason: "revoked" | "global-epoch" | "expired" | "unknown-jti" | "idle-timeout" | "absolute-timeout" };
 
 // Consulted on every session verification. Returns revoked=true if the
 // session must be rejected. When `liveness` is supplied and the session
@@ -203,6 +203,26 @@ export async function checkSession(
   const row = store.records.find((r) => r.jti === jti);
   if (!row) return { revoked: true, reason: "unknown-jti" };
   if (row.revoked_at) return { revoked: true, reason: "revoked" };
+
+  // Session idle / absolute timeout policy. Consulted on every
+  // verification so an admin tightening the policy takes effect on
+  // the very next request without waiting for the cookie's own exp.
+  // Imported lazily to avoid a circular import at module init.
+  const { getPolicy: getTimeoutPolicy, decideTimeout } = await import("./sessionTimeoutPolicy.ts");
+  const policy = await getTimeoutPolicy();
+  const verdict = decideTimeout(policy, { iat, last_seen_at: row.last_seen_at, now });
+  if (verdict) {
+    // Mark the registry row as revoked so /admin/sessions shows the
+    // reason and so a re-validation of the same cookie short-circuits
+    // on the cheaper `row.revoked_at` check above. Fire-and-forget
+    // flush; we still reject this request regardless of disk latency.
+    row.revoked_at = now;
+    row.revoked_by = "session-timeout-policy";
+    row.revoked_reason = verdict.reason;
+    void flush();
+    return { revoked: true, reason: verdict.reason };
+  }
+
   if (liveness) {
     // Throttle disk writes: only flush when the recorded last_seen is
     // more than 30s stale. Verification runs on every request and we
@@ -305,4 +325,13 @@ export async function listSessions(opts: ListOptions = {}): Promise<{
 // Test helper — never used in production code.
 export function _resetForTests(): void {
   cache = null;
+}
+
+// Test helper: expose the live in-memory store so a test can backdate
+// fields like `last_seen_at` or `iat` to simulate a stale session
+// without having to wait wall-clock time. Mutations are persisted on
+// the next flush triggered by checkSession; tests can also call any
+// public mutator to force a flush.
+export async function _storeForTests() {
+  return await readStore();
 }
