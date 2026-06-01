@@ -23,6 +23,7 @@ from .retention import (
     AuditRetentionPruner,
     retention_config_from_env,
 )
+from .anomalies import detect as detect_anomalies
 
 __all__ = [
     "AuditEvent",
@@ -30,6 +31,7 @@ __all__ = [
     "AuditMiddleware",
     "AuditRetentionPruner",
     "GENESIS_HASH",
+    "detect_anomalies",
     "get_audit_log",
     "reset_audit_log",
     "retention_config_from_env",

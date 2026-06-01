@@ -546,6 +546,44 @@ def create_app() -> FastAPI:
         days_back = max(1, min(int(days_back), 365))
         return audit_log.verify(days_back=days_back)
 
+    @app.get(
+        "/audit/anomalies",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def audit_anomalies(
+        window_min: int = 60,
+        burst_threshold: int = 10,
+        fanout_threshold: int = 3,
+        offhours_start_utc: int = 13,
+        offhours_end_utc: int = 2,
+    ):
+        """Detect suspicious patterns in the recent audit log.
+
+        Runs four detectors over the live audit JSONL (auth burst per
+        IP, denied-call burst per API key, single key seen from many
+        IPs, off-hours admin mutations) and returns a sorted findings
+        list. The detector is a pure function of what is already on
+        disk so an auditor can replay it. All inputs are validated
+        and clamped to safe ranges.
+        """
+        from ..audit import detect_anomalies as _detect
+        try:
+            window_min = max(1, min(int(window_min), 24 * 60))
+            burst_threshold = max(1, min(int(burst_threshold), 10_000))
+            fanout_threshold = max(2, min(int(fanout_threshold), 1_000))
+            offhours_start_utc = max(0, min(int(offhours_start_utc), 23))
+            offhours_end_utc = max(0, min(int(offhours_end_utc), 23))
+        except (TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=f"invalid parameter: {e}")
+        return _detect(
+            audit_log,
+            window_min=window_min,
+            burst_threshold=burst_threshold,
+            fanout_threshold=fanout_threshold,
+            offhours_start_utc=offhours_start_utc,
+            offhours_end_utc=offhours_end_utc,
+        )
+
     def _audit_filters_from_query(
         actor_label: str | None,
         actor_key_hash: str | None,

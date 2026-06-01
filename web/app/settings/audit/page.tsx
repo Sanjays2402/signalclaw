@@ -228,6 +228,8 @@ export default function AuditPage() {
         )}
       </Card>
 
+      <AnomaliesCard />
+
       <Card title="Filters">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
           <label className="text-[11px] muted uppercase tracking-wider">
@@ -360,5 +362,126 @@ export default function AuditPage() {
         )}
       </Card>
     </div>
+  );
+}
+
+type Finding = {
+  kind: "auth_burst" | "key_burst" | "key_ip_fanout" | "offhours_admin";
+  severity: "low" | "medium" | "high";
+  summary: string;
+  subject: string;
+  count: number;
+  first_ts: string;
+  last_ts: string;
+  request_ids: string[];
+  extra: Record<string, unknown>;
+};
+
+type AnomalyResp = {
+  window_min: number;
+  scanned: number;
+  generated_at: string;
+  thresholds: Record<string, unknown>;
+  findings: Finding[];
+};
+
+const SEV_BADGE: Record<Finding["severity"], string> = {
+  high: "bg-[var(--down)]/15 text-[var(--down)]",
+  medium: "bg-[var(--warn,#f59e0b)]/15 text-[var(--warn,#f59e0b)]",
+  low: "bg-[var(--muted,#94a3b8)]/15 muted",
+};
+
+const KIND_LABEL: Record<Finding["kind"], string> = {
+  auth_burst: "Auth burst",
+  key_burst: "Key burst",
+  key_ip_fanout: "Key fan-out",
+  offhours_admin: "Off-hours admin",
+};
+
+function AnomaliesCard() {
+  const [windowMin, setWindowMin] = useState(60);
+  const url = `/audit/anomalies?window_min=${windowMin}`;
+  const { data, error, isLoading, isValidating, mutate } = useSWR<AnomalyResp>(
+    url,
+    swrFetcher,
+    { refreshInterval: 0 },
+  );
+
+  return (
+    <Card
+      title="Anomaly detection"
+      right={
+        <div className="flex items-center gap-2">
+          <select
+            className="input text-[11px] py-0.5"
+            value={windowMin}
+            onChange={(e) => setWindowMin(Number(e.target.value))}
+            aria-label="Detection window"
+          >
+            <option value={15}>15m</option>
+            <option value={60}>1h</option>
+            <option value={240}>4h</option>
+            <option value={1440}>24h</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => mutate()}
+            disabled={isValidating}
+            className="btn-ghost text-[11px] uppercase tracking-wider inline-flex items-center gap-1"
+          >
+            <ArrowsClockwise size={14} weight="duotone" />
+            {isValidating ? "Scanning" : "Rescan"}
+          </button>
+        </div>
+      }
+    >
+      <p className="text-[12px] muted mb-3">
+        Pattern-matches the live audit log for credential bursts, fan-out across IPs, and admin mutations
+        outside business hours. Findings link to the matching request ids you can pivot into below.
+      </p>
+      {isLoading ? (
+        <Loading label="Scanning recent audit log" />
+      ) : error ? (
+        <ErrorBox err={error} />
+      ) : !data || data.findings.length === 0 ? (
+        <Empty
+          title="No anomalies in window"
+          hint={`Scanned ${data?.scanned ?? 0} events in the last ${windowMin} minutes.`}
+        />
+      ) : (
+        <ul className="space-y-2">
+          {data.findings.map((f, i) => (
+            <li
+              key={`${f.kind}-${f.subject}-${i}`}
+              className="flex flex-col gap-1 rounded border border-[var(--border,#27272a)] p-2"
+            >
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    className={`text-[10px] uppercase tracking-wider rounded px-1.5 py-0.5 ${SEV_BADGE[f.severity]}`}
+                  >
+                    {f.severity}
+                  </span>
+                  <span className="text-[11px] uppercase tracking-wider muted">
+                    {KIND_LABEL[f.kind]}
+                  </span>
+                  <span className="text-[12px]">{f.summary}</span>
+                </div>
+                <span className="text-[11px] muted mono">
+                  <Clock size={12} weight="duotone" className="inline mr-1" />
+                  {new Date(f.last_ts).toLocaleTimeString()}
+                </span>
+              </div>
+              {f.request_ids.length > 0 && (
+                <div className="text-[11px] muted mono truncate" title={f.request_ids.join(", ")}>
+                  req: {f.request_ids.slice(0, 3).join(" ")}
+                  {f.request_ids.length > 3 ? ` +${f.request_ids.length - 3}` : ""}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }

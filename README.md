@@ -2,7 +2,31 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: caller-facing /usage/me self-service billing surface
+## New: audit-log anomaly detector for the admin console
+
+The append-only audit log already captures every mutating call with a hash-chained `prev_hash`/`entry_hash` pair, but a security reviewer still had to eyeball thousands of rows to spot a credential-stuffing burst or an out-of-hours admin mutation. `GET /audit/anomalies` runs four detectors directly over the live log and returns a sorted findings list the admin console renders inline on `settings/audit`.
+
+- `auth_burst`: many `401`/`403` rows from one source IP inside the window.
+- `key_burst`: same volume of denied calls pivoted by API key hash, catches credentials being abused even when the attacker rotates IPs.
+- `key_ip_fanout`: one API key seen from many distinct non-loopback IPs (credential sharing or exfil).
+- `offhours_admin`: a successful admin `PUT`/`POST`/`DELETE` outside the configured business-hours window in UTC.
+- All thresholds are query params with safe clamps; the endpoint requires the `admin` scope and the MFA gate that already guards `/audit`. Every finding carries the contributing `request_id`s so an operator can pivot straight into the existing audit search filters.
+- `tests/test_audit_anomalies.py` proves the burst, fan-out, and off-hours detectors fire on the expected fixtures and that read-only keys are denied with 403.
+
+### Try it
+
+```bash
+make dev
+uvicorn signalclaw.api:create_app --factory --port 8000
+
+curl -s -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  'http://localhost:8000/audit/anomalies?window_min=60' | jq
+# => {"window_min":60,"scanned":42,"findings":[{"kind":"auth_burst","severity":"high",...}]}
+```
+
+Open `http://localhost:7430/settings/audit` to see the anomalies card above the filters; pick a window (15m / 1h / 4h / 24h) and rescan.
+
+## Previously: caller-facing /usage/me self-service billing surface
 
 Every customer dashboard needs to render "you have used N of M calls this month, resets at X" without granting the dashboard an admin scope or exposing other tenants' usage. Procurement reviewers also expect a documented self-service endpoint so customers can reconcile invoices without filing a support ticket.
 
