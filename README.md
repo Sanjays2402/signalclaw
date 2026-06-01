@@ -2,6 +2,21 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
+## New: admin console page for the API-key expiry watchlist
+
+The FastAPI service exposes `/admin/keys/expiring` and the Next.js API exposes `/api/admin/keys/expiring`, both classifying every API key by how soon it lapses (expired / under 24h / under 7d / under 30d). Until now there was no human surface in the admin console for it, so an operator had to curl the endpoint to find out what was about to break. This release adds `/admin/keys/expiring`: an admin-only page that polls the live queue every 60 seconds, lets you widen the lookahead window (7 / 14 / 30 / 60 / 90 days), groups keys by urgency bucket, and links straight to `/settings/keys` for rotation. Same classification taxonomy as `web/lib/keyExpiry.ts` and the FastAPI `expiry_bucket` helper so the three surfaces never disagree.
+
+- Admin nav now lists "Expiring API keys" next to "Tenant watchlists" on `/admin`.
+- Empty state when nothing expires in the window. Loading and error states wired. Responsive at 375 / 1440.
+- Server-side admin gating is unchanged: the FastAPI endpoint still requires admin scope + admin MFA and is audited; the Next.js route still enforces the admin-key check in production posture.
+
+### Try it
+
+```bash
+cd web && npm install && npm run dev
+# then open http://localhost:3000/admin/keys/expiring
+```
+
 ## New: proactive API-key expiry warnings on the FastAPI service
 
 Procurement reality: SOC2 CC6.1 and ISO 27001 A.9.2.6 require time-bound credentials, but rejecting an expired key at 03:00 on a Sunday is too late. The Next.js admin already surfaced an expiry watchlist; the FastAPI service (port 7431) had nothing, so a tenant talking only to the Python API got no advance warning. This release adds parity: a watchlist endpoint plus advisory response headers on every authenticated request so an SDK can fire its rotation runbook before automation breaks.
