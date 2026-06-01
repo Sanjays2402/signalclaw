@@ -2,7 +2,40 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: per-API-key alert multi-tenancy
+## New: tamper-evident audit log with /audit/verify
+
+The Python backend audit log was append-only JSONL but had no integrity binding between rows, so a privileged operator with disk access could quietly edit a past entry without anyone being able to prove it. Procurement reviewers (SOC2 CC7.2, ISO 27001 A.12.4) want on-demand evidence that the audit trail has not been altered. Every persisted audit row now carries `prev_hash` and `entry_hash` fields forming a sha256 chain, and a new admin endpoint recomputes the chain across the requested window and reports the first break.
+
+- `AuditEvent` gained `prev_hash` and `entry_hash`. `entry_hash = sha256(prev_hash + canonical_body_json)` where the body is the row with the two hash fields removed, so re-verification is a pure function of the on-disk JSONL.
+- `AuditLog.record` resolves the previous chain head from a `.chain-state` file (or reconstructs it from the newest daily JSONL on first run) and writes the new row with both fields. The chain head is updated atomically with each write under the existing log lock.
+- New `GENESIS_HASH` constant (64 zero hex chars) anchors the first ever entry.
+- New `AuditLog.verify(days_back)` walks daily files in chronological order, recomputes every `entry_hash`, validates each `prev_hash` against the previous entry, and returns `{ok, checked, mismatches:[...], head, days_back, files}`. Mismatch entries include `{file, line, reason, expected, actual}` so an auditor can jump straight to the tampered row.
+- New `GET /audit/verify?days_back=N` admin endpoint (admin scope + MFA, same as `/audit`) exposes the verifier. Bounded to 1..365 days.
+- CSV export now carries `prev_hash` and `entry_hash` columns so a SIEM can re-verify after ingest.
+- `tests/test_audit_hash_chain.py` proves: the first row anchors to genesis, every row chains forward, mutating any persisted row's body is detected with the exact file + line, and the endpoint refuses non-admin callers while returning a clean report for admins.
+
+### Try it
+
+```bash
+make dev         # installs into .venv
+uvicorn signalclaw.api:create_app --factory --port 8000
+
+# Trigger a few audited writes, then verify the chain.
+curl -s -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  -X POST -H 'content-type: application/json' \
+  -d '{"label":"ops","scopes":["read"]}' \
+  http://localhost:8000/admin/keys
+
+curl -s -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:8000/audit/verify?days_back=7 | jq
+# => {"ok": true, "checked": N, "mismatches": [], "head": "<sha256>", ...}
+
+# Now tamper: edit any past row's path field in data/audit/audit-YYYY-MM-DD.jsonl,
+# rerun the call, and the response flips to ok=false with the offending
+# file + line and the recomputed expected hash for an auditor.
+```
+
+## Previously: per-API-key alert multi-tenancy
 
 The web `alertStore` was a single flat list shared across every API key, so an alert armed by one tenant was visible to and deletable by every other tenant hitting the same install. The `/api/v1/alerts*` route comments even said the quiet part out loud: "scope filtering is by ownership of the key, not the alert." Procurement flagged this as a hard multi-tenancy finding because alerts also drive notifier deliveries.
 

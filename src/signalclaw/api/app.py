@@ -529,6 +529,23 @@ def create_app() -> FastAPI:
     def audit_days():
         return {"days": audit_log.list_days()}
 
+    @app.get(
+        "/audit/verify",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def audit_verify(days_back: int = 30):
+        """Recompute the audit log hash-chain and report any tampering.
+
+        Every persisted audit row carries ``prev_hash`` and
+        ``entry_hash`` fields where ``entry_hash = sha256(prev_hash +
+        canonical_body_json)``. This endpoint walks the last
+        ``days_back`` UTC days in chronological order and recomputes
+        the chain. Procurement / SOC2 reviewers can use the response
+        as on-demand evidence that the audit log has not been edited.
+        """
+        days_back = max(1, min(int(days_back), 365))
+        return audit_log.verify(days_back=days_back)
+
     def _audit_filters_from_query(
         actor_label: str | None,
         actor_key_hash: str | None,

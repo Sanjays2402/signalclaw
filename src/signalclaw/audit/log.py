@@ -56,6 +56,12 @@ def _hash_key(key: str) -> str:
     return sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
+# Genesis hash for the audit chain. 64 zero hex chars so the first
+# real entry binds against a well-known value an auditor can recompute
+# without any prior state.
+GENESIS_HASH: str = "0" * 64
+
+
 @dataclass
 class AuditEvent:
     ts: str
@@ -69,6 +75,24 @@ class AuditEvent:
     duration_ms: float
     action: str = ""
     extra: dict = field(default_factory=dict)
+    # Tamper-evident chain fields. ``prev_hash`` is the ``entry_hash``
+    # of the previous record (or :data:`GENESIS_HASH` for the first
+    # ever entry). ``entry_hash`` is sha256 over
+    # ``prev_hash + canonical_body_json`` where the body excludes
+    # both hash fields. Excluding them keeps the body deterministic so
+    # re-verification is a pure function of the on-disk row.
+    prev_hash: str = ""
+    entry_hash: str = ""
+
+    def body_json(self) -> str:
+        """Canonical JSON of the auditable body (chain fields omitted)."""
+        d = asdict(self)
+        d.pop("prev_hash", None)
+        d.pop("entry_hash", None)
+        return json.dumps(d, separators=(",", ":"), sort_keys=True)
+
+    def compute_entry_hash(self, prev_hash: str) -> str:
+        return sha256((prev_hash + self.body_json()).encode("utf-8")).hexdigest()
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
@@ -81,18 +105,81 @@ class AuditLog:
         self.base = Path(base_dir)
         self.base.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        # Chain head cache so we do not stat/parse a file on every
+        # write. Lazily populated on the first record() call from the
+        # on-disk ``.chain-state`` file plus the latest daily JSONL.
+        self._chain_state_path = self.base / ".chain-state"
+        self._last_hash: Optional[str] = None
+
+    def _load_chain_head(self) -> str:
+        """Return the entry_hash of the most recent audited row.
+
+        Trusts the persisted ``.chain-state`` file if present; otherwise
+        reconstructs from the newest daily JSONL so a deployment that
+        upgrades into hash-chaining still produces a continuous chain
+        from its first new write onward.
+        """
+        if self._last_hash is not None:
+            return self._last_hash
+        try:
+            if self._chain_state_path.exists():
+                state = json.loads(self._chain_state_path.read_text(encoding="utf-8"))
+                head = str(state.get("last_hash") or "")
+                if head:
+                    self._last_hash = head
+                    return head
+        except (OSError, json.JSONDecodeError):
+            pass
+        # Fallback: scan the newest daily file for its last entry_hash.
+        for p in sorted(self.base.glob("audit-*.jsonl"), reverse=True):
+            try:
+                with p.open("r", encoding="utf-8") as fh:
+                    last_line = ""
+                    for line in fh:
+                        line = line.strip()
+                        if line:
+                            last_line = line
+                if last_line:
+                    try:
+                        row = json.loads(last_line)
+                        h = str(row.get("entry_hash") or "")
+                        if h:
+                            self._last_hash = h
+                            return h
+                    except json.JSONDecodeError:
+                        continue
+            except OSError:
+                continue
+        self._last_hash = GENESIS_HASH
+        return self._last_hash
+
+    def _persist_chain_head(self, head: str) -> None:
+        try:
+            self._chain_state_path.write_text(
+                json.dumps({"last_hash": head}, separators=(",", ":")),
+                encoding="utf-8",
+            )
+        except OSError:
+            # The chain head will be recovered from the JSONL on next
+            # load; persistence is best-effort.
+            pass
 
     def _path_for(self, day: Optional[str] = None) -> Path:
         d = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return self.base / f"audit-{d}.jsonl"
 
     def record(self, event: AuditEvent) -> None:
-        line = event.to_json() + "\n"
         path = self._path_for()
         with self._lock:
+            prev = self._load_chain_head()
+            event.prev_hash = prev
+            event.entry_hash = event.compute_entry_hash(prev)
+            line = event.to_json() + "\n"
             # open per write so external log rotation / removal is safe
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(line)
+            self._last_hash = event.entry_hash
+            self._persist_chain_head(event.entry_hash)
 
     def tail(self, limit: int = 100, day: Optional[str] = None) -> List[dict]:
         """Return up to ``limit`` most recent events for ``day`` (UTC).
@@ -140,8 +227,121 @@ class AuditLog:
     _CSV_FIELDS: tuple = (
         "ts", "request_id", "method", "path", "status",
         "actor_label", "actor_key_hash", "source_ip",
-        "duration_ms", "action",
+        "duration_ms", "action", "prev_hash", "entry_hash",
     )
+
+    # --- tamper-evident verification ------------------------------------
+    def verify(
+        self,
+        days_back: int = 30,
+        max_rows: int = 1_000_000,
+    ) -> Dict[str, object]:
+        """Recompute the hash chain across daily files and report breaks.
+
+        Walks audit JSONL files in chronological order across the last
+        ``days_back`` UTC days and recomputes ``entry_hash`` for every
+        row. The first row's ``prev_hash`` must equal the previous
+        row's ``entry_hash`` (or :data:`GENESIS_HASH` if none).
+
+        Returns a dict with:
+
+        * ``ok``: True if every row matched
+        * ``checked``: total rows verified
+        * ``mismatches``: list of ``{file, line, reason, expected,
+          actual}`` for the first few breaks (capped at 50)
+        * ``head``: entry_hash of the last row scanned
+        * ``days_back``: window inspected
+        * ``files``: list of audit file names inspected (chronological)
+        """
+        days_back = max(1, min(int(days_back), 365))
+        today = datetime.now(timezone.utc).date()
+        files: List[Path] = []
+        # chronological order = oldest first so the chain runs forward
+        for delta in range(days_back - 1, -1, -1):
+            d = today - timedelta(days=delta)
+            p = self.base / f"audit-{d.strftime('%Y-%m-%d')}.jsonl"
+            if p.exists():
+                files.append(p)
+        prev = GENESIS_HASH
+        # If we are not scanning from the genesis day, accept whatever
+        # ``prev_hash`` the first encountered row carries as the chain
+        # entry point. Procurement reviewers can widen ``days_back`` to
+        # 365 to walk the full chain.
+        first_row_seen = False
+        checked = 0
+        mismatches: List[dict] = []
+        for path in files:
+            try:
+                with path.open("r", encoding="utf-8") as fh:
+                    for line_no, raw in enumerate(fh, start=1):
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            row = json.loads(raw)
+                        except json.JSONDecodeError:
+                            mismatches.append({
+                                "file": path.name, "line": line_no,
+                                "reason": "invalid_json",
+                                "expected": "", "actual": raw[:120],
+                            })
+                            continue
+                        if not first_row_seen:
+                            prev = str(row.get("prev_hash") or GENESIS_HASH)
+                            first_row_seen = True
+                        ev = AuditEvent(
+                            ts=str(row.get("ts", "")),
+                            request_id=str(row.get("request_id", "")),
+                            method=str(row.get("method", "")),
+                            path=str(row.get("path", "")),
+                            status=int(row.get("status", 0) or 0),
+                            actor_key_hash=str(row.get("actor_key_hash", "")),
+                            actor_label=str(row.get("actor_label", "")),
+                            source_ip=str(row.get("source_ip", "")),
+                            duration_ms=float(row.get("duration_ms", 0) or 0),
+                            action=str(row.get("action", "")),
+                            extra=dict(row.get("extra", {}) or {}),
+                        )
+                        expected_prev = prev
+                        actual_prev = str(row.get("prev_hash", ""))
+                        recomputed = ev.compute_entry_hash(actual_prev)
+                        stored = str(row.get("entry_hash", ""))
+                        if actual_prev != expected_prev:
+                            if len(mismatches) < 50:
+                                mismatches.append({
+                                    "file": path.name, "line": line_no,
+                                    "reason": "prev_hash_mismatch",
+                                    "expected": expected_prev,
+                                    "actual": actual_prev,
+                                })
+                        if recomputed != stored:
+                            if len(mismatches) < 50:
+                                mismatches.append({
+                                    "file": path.name, "line": line_no,
+                                    "reason": "entry_hash_mismatch",
+                                    "expected": recomputed,
+                                    "actual": stored,
+                                })
+                        prev = stored or recomputed
+                        checked += 1
+                        if checked >= max_rows:
+                            break
+            except OSError as exc:
+                mismatches.append({
+                    "file": path.name, "line": 0,
+                    "reason": f"io_error:{exc.__class__.__name__}",
+                    "expected": "", "actual": "",
+                })
+            if checked >= max_rows:
+                break
+        return {
+            "ok": not mismatches,
+            "checked": checked,
+            "mismatches": mismatches,
+            "head": prev,
+            "days_back": days_back,
+            "files": [p.name for p in files],
+        }
 
     @staticmethod
     def _matches(row: dict, filters: Dict[str, object]) -> bool:
