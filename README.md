@@ -2,7 +2,40 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: admin console page for the API-key expiry watchlist
+## New: per-tenant outbound webhook host allowlist
+
+Procurement reality: SOC2 CC6.6 and enterprise security questionnaires require that a tenant gates which external hosts the platform may call on its behalf. SignalClaw already shipped a global SSRF guard plus a deployment-wide `SIGNALCLAW_WEBHOOK_HOST_ALLOWLIST` env knob, but a SaaS buyer expects to manage their own allowlist without an operator round trip and without affecting another tenant. This release adds a per-tenant store keyed by `owner_key_id` (the same identity the rest of the webhooks subsystem uses) and enforces it at every choke point: subscribe (`POST /webhooks`), edit (`PATCH /webhooks/{id}`), every delivery attempt in `deliver_events`, and every replay. Composes additively with the global SSRF gate so a destination still has to pass both.
+
+- `GET /webhooks/host-allowlist` returns `{enabled, hosts, updated_at, updated_by, max_hosts}` for the calling tenant. Open by default so the upgrade does not affect existing subscriptions.
+- `PUT /webhooks/host-allowlist` replaces the tenant policy atomically. Body shape `{"enabled": bool, "hosts": ["hooks.slack.com", ...]}`. Rejects `enabled=true` with an empty list to prevent the tenant accidentally blocking every webhook they own. Hosts are lower-cased and validated as DNS names or IP literals; `host == a or host.endswith("." + a)` matching so subdomain semantics line up with the env allowlist. Mutations write a hash-chained audit row with the field-level diff (`hosts_added`, `hosts_removed`, `enabled` flip).
+- Subscribe-time and edit-time validation calls the tenant gate after the global SSRF gate, so a tenant cannot register a URL their own policy blocks. Delivery time re-evaluates per attempt so a hostname that flips into a forbidden tenant rule after subscribe is refused immediately, including on byte-for-byte replays.
+- `/settings/webhook-allowlist` ships a dedicated card surface: enforcement toggle, add/remove hosts with subdomain hint, lockout warning, last-change actor + timestamp. Linked from `/settings`. Renders responsively at 375 and 1440.
+- `tests/test_webhooks_tenant_host_allowlist.py` pins the contract: subscribe is blocked for tenant A but allowed for tenant B, `GET` is tenant-scoped (B never sees A's hosts), lockout is refused, malformed hosts are rejected with 400, and a `deliver_events` end-to-end exercise proves cross-tenant isolation: A's delivery is short-circuited with `tenant_allowlist_blocked` while B's identical URL still ships.
+
+### Try it
+
+```bash
+make dev  # FastAPI on http://localhost:7431
+cd web && pnpm dev  # dashboard at http://localhost:7430/settings/webhook-allowlist
+
+# Read the calling tenant's policy (open by default).
+curl -sS -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  http://localhost:7431/webhooks/host-allowlist | jq
+
+# Enforce hooks.slack.com only. Audited with the field-level diff.
+curl -sS -X PUT -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"enabled":true,"hosts":["hooks.slack.com"]}' \
+  http://localhost:7431/webhooks/host-allowlist | jq
+
+# Subscribe to a non-allowlisted host: rejected with the tenant reason.
+curl -sS -X POST -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"url":"https://other.example.com/hook","events":["entered"]}' \
+  http://localhost:7431/webhooks
+```
+
+## Previously: admin console page for the API-key expiry watchlist
 
 The FastAPI service exposes `/admin/keys/expiring` and the Next.js API exposes `/api/admin/keys/expiring`, both classifying every API key by how soon it lapses (expired / under 24h / under 7d / under 30d). Until now there was no human surface in the admin console for it, so an operator had to curl the endpoint to find out what was about to break. This release adds `/admin/keys/expiring`: an admin-only page that polls the live queue every 60 seconds, lets you widen the lookahead window (7 / 14 / 30 / 60 / 90 days), groups keys by urgency bucket, and links straight to `/settings/keys` for rotation. Same classification taxonomy as `web/lib/keyExpiry.ts` and the FastAPI `expiry_bucket` helper so the three surfaces never disagree.
 
@@ -10,14 +43,14 @@ The FastAPI service exposes `/admin/keys/expiring` and the Next.js API exposes `
 - Empty state when nothing expires in the window. Loading and error states wired. Responsive at 375 / 1440.
 - Server-side admin gating is unchanged: the FastAPI endpoint still requires admin scope + admin MFA and is audited; the Next.js route still enforces the admin-key check in production posture.
 
-### Try it
+### Try it: API-key expiry watchlist
 
 ```bash
 cd web && npm install && npm run dev
 # then open http://localhost:3000/admin/keys/expiring
 ```
 
-## New: proactive API-key expiry warnings on the FastAPI service
+## Previously: proactive API-key expiry warnings on the FastAPI service
 
 Procurement reality: SOC2 CC6.1 and ISO 27001 A.9.2.6 require time-bound credentials, but rejecting an expired key at 03:00 on a Sunday is too late. The Next.js admin already surfaced an expiry watchlist; the FastAPI service (port 7431) had nothing, so a tenant talking only to the Python API got no advance warning. This release adds parity: a watchlist endpoint plus advisory response headers on every authenticated request so an SDK can fire its rotation runbook before automation breaks.
 

@@ -130,6 +130,12 @@ function Settings() {
             <Globe size={14} weight="duotone" /> Network
           </Link>
           <Link
+            href="/settings/webhook-allowlist"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Globe size={14} weight="duotone" /> Webhook hosts
+          </Link>
+          <Link
             href="/settings/concurrency"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >

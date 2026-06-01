@@ -30,10 +30,27 @@ from fastapi.testclient import TestClient
 _TMP = tempfile.mkdtemp(prefix="sc_webhook_iso_")
 os.environ["DATA_DIR"] = _TMP
 os.environ.setdefault("SIGNALCLAW_API_KEY", "test-iso-default")
-os.environ["SIGNALCLAW_API_KEYS_JSON"] = _json.dumps([
+# Extend any pre-existing registry instead of clobbering it so this
+# module and the sibling webhook test modules can run in any order
+# within a single pytest session.
+_existing_keys = []
+try:
+    _existing_keys = _json.loads(
+        os.environ.get("SIGNALCLAW_API_KEYS_JSON", "[]"))
+except Exception:
+    _existing_keys = []
+_existing = {k.get("key") for k in _existing_keys}
+for _k in [
     {"key": "iso-admin-key", "scopes": ["read", "trade", "admin"],
      "label": "iso-admin"},
-])
+    {"key": "cb-admin-key", "scopes": ["read", "trade", "admin"],
+     "label": "cb-admin"},
+    {"key": "hl-admin-key", "scopes": ["read", "trade", "admin"],
+     "label": "hl-admin"},
+]:
+    if _k["key"] not in _existing:
+        _existing_keys.append(_k)
+os.environ["SIGNALCLAW_API_KEYS_JSON"] = _json.dumps(_existing_keys)
 
 from signalclaw.api.rate_limit import reset_registry  # noqa: E402
 reset_registry()

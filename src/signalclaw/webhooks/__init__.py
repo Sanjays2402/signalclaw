@@ -34,6 +34,7 @@ from .destination import (
     validate_destination,
     validate_destination_or_raise,
 )
+from . import host_allowlist as _host_allowlist
 
 
 EVENT_KINDS = {"entered", "exited", "upgraded", "downgraded", "score_jump"}
@@ -617,8 +618,23 @@ def deliver_events(
                 "sha256=" + _sign(sub.previous_secret, body))
             headers["x-signalclaw-signature-v2-previous"] = (
                 _sign_v2(sub.previous_secret, ts, body))
-        status, err, attempts = _attempt_http(
-            http, sub.url, body, headers, timeout, max_attempts, sleep)
+        # Per-tenant host allowlist gate. Composes with the global SSRF
+        # gate in ``_default_http``; refusing here short-circuits the
+        # network call so a blocked destination never receives bytes
+        # even on the first attempt.
+        try:
+            _ts_store = _host_allowlist.get_store()
+        except RuntimeError:
+            _ts_store = None
+        if _ts_store is not None:
+            allowed, reason = _ts_store.check(sub.owner_key_id, sub.url)
+        else:
+            allowed, reason = True, "store_unconfigured"
+        if not allowed:
+            status, err, attempts = 0, f"tenant_allowlist_blocked: {reason}", 1
+        else:
+            status, err, attempts = _attempt_http(
+                http, sub.url, body, headers, timeout, max_attempts, sleep)
         sub.last_status = int(status)
         sub.last_error = err or None
         sub.last_delivered_at = delivered_at
@@ -684,6 +700,33 @@ def replay_delivery(
     body = base64.b64decode(original.payload_b64)
     headers = {"content-type": "application/json",
                "user-agent": "signalclaw-webhook/1"}
+    # Per-tenant host allowlist re-check on replay. Subscribe-time
+    # validation does not bind a replay path, so policy that changed
+    # since the original delivery must take effect immediately.
+    try:
+        _replay_store = _host_allowlist.get_store()
+    except RuntimeError:
+        _replay_store = None
+    if _replay_store is not None:
+        _ok, _why = _replay_store.check(sub.owner_key_id, sub.url)
+        if not _ok:
+            delivered_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            return log_store.append(DeliveryAttempt(
+                id=uuid.uuid4().hex[:12],
+                subscription_id=sub.id,
+                url=sub.url,
+                status=None,
+                error=f"tenant_allowlist_blocked: {_why}",
+                attempt=1,
+                delivered_at=delivered_at,
+                signature=original.signature,
+                event_count=original.event_count,
+                events=list(original.events),
+                payload_b64=original.payload_b64,
+                replay_of=original.id,
+                signature_v2=original.signature_v2,
+                timestamp=original.timestamp,
+            ))
     if original.signature:
         headers["x-signalclaw-signature"] = original.signature
     if original.timestamp:

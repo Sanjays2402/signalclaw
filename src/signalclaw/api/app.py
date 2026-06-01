@@ -308,6 +308,14 @@ def create_app() -> FastAPI:
     webhooks_store = WebhookStore(settings.data_dir / "webhooks.json")
     webhook_log_store = DeliveryLogStore(
         settings.data_dir / "webhook_deliveries.json")
+    # Per-tenant outbound webhook host allowlist. Initialised here so
+    # both subscribe-time validation and delivery-time gating see the
+    # same store instance.
+    from ..webhooks import host_allowlist as _wh_allow
+    _wh_allow.reset_store()
+    webhook_host_allowlist = _wh_allow.get_store(
+        settings.data_dir / "webhook_host_allowlist.json")
+    app.state.webhook_host_allowlist = webhook_host_allowlist
     # Exposed for the admin console + tests to inspect or seed the
     # delivery log without reaching into module-private state.
     app.state.webhooks_store = webhooks_store
@@ -2849,6 +2857,9 @@ def create_app() -> FastAPI:
         if bad:
             raise HTTPException(400, f"unknown event(s): {bad}")
         owner_id, _ = _webhook_caller(x_api_key)
+        tok, treason = webhook_host_allowlist.check(owner_id, body.url)
+        if not tok:
+            raise HTTPException(400, treason)
         sub = WebhookSubscription(
             url=body.url,
             events=list(body.events) if body.events else sorted(EVENT_KINDS),
@@ -2914,6 +2925,10 @@ def create_app() -> FastAPI:
             ok, reason = validate_destination(body.url)
             if not ok:
                 raise HTTPException(400, reason)
+            tok, treason = webhook_host_allowlist.check(
+                sub.owner_key_id, body.url)
+            if not tok:
+                raise HTTPException(400, treason)
             changes["url"] = {"from": sub.url, "to": body.url}
             sub.url = body.url
         if body.events is not None:
@@ -2966,6 +2981,96 @@ def create_app() -> FastAPI:
         except Exception:
             pass
         return WebhookOut(**sub.to_dict())
+
+    # --- Per-tenant outbound webhook host allowlist --------------------
+    # Enterprise tenants gate which external hosts their webhooks may
+    # fire to. Composes additively with the global SSRF gate in
+    # ``webhooks/destination.py``: a destination must pass both. The
+    # admin console surface is /settings/webhook-allowlist.
+    @app.get("/webhooks/host-allowlist",
+             dependencies=[Depends(require_api_key)])
+    def webhooks_host_allowlist_get(
+        x_api_key: str | None = Header(default=None),
+    ):
+        owner_id, _ = _webhook_caller(x_api_key)
+        p = webhook_host_allowlist.get(owner_id)
+        return p.to_public()
+
+    @app.put("/webhooks/host-allowlist",
+             dependencies=[Depends(require_api_key)])
+    def webhooks_host_allowlist_put(
+        body: dict,
+        request: Request,
+        x_api_key: str | None = Header(default=None),
+    ):
+        """Replace the calling tenant's outbound webhook host allowlist.
+
+        Body shape: ``{"enabled": bool, "hosts": ["hooks.slack.com", ...]}``.
+        Refuses ``enabled=true`` with no hosts to prevent the tenant
+        accidentally disabling every webhook they have. Mutations are
+        audited with the field-level diff.
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        enabled = bool(body.get("enabled", False))
+        raw_hosts = body.get("hosts") or []
+        if not isinstance(raw_hosts, list):
+            raise HTTPException(400, "hosts must be a list of strings")
+        from ..webhooks.host_allowlist import normalise_host
+        try:
+            for h in raw_hosts:
+                if not isinstance(h, str):
+                    raise ValueError("hosts entries must be strings")
+                normalise_host(h)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        prev = webhook_host_allowlist.get(owner_id)
+        actor = (x_api_key or "")[:12] or ("admin" if is_admin else "owner")
+        try:
+            new = webhook_host_allowlist.set(
+                owner_id, enabled=enabled, hosts=raw_hosts, actor=actor)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        # Audit the change with a field-level diff. Same shape as the
+        # webhook PATCH audit so SIEM rules can match on the same
+        # action prefix.
+        try:
+            from ..audit.log import (
+                AuditEvent as _AE_ha,
+                _utc_now_iso as _iso_ha,
+                _hash_key as _hk_ha,
+            )
+            changes: Dict[str, Any] = {}
+            if prev.enabled != new.enabled:
+                changes["enabled"] = {
+                    "from": prev.enabled, "to": new.enabled}
+            added = sorted(set(new.hosts) - set(prev.hosts))
+            removed = sorted(set(prev.hosts) - set(new.hosts))
+            if added:
+                changes["hosts_added"] = added
+            if removed:
+                changes["hosts_removed"] = removed
+            src_ip = (request.client.host if request.client else "-") or "-"
+            audit_log.record(_AE_ha(
+                ts=_iso_ha(),
+                request_id=request.headers.get("x-request-id", "-"),
+                method="PUT", path="/webhooks/host-allowlist",
+                status=200,
+                actor_key_hash=_hk_ha(x_api_key or ""),
+                actor_label="admin" if is_admin else "owner",
+                source_ip=src_ip, duration_ms=0.0,
+                action="webhook.host_allowlist.updated",
+                extra={
+                    "owner_key_id": owner_id,
+                    "enabled": new.enabled,
+                    "host_count": len(new.hosts),
+                    "changes": changes,
+                },
+            ))
+        except Exception:
+            pass
+        return new.to_public()
 
     @app.post("/webhooks/{sub_id}/rotate-secret",
               response_model=WebhookRotateSecretOut,
