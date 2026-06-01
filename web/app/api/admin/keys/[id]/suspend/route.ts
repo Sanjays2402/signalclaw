@@ -8,6 +8,11 @@ import {
   publicView,
 } from "@/lib/keyStore";
 import { recordAuditEvent } from "@/lib/auditStore";
+import {
+  requestApproval,
+  consumeApproval,
+  publicView as approvalView,
+} from "@/lib/dualControlStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,6 +110,82 @@ export async function PUT(
   if (existing.revoked) return err(409, "revoked", "cannot suspend a revoked key");
   if (id === "env-admin")
     return err(409, "env_admin", "cannot suspend the env admin key");
+
+  // Dual-control: suspending a key (esp. unsuspending) is destructive.
+  // Skip in single-admin local mode. In production posture, second admin
+  // must approve. Suspend AND unsuspend both gate; the action key encodes
+  // direction so a token minted for suspend cannot redeem an unsuspend.
+  if (process.env.SIGNALCLAW_ADMIN_KEY) {
+    const caller = await authenticate(extractKey(req), { req });
+    if (caller) {
+      const action = body.suspended ? "keys.suspend" : "keys.unsuspend";
+      const token = req.headers.get("x-approval-token");
+      if (!token) {
+        const reasonHdr = reason ?? req.headers.get("x-reason") ?? `${action} requested`;
+        const r = await requestApproval({
+          action,
+          target: id,
+          reason: reasonHdr,
+          requested_by: caller.id,
+        });
+        if (!r.ok) return err(400, r.code, r.message);
+        await recordAuditEvent({
+          req,
+          route,
+          method: "PUT",
+          status: 202,
+          key: caller,
+          reason: `dual_control:request:${action}`,
+          details: { request_id: r.request.id, target: id },
+        });
+        return NextResponse.json(
+          {
+            pending_approval: approvalView(r.request),
+            message:
+              "dual-control approval required. A second admin must approve, then retry with x-approval-token.",
+          },
+          { status: 202 },
+        );
+      }
+      const c = await consumeApproval({
+        action,
+        target: id,
+        token,
+        caller: caller.id,
+      });
+      if (!c.ok) {
+        const status =
+          c.code === "missing_token" || c.code === "bad_token"
+            ? 401
+            : c.code === "expired"
+              ? 410
+              : 409;
+        await recordAuditEvent({
+          req,
+          route,
+          method: "PUT",
+          status,
+          key: caller,
+          reason: `dual_control:consume:${c.code}`,
+          details: { target: id, action },
+        });
+        return err(status, c.code, c.message);
+      }
+      await recordAuditEvent({
+        req,
+        route,
+        method: "PUT",
+        status: 200,
+        key: caller,
+        reason: `dual_control:consume:${action}`,
+        details: {
+          request_id: c.request.id,
+          target: id,
+          approved_by: c.request.approved_by,
+        },
+      });
+    }
+  }
 
   const updated = await setKeySuspended(id, body.suspended, reason);
   if (!updated) return err(404, "not_found", "key not found");

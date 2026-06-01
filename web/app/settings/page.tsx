@@ -35,6 +35,7 @@ import {
   SignIn,
   ListMagnifyingGlass,
   Wrench,
+  Handshake,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -100,6 +101,12 @@ function Settings() {
           <h1 className="text-lg font-semibold mono">Settings</h1>
         </div>
         <div className="flex items-center gap-3">
+          <Link
+            href="/settings/approvals"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <Handshake size={14} weight="duotone" /> Approvals
+          </Link>
           <Link
             href="/settings/keys"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"

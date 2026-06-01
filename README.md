@@ -2,6 +2,35 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
+## New: dual-control approvals for destructive admin actions
+
+Procurement reality: SOC 2 CC8.1 (change management) and ISO 27001 A.6.1.2 (segregation of duties) demand that the most destructive admin operations cannot be executed by a single person. SignalClaw now ships a maker/checker gate in front of API key revoke (`DELETE /api/admin/keys/:id`) and API key suspend/unsuspend (`PUT /api/admin/keys/:id/suspend`). In production posture (`SIGNALCLAW_ADMIN_KEY` set) the first admin call returns 202 with a pending approval id, a second admin opens `/settings/approvals` and approves, and a one-time `x-approval-token` is minted and bound to `(requester, action, target)`. Self-approval is refused with 403. Tokens expire after 10 minutes, are single-use, and cannot be replayed against a different action or target. Every state transition (request, approve, consume, cancel, expire, reject) writes a `dual_control:*` line into the existing audit chain.
+
+- UI: http://localhost:7430/settings/approvals
+- API: `GET /api/admin/approvals`, `POST /api/admin/approvals`, `POST /api/admin/approvals/:id/approve`, `POST /api/admin/approvals/:id/cancel`
+- Cross-isolation test: `web/tests/dualControlStore.test.mjs` (11 cases: self-approval rejected, wrong caller rejected, action/target rebinding rejected, single-use enforcement, expired token, validation, duplicate collapsing)
+
+### Try it: revoke an API key with maker/checker
+
+```bash
+cd web && npm install && npm run dev  # Next.js on :7430
+
+# Maker (alice) attempts to revoke a key. Returns 202 + pending approval.
+curl -sS -X DELETE http://localhost:7430/api/admin/keys/key_abc \
+  -H "x-api-key: $ALICE_ADMIN_KEY" \
+  -H "x-reason: rotating compromised key" | jq
+
+# Checker (bob) approves the pending request. Token is shown once.
+APR_ID=apr_xxxxx
+curl -sS -X POST http://localhost:7430/api/admin/approvals/$APR_ID/approve \
+  -H "x-api-key: $BOB_ADMIN_KEY" | jq
+
+# Maker (alice) retries with the one-time token. The revoke now executes.
+curl -sS -X DELETE http://localhost:7430/api/admin/keys/key_abc \
+  -H "x-api-key: $ALICE_ADMIN_KEY" \
+  -H "x-approval-token: <token-from-step-2>" | jq
+```
+
 ## New: self-service API session view and revoke
 
 The operator-only `/admin/sessions` console was already shipping the active (key, IP, user-agent) ledger and a force-logout button. Procurement reviewers (SOC 2 CC6.2, ISO 27001 A.9.2.6) also expect every end user to be able to see *their own* sessions and revoke any that look wrong without paging an operator. SignalClaw now ships that surface. The endpoints are strictly scoped to the caller's own `key_id` so one tenant cannot enumerate or revoke another tenant's sessions; cross-tenant probes return 404, never 403, so the endpoint cannot be used as an oracle. Revocations land in the existing force-logout ledger and are enforced by the session middleware on the very next request.
