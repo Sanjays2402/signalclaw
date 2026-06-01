@@ -255,6 +255,7 @@ export default function AdminConsole() {
                     ["Admin MFA", "/settings/admin-mfa"],
                     ["Invites", "/settings/invites"],
                     ["Webhooks", "/webhooks"],
+                    ["Tenant watchlists", "/admin/watchlists"],
                     ["CORS", "/settings/cors"],
                     ["CSP", "/settings/security/csp"],
                     ["Network policy", "/settings/network"],

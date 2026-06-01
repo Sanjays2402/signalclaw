@@ -264,7 +264,7 @@ The Python `/watchlist`, `/picks`, and `/report.md` endpoints used to share one 
 
 - `GET/POST/DELETE /watchlist` scope reads and writes to the calling key's tenant bucket.
 - `GET /picks` and `GET /report.md` score the caller's own watchlist, not the global one.
-- `GET /admin/watchlists` (admin scope + MFA) returns `{tenants: {key_id: [tickers]}}` so an operator can audit every tenant from one surface.
+- `GET /admin/watchlists` (admin scope + MFA) returns `{tenants: {key_id: [tickers]}}` so an operator can audit every tenant from one surface. The in-app console exposes the same data at `/admin/watchlists` (linked from the admin landing page) with a tenant/ticker filter so a security reviewer can answer "who tracks what" without curl.
 - Mutations flow through the existing `AuditMiddleware`, so every add and remove lands in the tamper-evident audit chain with the actor key id.
 - `tests/test_watchlist_tenant_isolation.py` pins the policy: cross-tenant reads invisible, cross-tenant deletes no-op, admin aggregate sees every tenant.
 
