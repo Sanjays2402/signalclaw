@@ -137,6 +137,94 @@ def normalise_cidrs(cidrs: Iterable[str]) -> List[str]:
     return out
 
 
+def normalise_paths(paths: Iterable[str]) -> List[str]:
+    """Validate and canonicalise a per-key path-prefix allowlist.
+
+    Each entry is the prefix a request URL path must start with for
+    requests authenticated by the key to be permitted (for example
+    ``/v1/runs`` would allow ``/v1/runs``, ``/v1/runs/abc``, and
+    ``/v1/runs/abc/export``, but not ``/admin/keys``). An empty list
+    means "unrestricted" (any path is allowed) so legacy keys keep
+    working untouched.
+
+    Rules (fail-closed; raise ``ValueError`` on any violation so the
+    API layer can return a structured 400):
+
+    * Each entry must be a non-empty string starting with ``/``.
+    * No NUL bytes, no whitespace, no scheme/host, no ``..`` segments
+      (defence in depth against path-traversal style bypass).
+    * Entries are de-duplicated (after normalisation) and capped at
+      64 to keep the JSON file small and per-request checks O(n) with
+      a small n.
+    * Trailing slashes are stripped (other than the root ``/``) so
+      ``/v1/runs`` and ``/v1/runs/`` collapse to one entry.
+    """
+    if paths is None:
+        return []
+    out: List[str] = []
+    seen: Set[str] = set()
+    for raw in paths:
+        if not isinstance(raw, str):
+            raise ValueError("path_allowlist entries must be strings")
+        s = raw.strip()
+        if not s:
+            raise ValueError("path_allowlist entries must be non-empty")
+        if "\x00" in s or any(ch.isspace() for ch in s):
+            raise ValueError(
+                f"invalid path prefix {raw!r}: must not contain whitespace or NUL")
+        if "://" in s or s.startswith("//"):
+            raise ValueError(
+                f"invalid path prefix {raw!r}: must be a path, not a URL")
+        if not s.startswith("/"):
+            raise ValueError(
+                f"invalid path prefix {raw!r}: must start with '/'")
+        # Reject traversal segments so a misconfigured allowlist cannot
+        # be tricked by encoded ``..`` payloads into permitting paths
+        # outside the intended subtree. Starlette already decodes the
+        # URL.path we compare against; this guard is belt-and-braces.
+        segs = [seg for seg in s.split("/") if seg]
+        if any(seg == ".." or seg == "." for seg in segs):
+            raise ValueError(
+                f"invalid path prefix {raw!r}: must not contain '.' or '..' segments")
+        # Collapse trailing slash (other than the root) so ``/x`` and
+        # ``/x/`` normalise to the same entry and dedupe correctly.
+        if len(s) > 1 and s.endswith("/"):
+            s = s.rstrip("/") or "/"
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+        if len(out) > 64:
+            raise ValueError("path_allowlist may contain at most 64 entries")
+    return out
+
+
+def is_path_allowed(stored: "StoredKey", request_path: str) -> bool:
+    """Return True if ``request_path`` matches the key's path allowlist.
+
+    Keys with an empty allowlist are unrestricted (return True). An
+    entry of ``"/x"`` matches the path ``"/x"`` exactly as well as
+    any sub-path ``"/x/..."`` (segment-bounded so ``"/x"`` does **not**
+    match ``"/xyz"``). A missing/empty request path against a
+    restricted key is always denied (fail closed).
+    """
+    prefixes = stored.path_allowlist or []
+    if not prefixes:
+        return True
+    if not request_path:
+        return False
+    for p in prefixes:
+        if p == "/":
+            return True
+        if request_path == p:
+            return True
+        # Segment boundary: ``/v1/runs`` allows ``/v1/runs/abc`` but
+        # not ``/v1/runsearch`` (a classic prefix-match foot-gun).
+        if request_path.startswith(p + "/"):
+            return True
+    return False
+
+
 def is_expired(stored: "StoredKey") -> bool:
     """Return True if ``stored`` has a populated ``expires_at`` in the past.
 
@@ -247,6 +335,17 @@ class StoredKey:
     # of the listed networks. Stored as strings so the JSON file stays
     # human-readable; parsed on demand by ``is_ip_allowed``.
     ip_allowlist: List[str] = field(default_factory=list)
+    # Optional per-key path-prefix allowlist. When non-empty, requests
+    # authenticated with this key are rejected with 403 unless the
+    # decoded request path matches one of the entries by exact match
+    # or segment-bounded prefix. Empty list = unrestricted (legacy
+    # behaviour) so rows that predate this field keep working. This
+    # implements least-privilege at the endpoint level beyond the
+    # coarse role/scope cap (PCI-DSS 7.1, SOC2 CC6.1): a key issued
+    # to a customer's report-runner gets ``["/v1/runs", "/picks"]``
+    # and can no longer touch ``/admin/keys`` even if a future bug
+    # widened its scopes.
+    path_allowlist: List[str] = field(default_factory=list)
     # Rotation: when a key is rotated with a grace window, the previous
     # secret hash stays valid for a bounded time so live integrations can
     # roll over without downtime. ``previous_hash`` is the SHA-256 of the
@@ -362,6 +461,7 @@ class ApiKeyStore:
                 last_used_at=r.get("last_used_at"),
                 revoked=bool(r.get("revoked", False)),
                 ip_allowlist=list(r.get("ip_allowlist", []) or []),
+                path_allowlist=list(r.get("path_allowlist", []) or []),
                 previous_hash=r.get("previous_hash") or None,
                 previous_grace_until=r.get("previous_grace_until") or None,
                 rotated_at=r.get("rotated_at") or None,
@@ -582,6 +682,29 @@ class ApiKeyStore:
         """
         return [r for r in self._read() if is_review_overdue(r)]
 
+    def set_path_allowlist(self, key_id: str, paths: Iterable[str]) -> Optional[StoredKey]:
+        """Replace the path-prefix allowlist on a key. Validates every entry.
+
+        An empty list clears the allowlist (the key may hit any path
+        permitted by its scopes). Raises ``ValueError`` if any entry
+        is not a valid path prefix so the API can return a structured
+        400. Returns the updated record or ``None`` if the key is
+        missing or revoked.
+        """
+        normalised = normalise_paths(paths)
+        with self._lock:
+            rows = self._read()
+            updated: Optional[StoredKey] = None
+            for r in rows:
+                if r.id == key_id and not r.revoked:
+                    r.path_allowlist = normalised
+                    updated = r
+                    break
+            if updated is not None:
+                self._write(rows)
+                self._reload_index()
+            return updated
+
     def set_ip_allowlist(self, key_id: str, cidrs: Iterable[str]) -> Optional[StoredKey]:
         """Replace the IP allowlist on a key. Validates every CIDR.
 
@@ -781,7 +904,11 @@ __all__ = [
     "StoredKey",
     "normalise_cidrs",
     "is_ip_allowed",
+    "normalise_paths",
+    "is_path_allowed",
     "is_expired",
+    "is_review_overdue",
+    "review_due_at",
     "ROLES",
     "ROLE_SCOPES",
     "DEFAULT_ROLE",

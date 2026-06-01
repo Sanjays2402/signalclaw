@@ -61,7 +61,7 @@ from .security import require_api_key
 from .middleware import AccessLogMiddleware
 from .dry_run import DryRunMiddleware
 from .request_context import RequestContextMiddleware
-from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware, GlobalIPAllowlistMiddleware
+from .rate_limit import RateLimitMiddleware, require_scope, ScopeEnforcementMiddleware, PerIPRateLimitMiddleware, IPAllowlistMiddleware, GlobalIPAllowlistMiddleware, PathAllowlistMiddleware
 from .security_headers import SecurityHeadersMiddleware, build_header_policy
 from .body_limit import (
     BodyLimitMiddleware,
@@ -258,6 +258,13 @@ def create_app() -> FastAPI:
         trust_forwarded=_ipa_trust_xff,
         trusted_proxies=_ipa_trusted,
     )
+    # Per-key path-prefix allowlist. Least-privilege at the endpoint
+    # level: a key minted with ``path_allowlist=["/v1/runs"]`` is
+    # rejected with 403 if it tries to hit any other path, even if
+    # its scopes would otherwise allow it. Empty allowlist = legacy
+    # unrestricted behaviour. Added next to the IP allowlist so the
+    # two per-key policies are evaluated together.
+    app.add_middleware(PathAllowlistMiddleware)
     # Workspace-level global IP allowlist. Added near the outer edge
     # so it runs before auth/audit/rbac on the inbound chain and drops
     # off-network traffic before any handler or store work occurs.
@@ -787,6 +794,19 @@ def create_app() -> FastAPI:
             except ValueError as exc:
                 api_key_store.revoke(rec.id)
                 raise HTTPException(400, str(exc))
+        # Optional path_allowlist on create. Same fail-closed semantics
+        # as ip_allowlist: invalid input revokes the just-minted key so
+        # we never persist a half-configured credential.
+        paths_in = body.get("path_allowlist")
+        if paths_in is not None:
+            if not isinstance(paths_in, list) or not all(isinstance(s, str) for s in paths_in):
+                api_key_store.revoke(rec.id)
+                raise HTTPException(400, "path_allowlist must be a list of strings")
+            try:
+                rec = api_key_store.set_path_allowlist(rec.id, paths_in) or rec
+            except ValueError as exc:
+                api_key_store.revoke(rec.id)
+                raise HTTPException(400, str(exc))
         out = rec.to_public()
         out["secret"] = secret  # one-time reveal
         return out
@@ -801,6 +821,32 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "ip_allowlist must be a list of strings")
         try:
             updated = api_key_store.set_ip_allowlist(key_id, cidrs)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if updated is None:
+            raise HTTPException(404, "key not found")
+        return updated.to_public()
+
+    @app.put("/admin/keys/{key_id}/path-allowlist",
+             dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)])
+    def admin_keys_set_path_allowlist(key_id: str, body: dict):
+        """Replace the per-key path-prefix allowlist.
+
+        Body: ``{"path_allowlist": ["/v1/runs", "/picks"]}``. Pass an
+        empty list to clear the policy (the key may hit any path its
+        scopes allow). Each entry must start with ``/`` and is matched
+        as a segment-bounded prefix: ``/v1/runs`` allows ``/v1/runs``
+        and ``/v1/runs/abc`` but not ``/v1/runsearch``. Maximum 64
+        entries; invalid input returns 400 with a structured error so
+        a UI can surface the offending entry.
+        """
+        paths = body.get("path_allowlist") if body else None
+        if paths is None:
+            paths = []
+        if not isinstance(paths, list) or not all(isinstance(s, str) for s in paths):
+            raise HTTPException(400, "path_allowlist must be a list of strings")
+        try:
+            updated = api_key_store.set_path_allowlist(key_id, paths)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         if updated is None:

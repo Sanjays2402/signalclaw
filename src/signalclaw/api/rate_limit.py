@@ -368,6 +368,58 @@ class PerIPRateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class PathAllowlistMiddleware(BaseHTTPMiddleware):
+    """Enforce per-key path-prefix allowlists for user-managed API keys.
+
+    For requests carrying an ``x-api-key`` that resolves to a user-
+    managed key with a non-empty ``path_allowlist``, the decoded
+    request path must start with (segment-bounded) one of the entries
+    or the request is rejected with 403. Env-configured registry keys
+    and unauthenticated traffic are unaffected. Healthcheck / docs
+    paths are exempt so monitoring keeps working even with a tight
+    allowlist on every minted key.
+
+    Least-privilege at the endpoint level (PCI-DSS 7.1, SOC2 CC6.1):
+    a key issued for ``/v1/runs`` cannot be used to hit ``/admin/keys``
+    even if its scope set later widens.
+    """
+
+    def __init__(self, app,
+                 exempt_paths: Iterable[str] = (
+                     "/health", "/ready", "/healthz", "/readyz",
+                     "/metrics", "/disclaimer",
+                     "/docs", "/openapi.json", "/redoc",
+                     "/docs/oauth2-redirect",
+                 )) -> None:
+        super().__init__(app)
+        self.exempt = tuple(exempt_paths)
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path == p or path.startswith(p + "/") for p in self.exempt):
+            return await call_next(request)
+        api_key = request.headers.get("x-api-key")
+        store = _USER_STORE
+        if not api_key or store is None:
+            return await call_next(request)
+        stored = store.lookup(api_key)
+        if stored is None or not stored.path_allowlist:
+            return await call_next(request)
+        from ..api_keys import is_path_allowed  # local import to avoid cycle at module load
+        if not is_path_allowed(stored, path):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "request path not in key allowlist",
+                    "path": path,
+                    "key_id": stored.id,
+                    "allowlist": list(stored.path_allowlist),
+                    "scope": "per-key-path",
+                },
+            )
+        return await call_next(request)
+
+
 class IPAllowlistMiddleware(BaseHTTPMiddleware):
     """Enforce per-key IP allowlists for user-managed API keys.
 

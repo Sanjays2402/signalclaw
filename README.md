@@ -2,7 +2,43 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: periodic access review (attestation) for API keys
+## New: per-API-key path-prefix allowlist (least privilege at the endpoint level)
+
+Procurement reality: PCI-DSS 7.1 and SOC2 CC6.1 both require that production credentials carry the minimum access needed for the job, not the full surface of the platform. Before this change a SignalClaw API key was capped by its role (owner / admin / member / viewer) and scopes (read / trade / admin), but a `member` key issued to a customer's nightly report runner could still hit any non-admin route in the API. This release adds a per-key path-prefix allowlist that enforces least privilege at the endpoint level: a key minted with `path_allowlist=["/v1/runs", "/picks"]` is rejected with `403 per-key-path` on any other path, even if its scopes would otherwise permit it. Empty allowlist preserves the legacy unrestricted behaviour, so rows that predate this field keep working untouched.
+
+- `PUT /admin/keys/{id}/path-allowlist` replaces the allowlist atomically. Body `{"path_allowlist": ["/v1/runs", "/picks"]}`; pass `[]` to clear. Each entry must start with `/` and is matched as a segment-bounded prefix, so `/v1/runs` covers `/v1/runs/abc/export` but never `/v1/runsearch`. Invalid input (no leading slash, whitespace, NUL byte, `..` segments, URL with scheme, more than 64 entries) returns a structured 400 so a UI can highlight the offending row. Admin scope plus admin MFA gated; the audit middleware captures actor, target key id, and request id automatically.
+- `POST /admin/keys` accepts `path_allowlist` at mint time. If the value is malformed the just-minted key is revoked before the call returns, so we never persist a half-configured credential.
+- `GET /admin/keys` surfaces `path_allowlist` on every row alongside `ip_allowlist`, `scopes`, and the existing review fields. Operators see the full policy posture in one view.
+- `PathAllowlistMiddleware` enforces the policy on every authenticated request. Health, ready, metrics, and docs paths are exempt so monitoring keeps working even when every minted key carries a tight allowlist. Unauthenticated traffic and env-configured registry keys are unaffected.
+- `tests/test_api_keys_path_allowlist.py` pins the contract: canonicalisation strips trailing slashes and dedupes, segment-boundary matching rejects `/picksearch` against `/picks`, the PUT route rejects bad input with 400 and returns 404 for unknown ids, member-scoped callers get 403 (RBAC enforcement), a malformed allowlist on create revokes the key, the middleware blocks an off-allowlist request end to end with the structured `{scope: per-key-path, key_id, allowlist}` payload, and an empty allowlist preserves legacy behaviour.
+
+### Try it
+
+```bash
+make dev
+
+# mint a key restricted to /v1/runs and /picks
+ADMIN="$SIGNALCLAW_API_KEY"
+curl -sS -H "x-api-key: $ADMIN" -H "content-type: application/json" \
+  -d '{"label":"report-runner","role":"member","scopes":["read"],"path_allowlist":["/v1/runs","/picks"]}' \
+  http://localhost:7431/admin/keys | tee /tmp/k.json
+SCOPED=$(jq -r .secret /tmp/k.json)
+KID=$(jq -r .id /tmp/k.json)
+
+# allowed path: returns the handler's normal response
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H "x-api-key: $SCOPED" http://localhost:7431/picks
+
+# off-allowlist path: 403 with a structured payload an SDK can branch on
+curl -sS -H "x-api-key: $SCOPED" http://localhost:7431/watchlist | jq
+
+# tighten or relax the policy in place without rotating the secret
+curl -sS -X PUT -H "x-api-key: $ADMIN" -H "content-type: application/json" \
+  -d '{"path_allowlist":["/picks"]}' \
+  http://localhost:7431/admin/keys/$KID/path-allowlist | jq .path_allowlist
+```
+
+## Previously: periodic access review (attestation) for API keys
 
 Procurement reality: SOC2 CC6.3 and ISO 27001 A.9.2.5 both require that access to systems is reviewed on a documented cadence, not just at provisioning time. Before this change SignalClaw could mint, rotate, suspend, and expire API keys, but there was no place an admin could record "I looked at this credential, validated the owner and continued business need, and signed off". This release adds that loop end to end: a per-key review interval, a recorded attestation with reviewer identity in the audit log, an overdue queue, and a one-click Review button on every row of the keys page.
 
