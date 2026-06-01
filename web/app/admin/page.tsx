@@ -270,6 +270,7 @@ export default function AdminConsole() {
                     ["Legal hold", "/settings/legal-hold"],
                     ["SIEM", "/settings/siem"],
                     ["Privacy", "/settings/privacy"],
+                    ["Evidence pack", "/settings/evidence-pack"],
                     ["Freeze", "/settings/freeze"],
                   ].map(([label, href]) => (
                     <li key={href}>

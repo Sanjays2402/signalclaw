@@ -382,6 +382,15 @@ export async function buildAdminIndex(
     summary: "Per-tenant row scoping verified by store-level tests",
   });
 
+  controls.push({
+    key: "evidence-pack",
+    label: "SOC2 evidence pack",
+    href: "/settings/evidence-pack",
+    category: "observability",
+    status: "enforcing",
+    summary: "On-demand signed bundle of every policy + audit chain proof",
+  });
+
   const counts: Record<ControlStatus, number> = {
     enforcing: 0,
     monitoring: 0,

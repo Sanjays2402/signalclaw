@@ -178,6 +178,12 @@ function Settings() {
             <FileLock size={14} weight="duotone" /> Privacy
           </Link>
           <Link
+            href="/settings/evidence-pack"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <FileLock size={14} weight="duotone" /> Evidence pack
+          </Link>
+          <Link
             href="/settings/admin-mfa"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >

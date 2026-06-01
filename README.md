@@ -2,7 +2,31 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: Admin control inventory at /admin/controls
+## New: SOC2 evidence pack at /settings/evidence-pack
+
+Procurement reality: every enterprise security questionnaire ends with "send us evidence your controls are operating effectively". Before this change a security owner had to screenshot half a dozen admin pages, paste them into a Google Doc, attach an audit log export, and hope the reviewer trusted the screenshots. `/settings/evidence-pack` replaces that with one button that produces a deterministic, hash-manifested .zip an auditor can open and verify themselves.
+
+- `web/lib/zipBuilder.ts` is a dep-free Node ZIP builder (stored entries, deterministic 1980 mtime, UTF-8 names) so the bundle is a real archive any unzip tool opens, not a JSON envelope we invented.
+- `web/lib/evidencePack.ts` gathers the full control inventory, the audit chain replay result (proving no audit row was edited), the public key list (no secrets), the active SSO session list (no tokens), and every workspace policy (SSO, network, CORS, CSP, retention, rotation, webhook egress, residency, auth lockout, concurrency, defaults, legal holds, SIEM, freeze) into stable-sorted JSON files plus a `manifest.json` with SHA-256 of every entry. Two runs against identical inputs produce byte-identical content files so the auditor can re-verify offline.
+- `GET/HEAD /api/admin/evidence-pack` is admin-gated through the shared `requireAdmin` guard, writes an audit row with the bundle SHA-256 on every download (so future reviews can prove which pack the recipient received), and stamps `X-Evidence-Pack-Sha256` and `X-Evidence-Pack-Generated-At` headers for the UI preview.
+- `web/app/settings/evidence-pack/page.tsx` shows the filename, size, SHA-256 and build time before download, exposes the verification command, and is reachable from the settings nav, the admin landing surface list, and the `/admin/controls` inventory.
+- `tests/evidencePack.test.mjs` parses the generated archive with a hand-rolled central-directory reader, proves every documented file is present, that every manifest hash matches the on-disk bytes inside the archive, that two consecutive builds produce identical content for every non-timestamped file, and that the control inventory exposes the new row.
+
+### Try it
+
+```bash
+make dev
+make web          # http://localhost:3000/settings/evidence-pack
+
+# pull the bundle straight from curl and verify the manifest:
+curl -fsS -OJ -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:3000/api/admin/evidence-pack
+unzip -d pack signalclaw-evidence-*.zip
+jq -r '.files[] | "\(.sha256)  \(.name)"' pack/manifest.json \
+  | (cd pack && shasum -a 256 -c)
+```
+
+## Previously: Admin control inventory at /admin/controls
 
 The admin landing tile gave a buyer five top-line numbers but no way to walk the full posture: a procurement reviewer asking "show me every security control you ship and whether it is on" had to spelunk through the settings sidebar one page at a time. `/admin/controls` is the answer: one screen, every enterprise control, with status pulled live from the same stores the individual settings pages mutate.
 
