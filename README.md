@@ -2,7 +2,31 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: public Trust Center with versioned subprocessor registry
+## New: dormant API-key watchlist (admin queue for credential review)
+
+Procurement reality: SOC2 CC6.1 and ISO 27001 A.9.2.5 require periodic review of access rights, and a credential that has not been used in months is the textbook example of access that should have been revoked. SignalClaw already tracked `last_used_at` and surfaced expiring keys. What was missing was the inverse: a queue of credentials that have gone silent long enough that an operator should rotate them or revoke them outright. This release ships that queue on both the FastAPI service and the Next.js admin, with matching classification so the two surfaces never disagree.
+
+- `GET /admin/keys/dormant?within_days=30` (FastAPI, port 7431) returns every live key that has been silent at least `within_days`, sorted longest-silent first, with per-row `silent_seconds`, `silent_days`, `bucket` (quiet / dormant / abandoned), and `never_used`. Admin scope plus admin MFA gated, audited via the standard middleware. `within_days` is validated to 1..365 and returns a structured 400 on out-of-range input.
+- `GET /api/admin/keys/dormant?within_days=30` (Next.js) returns the same shape using the Next.js-side key store. Admin-scoped in production posture; open in single-user local mode just like the existing expiry surface.
+- Buckets: `active` (<30d silent), `quiet` (30..89d), `dormant` (90..179d), `abandoned` (>=180d). Revoked, suspended, and already-expired credentials collapse to `revoked` so the watchlist does not nag about keys that already cannot authenticate. A key that has never been used is measured from `created_at` so a minted-and-forgotten credential still surfaces.
+- Pure helpers `is_dormant`, `dormancy_bucket`, and `seconds_since_last_use` ship in `signalclaw.api_keys`; the Next.js mirror lives in `web/lib/keyDormancy.ts`. Both surfaces classify a row the same way, so the admin console and the SOC2 evidence path agree.
+- Admin console page at `/admin/keys/dormant`: polls the live queue every 60 seconds, lets you widen the lookback window (14 / 30 / 60 / 90 / 180 days), groups keys by bucket, flags never-used credentials, and links straight to `/settings/keys` for rotation. Loading, error, and empty states wired; responsive at 375 and 1440.
+- Admin nav at `/admin` now lists "Dormant API keys" next to "Expiring API keys" so the two review queues sit together.
+- `tests/test_api_keys_dormant.py` pins the contract: helpers classify active / quiet / dormant / abandoned / revoked / never-used rows correctly, the route enforces RBAC and rejects bad `within_days`, and the watchlist is sorted longest-silent first.
+
+### Try it: dormant API-key watchlist
+
+```bash
+make dev  # FastAPI on :7431
+cd web && npm install && npm run dev  # Next.js on :3000
+# then open http://localhost:3000/admin/keys/dormant
+
+# Or query the FastAPI surface directly:
+curl -sS -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  'http://localhost:7431/admin/keys/dormant?within_days=30' | jq
+```
+
+## Previously: public Trust Center with versioned subprocessor registry
 
 Procurement reality: GDPR Art. 28 and almost every enterprise DPA require the data controller to publish a current list of all third-party processors and to give at least 30 days' notice before adding or replacing one. A security reviewer who can't find that list refuses to sign. SignalClaw now ships a first-class, versioned, audit-logged subprocessor registry behind a public Trust Center page so reviewers can self-serve.
 

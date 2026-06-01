@@ -264,6 +264,7 @@ export default function AdminConsole() {
                     ["Webhooks", "/webhooks"],
                     ["Tenant watchlists", "/admin/watchlists"],
                     ["Expiring API keys", "/admin/keys/expiring"],
+                    ["Dormant API keys", "/admin/keys/dormant"],
                     ["CORS", "/settings/cors"],
                     ["CSP", "/settings/security/csp"],
                     ["Network policy", "/settings/network"],

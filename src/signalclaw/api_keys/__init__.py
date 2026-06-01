@@ -256,6 +256,23 @@ def is_expired(stored: "StoredKey") -> bool:
 DEFAULT_EXPIRY_WARNING_DAYS: int = 30
 MAX_EXPIRY_WARNING_DAYS: int = 365
 
+# Dormancy thresholds (in days).
+#
+# SOC2 CC6.1 and ISO 27001 A.9.2.5/A.9.2.6 require credential life-cycle
+# management: an access token that has not been used in months is a
+# liability and should be reviewed (and usually revoked). These
+# thresholds drive the /admin/keys/dormant watchlist and bucket each
+# live key by how long it has been silent.
+#
+# A key that has *never* been used (no ``last_used_at``) is bucketed by
+# the age of its ``created_at`` instead, so a credential that was
+# minted, never touched, and then forgotten still surfaces.
+DEFAULT_DORMANT_WINDOW_DAYS: int = 30
+MAX_DORMANT_WINDOW_DAYS: int = 365
+_DORMANT_QUIET_DAYS: int = 30      # quiet: 30..89d silent
+_DORMANT_DORMANT_DAYS: int = 90    # dormant: 90..179d silent
+_DORMANT_ABANDONED_DAYS: int = 180 # abandoned: >=180d silent
+
 
 def seconds_until_expiry(stored: "StoredKey") -> Optional[int]:
     """Return integer seconds until ``stored.expires_at``.
@@ -313,6 +330,83 @@ def expiry_bucket(stored: "StoredKey") -> str:
     if secs <= 30 * 86400:
         return "upcoming"
     return "ok"
+
+
+def _silence_anchor(stored: "StoredKey") -> Optional[str]:
+    """Return the ISO instant from which to measure key silence.
+
+    Prefers ``last_used_at`` so an active key is never flagged.
+    Falls back to ``created_at`` so a key that was minted but never
+    used is still considered for dormancy after the same grace.
+    """
+    anchor = (getattr(stored, "last_used_at", None) or stored.created_at or "").strip()
+    return anchor or None
+
+
+def seconds_since_last_use(stored: "StoredKey", *, now: Optional[datetime] = None) -> Optional[int]:
+    """Return seconds since the key was last used (or created).
+
+    ``None`` means we cannot tell (no parseable anchor) and the caller
+    should treat the row as unclassified rather than dormant. Negative
+    deltas (clock skew) are clamped to zero.
+    """
+    raw = _silence_anchor(stored)
+    if not raw:
+        return None
+    try:
+        ts = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        parsed = datetime.fromisoformat(ts)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    n = now or datetime.now(timezone.utc)
+    delta = int((n - parsed).total_seconds())
+    return max(delta, 0)
+
+
+def dormancy_bucket(stored: "StoredKey", *, now: Optional[datetime] = None) -> str:
+    """Classify ``stored`` into active / quiet / dormant / abandoned / unknown.
+
+    Revoked or expired keys collapse to ``revoked`` so the watchlist
+    does not nag operators about credentials that already cannot
+    authenticate. ``unknown`` means we have no usable timestamp.
+    """
+    if getattr(stored, "revoked", False):
+        return "revoked"
+    if is_expired(stored):
+        return "revoked"
+    secs = seconds_since_last_use(stored, now=now)
+    if secs is None:
+        return "unknown"
+    days = secs // 86400
+    if days >= _DORMANT_ABANDONED_DAYS:
+        return "abandoned"
+    if days >= _DORMANT_DORMANT_DAYS:
+        return "dormant"
+    if days >= _DORMANT_QUIET_DAYS:
+        return "quiet"
+    return "active"
+
+
+def is_dormant(stored: "StoredKey", within_days: int = DEFAULT_DORMANT_WINDOW_DAYS,
+               *, now: Optional[datetime] = None) -> bool:
+    """True when ``stored`` has been silent for at least ``within_days``.
+
+    Revoked/expired/never-anchored rows return False so they do not
+    pollute the watchlist queue. The bucket helper preserves the
+    nuance for UI display.
+    """
+    if within_days <= 0:
+        return False
+    if getattr(stored, "revoked", False):
+        return False
+    if is_expired(stored):
+        return False
+    secs = seconds_since_last_use(stored, now=now)
+    if secs is None:
+        return False
+    return secs >= within_days * 86400
 
 
 def review_due_at(stored: "StoredKey") -> Optional[str]:
@@ -753,6 +847,19 @@ class ApiKeyStore:
         rows.sort(key=lambda r: seconds_until_expiry(r) or 0)
         return rows
 
+    def list_dormant(self, within_days: int = DEFAULT_DORMANT_WINDOW_DAYS,
+                     *, now: Optional[datetime] = None) -> List[StoredKey]:
+        """Return every live key that has been silent for ``within_days``.
+
+        Sorted longest-silent first so the admin console surfaces the
+        most stale credentials at the top of the rotation queue. Used
+        by ``GET /admin/keys/dormant`` and by the SOC2 evidence pack.
+        """
+        n = now or datetime.now(timezone.utc)
+        rows = [r for r in self._read() if is_dormant(r, within_days, now=n)]
+        rows.sort(key=lambda r: -(seconds_since_last_use(r, now=n) or 0))
+        return rows
+
     def list_review_overdue(self) -> List[StoredKey]:
         """Return every live key whose access review is past due.
 
@@ -991,6 +1098,11 @@ __all__ = [
     "seconds_until_expiry",
     "DEFAULT_EXPIRY_WARNING_DAYS",
     "MAX_EXPIRY_WARNING_DAYS",
+    "DEFAULT_DORMANT_WINDOW_DAYS",
+    "MAX_DORMANT_WINDOW_DAYS",
+    "is_dormant",
+    "dormancy_bucket",
+    "seconds_since_last_use",
     "is_review_overdue",
     "review_due_at",
     "ROLES",

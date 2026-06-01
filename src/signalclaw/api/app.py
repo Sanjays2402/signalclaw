@@ -1058,6 +1058,58 @@ def create_app() -> FastAPI:
             "keys": out,
         }
 
+    # SOC2 CC6.1 / ISO 27001 A.9.2.5: long-silent credentials are a
+    # liability. A key that has not authenticated in months should be
+    # reviewed and (almost always) revoked. This endpoint mirrors the
+    # /admin/keys/expiring shape so the admin console can poll a single
+    # set of watchlist surfaces. Dormancy is measured from
+    # ``last_used_at`` (or ``created_at`` for never-used keys).
+    @app.get(
+        "/admin/keys/dormant",
+        dependencies=[Depends(require_scope("admin")), Depends(require_mfa_for_admin)],
+    )
+    def admin_keys_dormant(within_days: int = 30):
+        from ..api_keys import (
+            DEFAULT_DORMANT_WINDOW_DAYS,
+            MAX_DORMANT_WINDOW_DAYS,
+            dormancy_bucket,
+            seconds_since_last_use,
+        )
+        from datetime import datetime, timezone
+        if not isinstance(within_days, int) or within_days < 1 or within_days > MAX_DORMANT_WINDOW_DAYS:
+            raise HTTPException(
+                400,
+                {
+                    "scope": "bad_within_days",
+                    "message": f"within_days must be an integer between 1 and {MAX_DORMANT_WINDOW_DAYS}",
+                },
+            )
+        now = datetime.now(timezone.utc)
+        rows = api_key_store.list_dormant(within_days, now=now)
+        out = []
+        for r in rows:
+            d = r.to_public()
+            secs = seconds_since_last_use(r, now=now) or 0
+            d["silent_seconds"] = secs
+            d["silent_days"] = secs // 86400
+            d["bucket"] = dormancy_bucket(r, now=now)
+            d["never_used"] = not bool(getattr(r, "last_used_at", None))
+            out.append(d)
+        counts = {
+            "quiet": sum(1 for k in out if k["bucket"] == "quiet"),
+            "dormant": sum(1 for k in out if k["bucket"] == "dormant"),
+            "abandoned": sum(1 for k in out if k["bucket"] == "abandoned"),
+            "never_used": sum(1 for k in out if k["never_used"]),
+        }
+        return {
+            "window_days": within_days,
+            "default_window_days": DEFAULT_DORMANT_WINDOW_DAYS,
+            "count": len(out),
+            "counts": counts,
+            "keys": out,
+            "generated_at": now.isoformat().replace("+00:00", "Z"),
+        }
+
     # The control inventory enumerates every enterprise policy with a
     # live status. Surface this one too so a SOC2 reviewer can see at a
     # glance that proactive expiry monitoring is wired and enforcing.
