@@ -3,7 +3,7 @@ import os
 import time
 from dataclasses import asdict
 from datetime import datetime
-from typing import Optional
+from typing import Annotated, Any, Dict, Optional
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, Body
 from pydantic import BaseModel, Field as PydField
 from fastapi.middleware.cors import CORSMiddleware  # noqa: F401  (kept for compat)
@@ -35,6 +35,7 @@ from .schemas import (DailyReportOut, Pick, WatchlistOut, WatchlistIn, BacktestO
                        OptResultOut,
                        WebhookIn, WebhookOut, WebhookListOut,
                        WebhookRotateSecretIn, WebhookRotateSecretOut,
+                       WebhookUpdateIn,
                        PickEventOut, WebhookDeliveryOut,
                        WebhookDeliveryLogItemOut, WebhookDeliveryLogOut,
                        DrawdownReportOut, JournalEntryIn, JournalEntryOut, JournalListOut,
@@ -2629,6 +2630,99 @@ def create_app() -> FastAPI:
         if not webhooks_store.remove(sub_id):
             raise HTTPException(404, "subscription not found")
         return {"removed": sub_id}
+
+    @app.patch("/webhooks/{sub_id}",
+               response_model=WebhookOut,
+               dependencies=[Depends(require_api_key)])
+    async def webhooks_update(sub_id: str,
+                              request: Request,
+                              x_api_key: str | None = Header(default=None)):
+        """Patch a subscription's url, events, tickers, or enabled flag.
+
+        Tenant-scoped: a non-owner sees 404 (not 403) so cross-tenant
+        existence does not leak; an admin-scope key can edit any
+        subscription. ``url`` is re-validated against the SSRF
+        destination policy so a tenant cannot pivot an existing
+        subscription onto a private address. Every accepted change is
+        appended to the hash-chained audit log with the field-level
+        diff so reviewers can reconstruct who changed what.
+        Secret rotation is intentionally not handled here: use
+        ``POST /webhooks/{id}/rotate-secret`` so the grace-window path
+        runs.
+        """
+        from ..webhooks.destination import validate_destination
+        try:
+            raw = await request.json()
+        except Exception:
+            raise HTTPException(400, "body must be JSON")
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        try:
+            body = WebhookUpdateIn(**raw)
+        except Exception as e:
+            raise HTTPException(422, str(e))
+        sub = webhooks_store.get(sub_id)
+        owner_id, is_admin = _webhook_caller(x_api_key)
+        if sub is None or not sub.is_visible_to(owner_id, is_admin=is_admin):
+            raise HTTPException(404, "subscription not found")
+
+        changes: Dict[str, Any] = {}
+        if body.url is not None and body.url != sub.url:
+            ok, reason = validate_destination(body.url)
+            if not ok:
+                raise HTTPException(400, reason)
+            changes["url"] = {"from": sub.url, "to": body.url}
+            sub.url = body.url
+        if body.events is not None:
+            new_events = sorted({e for e in body.events if e})
+            bad = [e for e in new_events if e not in EVENT_KINDS]
+            if bad:
+                raise HTTPException(400, f"unknown event(s): {bad}")
+            if not new_events:
+                raise HTTPException(422, "events must not be empty")
+            if new_events != sorted(sub.events):
+                changes["events"] = {"from": sorted(sub.events), "to": new_events}
+                sub.events = new_events
+        if body.tickers is not None:
+            new_tickers = sorted({t.upper() for t in body.tickers if t})
+            if new_tickers != sorted(sub.tickers):
+                changes["tickers"] = {"from": sorted(sub.tickers), "to": new_tickers}
+                sub.tickers = new_tickers
+        if body.enabled is not None and body.enabled != sub.enabled:
+            changes["enabled"] = {"from": sub.enabled, "to": body.enabled}
+            sub.enabled = body.enabled
+            # A manual re-enable clears the circuit breaker too so the
+            # next fan-out actually attempts delivery instead of being
+            # immediately re-disabled by a stale auto-disable marker.
+            if body.enabled and sub.auto_disabled_at is not None:
+                changes["auto_disabled_cleared"] = True
+                sub.auto_disabled_at = None
+                sub.auto_disable_reason = None
+                sub.consecutive_failures = 0
+
+        if not changes:
+            return WebhookOut(**sub.to_dict())
+
+        webhooks_store.update(sub)
+        try:
+            from ..audit.log import AuditEvent as _AE_wu, _utc_now_iso as _iso_wu, _hash_key as _hk_wu
+            src_ip = (request.client.host if request.client else "-") or "-"
+            audit_log.record(_AE_wu(
+                ts=_iso_wu(),
+                request_id=request.headers.get("x-request-id", "-"),
+                method="PATCH", path=f"/webhooks/{sub_id}",
+                status=200,
+                actor_key_hash=_hk_wu(x_api_key or ""),
+                actor_label="admin" if is_admin else "owner",
+                source_ip=src_ip, duration_ms=0.0,
+                action="webhook.updated",
+                extra={"subscription_id": sub.id,
+                       "owner_key_id": sub.owner_key_id,
+                       "changes": changes},
+            ))
+        except Exception:
+            pass
+        return WebhookOut(**sub.to_dict())
 
     @app.post("/webhooks/{sub_id}/rotate-secret",
               response_model=WebhookRotateSecretOut,

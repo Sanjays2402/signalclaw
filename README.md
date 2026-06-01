@@ -2,7 +2,36 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: webhook circuit breaker auto-disables dead delivery endpoints
+## New: in-place webhook edit (PATCH /webhooks/{id}) with tenant-scoped audit trail
+
+Operators previously had two choices when a webhook needed a fix (typoed URL, noisy event filter, a paused subscription that needed resuming): delete and recreate, or leave it broken. Both are procurement red flags. Delete-and-recreate destroys the per-attempt delivery log and the secret rotation history that a SOC2 reviewer needs to reconstruct the timeline; leaving it broken means the operator stops trusting the dashboard. `PATCH /webhooks/{id}` closes that gap with a tenant-scoped, audited, SSRF-validated in-place edit.
+
+- `PATCH /webhooks/{id}` accepts `url`, `events`, `tickers`, and `enabled` (any subset). The URL is re-run through the same SSRF destination policy used at create time so a tenant cannot pivot an existing subscription onto a private address. Event kinds are re-validated against the server-side allowlist. A non-owner key gets a flat `404` (not `403`) so cross-tenant existence does not leak; an admin-scope key can patch any subscription. Re-enabling a circuit-breaker auto-disabled subscription also clears `auto_disabled_at`, `auto_disable_reason`, and `consecutive_failures` so the next fan-out actually attempts delivery. Secret rotation is intentionally not handled here so the existing `POST /webhooks/{id}/rotate-secret` grace-window path keeps running.
+- Every accepted change appends a `webhook.updated` row to the hash-chained audit log with the field-level before/after diff, the request id, the source IP, and the actor key hash, so reviewers can answer "who changed what, when, from where".
+- `web/app/webhooks/page.tsx` surfaces a one-click Pause / Resume button on each subscription that calls the new PATCH endpoint and refreshes the list, keyboard-accessible and busy-state aware. The pre-existing tenant scoping on the FastAPI route means the button is safe to render for any caller.
+- `tests/test_webhooks_update.py` proves owner edit + persistence, cross-tenant 404 (not 403) plus admin override, SSRF rejection leaves the row untouched, re-enable clears the circuit breaker, and unknown/empty event lists are rejected.
+
+### Try it
+
+```bash
+make dev
+make api          # http://localhost:7431
+make web          # http://localhost:3000/webhooks
+
+# pause a noisy subscription without losing its delivery log:
+curl -fsS -X PATCH -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"enabled": false}' \
+  http://localhost:7431/webhooks/$SUB_ID | jq
+
+# narrow the event filter and fix a typoed URL in one call:
+curl -fsS -X PATCH -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"url": "https://hooks.example.com/v2/signal", "events": ["entered", "exited"]}' \
+  http://localhost:7431/webhooks/$SUB_ID | jq
+```
+
+## Previously: webhook circuit breaker auto-disables dead delivery endpoints
 
 SignalClaw already retried each outbound webhook with exponential backoff, signed every payload with HMAC SHA-256, kept a per-attempt replay log, and isolated subscriptions per API key. What it did not do is stop. A receiver that returned 500 forever (DNS gone, app retired, customer firewalled us) kept burning retries and audit space on every fan-out, and a procurement reviewer had no answer to "what stops a dead endpoint from being hammered." The circuit breaker closes that gap.
 

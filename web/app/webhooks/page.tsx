@@ -4,7 +4,7 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { api, swrFetcher, type WebhookList, type WebhookIn, type WebhookDelivery, type WebhookDeliveryLog } from "@/lib/api";
-import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple, ShieldCheck, ShieldWarning, Globe, Lock, LockOpen, Key } from "@phosphor-icons/react/dist/ssr";
+import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple, ShieldCheck, ShieldWarning, Globe, Lock, LockOpen, Key, Pause, Play } from "@phosphor-icons/react/dist/ssr";
 
 const EVENT_KINDS = ["entered", "exited", "upgraded", "downgraded", "score_jump"];
 
@@ -83,6 +83,26 @@ function Webhooks() {
     setBusy("create");
     try {
       await api("/webhooks", { method: "POST", body: JSON.stringify(body) });
+      await mutate("/webhooks");
+    } catch (e) {
+      setFormErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleEnabled(id: string, next: boolean) {
+    setFormErr(null);
+    setBusy(`toggle-${id}`);
+    try {
+      // PATCH /webhooks/{id} is tenant-scoped server-side: a non-owner
+      // key gets 404, so this button is safe to render for any caller.
+      // Re-enable also clears the circuit-breaker auto-disable markers
+      // so the next fan-out actually attempts delivery.
+      await api(`/webhooks/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: next }),
+      });
       await mutate("/webhooks");
     } catch (e) {
       setFormErr(e instanceof Error ? e.message : String(e));
@@ -359,6 +379,19 @@ function Webhooks() {
                     >
                       <Key weight="duotone" size={14} />
                       <span className="ml-1 text-xs">Rotate</span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      disabled={busy === `toggle-${s.id}`}
+                      onClick={() => toggleEnabled(s.id, !s.enabled)}
+                      title={s.enabled ? "Pause this subscription (no delivery attempts)" : "Resume this subscription and clear any auto-disable"}
+                    >
+                      {s.enabled ? (
+                        <Pause weight="duotone" size={14} />
+                      ) : (
+                        <Play weight="duotone" size={14} />
+                      )}
+                      <span className="ml-1 text-xs">{s.enabled ? "Pause" : "Resume"}</span>
                     </Button>
                     <Button variant="danger" disabled={busy === s.id} onClick={() => remove(s.id)}>
                       <Trash weight="duotone" size={14} />

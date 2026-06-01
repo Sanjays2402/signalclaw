@@ -391,6 +391,25 @@ class WebhookOut(BaseModel):
     owner_key_id: Optional[str] = None
 
 
+class WebhookUpdateIn(BaseModel):
+    """Patch a webhook subscription in place.
+
+    Any field omitted (or ``None``) is left unchanged. ``url`` is
+    re-validated against the SSRF destination policy. ``events`` is
+    re-validated against the server-side ``EVENT_KINDS`` list. The
+    signing secret is intentionally not mutable here: callers must use
+    ``POST /webhooks/{id}/rotate-secret`` so the grace-window path
+    runs and the rotation is audited.
+    """
+    url: Optional[str] = None
+    events: Optional[List[str]] = None
+    tickers: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+
+WebhookUpdateIn.model_rebuild()
+
+
 class WebhookRotateSecretIn(BaseModel):
     """Rotate a webhook signing secret with an optional grace window.
 
