@@ -49,6 +49,7 @@ import { getConcurrencyPolicy } from "./concurrencyStore.ts";
 import { getSettings } from "./settingsStore.ts";
 import { listHolds } from "./legalHoldStore.ts";
 import { getState as getDpaState } from "./dpaStore.ts";
+import { getState as getSlaState } from "./slaStore.ts";
 import { getSink as getSiemSink } from "./siemSinkStore.ts";
 import { getFreezeState } from "./freezeStore.ts";
 import { buildZip, type ZipEntry } from "./zipBuilder.ts";
@@ -166,6 +167,7 @@ export async function buildEvidencePack(actorId: string | null = null): Promise<
     settings,
     holds,
     dpa,
+    sla,
     siem,
     freeze,
   ] = await Promise.all([
@@ -186,6 +188,7 @@ export async function buildEvidencePack(actorId: string | null = null): Promise<
     safeCall(() => getSettings()),
     safeCall(() => listHolds()),
     safeCall(() => getDpaState()),
+    safeCall(() => getSlaState()),
     safeCall(() => getSiemSink()),
     safeCall(() => getFreezeState()),
   ]);
@@ -229,6 +232,14 @@ export async function buildEvidencePack(actorId: string | null = null): Promise<
       }),
     },
     { name: "policies/siem-sink.json", body: stableJson(siem) },
+    {
+      name: "policies/sla-register.json",
+      body: stableJson({
+        current: sla?.current ?? null,
+        history_count: sla?.history?.length ?? 0,
+        history: sla?.history ?? [],
+      }),
+    },
     { name: "policies/freeze.json", body: stableJson(freeze) },
   ];
 

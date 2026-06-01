@@ -27,6 +27,7 @@ import { getConfig as getLockoutConfig } from "./authLockoutStore.ts";
 import { getConcurrencyPolicy, getInFlight } from "./concurrencyStore.ts";
 import { listHolds } from "./legalHoldStore.ts";
 import { getState as getDpaState } from "./dpaStore.ts";
+import { getState as getSlaState } from "./slaStore.ts";
 import { listSessions } from "./ssoSessionRegistry.ts";
 import { getPolicy as getSessionTimeoutPolicy } from "./sessionTimeoutPolicy.ts";
 
@@ -77,6 +78,7 @@ export async function buildAdminIndex(
     concurrency,
     holds,
     dpa,
+    sla,
     sessions,
     sessionTimeout,
   ] = await Promise.all([
@@ -94,6 +96,7 @@ export async function buildAdminIndex(
     safe(() => getConcurrencyPolicy()),
     safe(() => listHolds()),
     safe(() => getDpaState()),
+    safe(() => getSlaState()),
     safe(() => listSessions({ limit: 1 })),
     safe(() => getSessionTimeoutPolicy()),
   ]);
@@ -248,6 +251,16 @@ export async function buildAdminIndex(
           ? `v${dpa.active.dpa_version} accepted (re-accept v${dpa.current.version})`
           : `v${dpa.current.version} accepted by ${dpa.active.signatory_name}`)
       : `v${dpa?.current?.version ?? "current"} not accepted yet`,
+  });
+  controls.push({
+    key: "sla",
+    label: "Service Level Agreement",
+    href: "/settings/sla",
+    category: "data",
+    status: sla && sla.current ? "enforcing" : "off",
+    summary: sla && sla.current
+      ? `v${sla.current.version}, ${(sla.current.uptime_target_bps / 100).toFixed(2)}% monthly uptime`
+      : "No SLA published yet",
   });
   controls.push({
     key: "privacy",

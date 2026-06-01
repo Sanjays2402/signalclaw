@@ -2,6 +2,44 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
+## New: per-workspace Service Level Agreement register
+
+Procurement reality: every enterprise MSA negotiation hits an SLA addendum, and procurement teams will not sign without a written monthly uptime commitment, a tiered incident response time matrix, and a credit policy that says what the customer gets when targets are missed. SignalClaw now ships a versioned SLA register that an admin publishes once and a buyer or auditor can cite by version on any future date.
+
+- `GET /api/admin/sla` returns the current SLA commitment plus the full append-only version history. Admin scope gated.
+- `POST /api/admin/sla` publishes a new SLA. Body: `uptime_target_bps` (basis points; integer in [9000, 9999]), `response_targets` (minutes per `sev1`..`sev4`, monotonically non-decreasing), `credit_ladder` (ordered tiers of `below_uptime_bps` + `credit_pct`), `notes` (commitment text, hashed with SHA-256 and pinned on the row), `support_email`, optional `status_page_url` (https only) and `security_email`. Admin MFA required. Every publish bumps version, appends the prior commitment into history, and writes an audit line carrying the notes hash so a reviewer can pin which SLA was in force on any date.
+- Validator enforces the rules a real procurement team checks: uptime within [90.00%, 99.99%], response times monotonic across severities, credit ladder sorted by uptime threshold descending and credit percentage ascending, every ladder threshold strictly below the uptime target, https-only status page, valid emails.
+- Pure helper `evaluateCredit(commitment, observed_uptime_bps)` returns the largest matching credit the customer is owed, suitable for pairing with the existing `/metrics` uptime numbers without coupling the register to the meter.
+- Admin page at `/settings/sla`: read the current commitment (target, response matrix, ladder, notes, hashed document fingerprint, contacts), publish a new version with form-level validation, and review prior versions. Loading, error, and empty states wired; responsive at 375 and 1440. Phosphor duotone icons throughout.
+- Surfaced in the SOC2 evidence pack (`/api/admin/evidence-pack` produces `policies/sla-register.json`) and the admin control inventory (`/api/admin/index` returns an `sla` row with `enforcing` / `off` status and a summary line).
+- `tests/slaRegister.test.mjs` pins the contract: 11 cases covering target floor, response order, ladder sort, ladder vs target, contact validation, version bumping with history retention, notes hash recomputation, and credit evaluation across observed uptime values.
+
+### Try it: SLA register
+
+```bash
+cd web && npm install && npm run dev  # Next.js on :7430
+# then open http://localhost:7430/settings/sla
+
+# Read the current SLA + history:
+curl -sS -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  http://localhost:7430/api/admin/sla | jq
+
+# Publish v1:
+curl -sS -X POST -H "x-api-key: $SIGNALCLAW_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{
+    "uptime_target_bps": 9995,
+    "response_targets": {"sev1":15,"sev2":60,"sev3":240,"sev4":1440},
+    "credit_ladder": [
+      {"below_uptime_bps":9900,"credit_pct":25},
+      {"below_uptime_bps":9500,"credit_pct":50},
+      {"below_uptime_bps":9000,"credit_pct":100}
+    ],
+    "notes": "Scheduled maintenance Sundays 02:00-04:00 UTC. Excludes force majeure.",
+    "support_email": "support@acme.example",
+    "status_page_url": "https://status.acme.example"
+  }' http://localhost:7430/api/admin/sla | jq
+
 ## New: public service status page with audited incident registry
 
 Enterprise procurement reviews and most vendor security questionnaires (SIG, CAIQ) explicitly ask for a real-time status page and a historical incident log with severities and post-incident reviews. SignalClaw now ships one. The registry is versioned, every mutation lands in the global audit chain, and the public reads at `/status` are intentionally unauthenticated so prospects and TPRM reviewers can fetch it without a login.

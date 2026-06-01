@@ -179,6 +179,12 @@ function Settings() {
             <FileLock size={14} weight="duotone" /> DPA
           </Link>
           <Link
+            href="/settings/sla"
+            className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
+          >
+            <FileLock size={14} weight="duotone" /> SLA
+          </Link>
+          <Link
             href="/settings/subprocessors"
             className="text-[11px] muted hover:text-white inline-flex items-center gap-1.5"
           >
