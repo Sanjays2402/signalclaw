@@ -368,11 +368,17 @@ class DeliveryAttempt:
     error: Optional[str]
     attempt: int                       # 1-based; bumped by retry/replay
     delivered_at: str
-    signature: Optional[str]           # full "sha256=..." header
+    signature: Optional[str]           # full "sha256=..." header (legacy v1)
     event_count: int
     events: List[Dict[str, Any]] = field(default_factory=list)
     payload_b64: Optional[str] = None  # base64 of the signed body (replay)
     replay_of: Optional[str] = None    # parent attempt id when replayed
+    # v2 timestamped signature, Stripe-style. Receivers verify by recomputing
+    # HMAC_SHA256(secret, f"{timestamp}.{body}") and rejecting timestamps
+    # outside their replay window. Both v1 and v2 are sent for as long as
+    # we ship backwards compat; new integrations should pin v2.
+    signature_v2: Optional[str] = None  # "v1=<hex>" over timestamp.body
+    timestamp: Optional[str] = None      # unix seconds, string
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -393,6 +399,8 @@ class DeliveryAttempt:
             events=list(d.get("events") or []),
             payload_b64=d.get("payload_b64"),
             replay_of=d.get("replay_of"),
+            signature_v2=d.get("signature_v2"),
+            timestamp=d.get("timestamp"),
         )
 
 
@@ -486,6 +494,60 @@ def _sign(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
+def _sign_v2(secret: str, timestamp: str, body: bytes) -> str:
+    """Stripe-style timestamped signature: HMAC over ``f"{ts}.{body}"``.
+
+    The timestamp travels in a sibling header so receivers can enforce a
+    replay window: a request whose timestamp is older than the window is
+    rejected even if the signature itself verifies, defeating capture +
+    replay against an idempotent endpoint.
+    """
+    mac = hmac.new(secret.encode("utf-8"), digestmod=hashlib.sha256)
+    mac.update(timestamp.encode("ascii"))
+    mac.update(b".")
+    mac.update(body)
+    return "v1=" + mac.hexdigest()
+
+
+def verify_signature(
+    secret: str,
+    body: bytes,
+    timestamp_header: Optional[str],
+    signature_header: Optional[str],
+    *,
+    tolerance_s: int = 300,
+    now: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """Verify a v2 timestamped webhook signature.
+
+    Returns ``(ok, reason)``. ``reason`` is a short machine string
+    (``"ok"``, ``"missing_headers"``, ``"bad_timestamp"``,
+    ``"stale"``, ``"bad_format"``, ``"bad_signature"``) suitable for
+    logging on the receiver side. ``tolerance_s`` defaults to 5 minutes
+    which matches Stripe's published default and is the value most
+    procurement reviews expect to see.
+
+    This is the canonical receiver-side helper. It is intentionally
+    framework-free so customer integrations can import it directly.
+    """
+    if not (secret and body is not None and timestamp_header and signature_header):
+        return False, "missing_headers"
+    try:
+        ts_int = int(str(timestamp_header).strip())
+    except (TypeError, ValueError):
+        return False, "bad_timestamp"
+    current = time.time() if now is None else now
+    if abs(current - ts_int) > max(1, int(tolerance_s)):
+        return False, "stale"
+    sig = str(signature_header).strip()
+    if not sig.startswith("v1=") or len(sig) < 4:
+        return False, "bad_format"
+    expected = _sign_v2(secret, str(ts_int), body)
+    if not hmac.compare_digest(expected, sig):
+        return False, "bad_signature"
+    return True, "ok"
+
+
 def _attempt_http(http: HttpFn, url: str, body: bytes,
                   headers: Dict[str, str], timeout: int,
                   max_attempts: int, sleep: Callable[[float], None]) -> Tuple[int, str, int]:
@@ -540,14 +602,21 @@ def deliver_events(
         headers = {"content-type": "application/json",
                    "user-agent": "signalclaw-webhook/1"}
         signature = None
+        signature_v2 = None
+        ts = str(int(time.time()))
+        headers["x-signalclaw-timestamp"] = ts
         if sub.expire_previous_secret_if_due():
             store.update(sub)
         if sub.secret:
             signature = "sha256=" + _sign(sub.secret, body)
             headers["x-signalclaw-signature"] = signature
+            signature_v2 = _sign_v2(sub.secret, ts, body)
+            headers["x-signalclaw-signature-v2"] = signature_v2
         if sub.previous_secret and sub.previous_secret_active():
             headers["x-signalclaw-signature-previous"] = (
                 "sha256=" + _sign(sub.previous_secret, body))
+            headers["x-signalclaw-signature-v2-previous"] = (
+                _sign_v2(sub.previous_secret, ts, body))
         status, err, attempts = _attempt_http(
             http, sub.url, body, headers, timeout, max_attempts, sleep)
         sub.last_status = int(status)
@@ -578,6 +647,8 @@ def deliver_events(
                 event_count=len(matched),
                 events=matched,
                 payload_b64=base64.b64encode(body).decode("ascii"),
+                signature_v2=signature_v2,
+                timestamp=ts,
             ))
         results.append({"subscription_id": sub.id, "url": sub.url,
                         "status": status, "n_events": len(matched),
@@ -615,6 +686,14 @@ def replay_delivery(
                "user-agent": "signalclaw-webhook/1"}
     if original.signature:
         headers["x-signalclaw-signature"] = original.signature
+    if original.timestamp:
+        # Reuse the original timestamp so the v2 signature (which binds
+        # the timestamp into the MAC) still verifies on the receiver.
+        # Replays may therefore be rejected by a strict receiver whose
+        # tolerance window has passed; that is the desired behaviour.
+        headers["x-signalclaw-timestamp"] = original.timestamp
+    if original.signature_v2:
+        headers["x-signalclaw-signature-v2"] = original.signature_v2
     status, err, attempts = _attempt_http(
         http, sub.url, body, headers, timeout, max_attempts, sleep)
     delivered_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -647,4 +726,6 @@ def replay_delivery(
         events=list(original.events),
         payload_b64=original.payload_b64,
         replay_of=original.id,
+        signature_v2=original.signature_v2,
+        timestamp=original.timestamp,
     ))

@@ -2,7 +2,40 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: rename API keys without rotating the secret (PUT /admin/keys/:id/label)
+## New: timestamped (v2) webhook signatures with replay-window verification
+
+Procurement reality: a webhook signature over the body alone defends against tampering but not against capture-and-replay. Stripe, Slack, and GitHub all bind a timestamp into the HMAC and document a replay window receivers must enforce. SignalClaw now ships the same shape, plus a public receiver-side helper so customer integrations do not have to roll their own crypto.
+
+- `signalclaw.webhooks._sign_v2(secret, ts, body)` computes `HMAC_SHA256(secret, f"{ts}.{body}")` and serialises as `v1=<hex>`. Outbound deliveries now stamp both `x-signalclaw-timestamp` (unix seconds) and `x-signalclaw-signature-v2` on every request, alongside the legacy `x-signalclaw-signature` so existing integrations keep working unchanged. During secret rotation a sibling `x-signalclaw-signature-v2-previous` rides along so receivers can roll without an outage, mirroring the existing v1 grace path.
+- `signalclaw.webhooks.verify_signature(secret, body, ts_header, sig_header, tolerance_s=300)` is the canonical receiver-side helper. It returns `(ok, reason)` with a short machine reason (`ok`, `missing_headers`, `bad_timestamp`, `stale`, `bad_format`, `bad_signature`) so integrations can log structured failures instead of catching exceptions. Tolerance defaults to 5 minutes which matches the value most procurement reviews expect.
+- The replay path (`POST /webhooks/deliveries/{id}/replay`) reuses the original timestamp + v2 signature so a re-sent attempt is byte-identical on the wire. A strict receiver whose tolerance has passed will reject the replay, which is the desired property: replays do not silently become accept-anything.
+- `DeliveryAttempt` rows now persist `signature_v2` and `timestamp` alongside the legacy fields so the admin delivery-log surface can prove which signature shape was used for each historical attempt without rehydrating the secret.
+- `tests/test_webhooks_signature_v2.py` pins the helper (good sig, wrong secret, tampered body, stale timestamp, malformed inputs all return the right reason), the outbound wire format (both headers present, v2 actually verifies against the body that was sent, a different tenant's secret is rejected), and that replay reuses the original timestamp + v2 signature so verification still succeeds inside the receiver's window.
+
+### Try it
+
+```bash
+make dev
+
+# verify a webhook from your receiver in three lines:
+python3 - <<'PY'
+from signalclaw.webhooks import verify_signature
+body = b'{"events":[{"kind":"entered","ticker":"AAPL"}]}'
+ts = "1717200000"           # x-signalclaw-timestamp header
+sig = "v1=...hex..."          # x-signalclaw-signature-v2 header
+ok, reason = verify_signature("YOUR_WEBHOOK_SECRET", body, ts, sig, tolerance_s=300)
+print(ok, reason)
+PY
+```
+
+Any non-Python receiver can implement the same check directly:
+
+```
+expected = "v1=" + hex(hmac_sha256(secret, timestamp + "." + body))
+reject if abs(now - timestamp) > 300 or expected != header
+```
+
+## Previously: rename API keys without rotating the secret (PUT /admin/keys/:id/label)
 
 Procurement reality: when a person leaves or a service moves owners, the security team needs to relabel the credential in their inventory without forcing a key rotation across every integration. Before this change the only way to fix a stale label like "jane laptop" was to mint a new key and revoke the old one, which causes a downtime window and loses the audit history attached to the original key id. `PUT /admin/keys/:id/label` is the boring fix: metadata-only rename, admin scope plus admin MFA, audited transition, secret unchanged.
 
