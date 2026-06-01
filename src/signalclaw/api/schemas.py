@@ -385,6 +385,9 @@ class WebhookOut(BaseModel):
     previous_secret: str = ""
     previous_secret_expires_at: Optional[str] = None
     secret_rotated_at: Optional[str] = None
+    consecutive_failures: int = 0
+    auto_disabled_at: Optional[str] = None
+    auto_disable_reason: Optional[str] = None
     owner_key_id: Optional[str] = None
 
 
