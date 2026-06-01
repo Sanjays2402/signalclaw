@@ -2,33 +2,24 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: reversible API key suspend on the FastAPI service (POST /admin/keys/:id/suspend)
+## New: Admin control inventory at /admin/controls
 
-The Next.js admin console already had a Suspend / Resume button on every API key row, but it only flipped state in the TypeScript shadow store. The FastAPI service that customers actually call (`/admin/keys`, `/v1/runs`, `/picks`, `/watchlist`, every other authenticated route) had no suspend surface at all, so a leaked or compromised key could only be permanently revoked. That is an incident-response gap enterprise procurement asks about explicitly: "can you pause this credential without destroying its scopes / ip-allowlist / forensic fingerprint while we investigate, and lift the hold in one click after?"
+The admin landing tile gave a buyer five top-line numbers but no way to walk the full posture: a procurement reviewer asking "show me every security control you ship and whether it is on" had to spelunk through the settings sidebar one page at a time. `/admin/controls` is the answer: one screen, every enterprise control, with status pulled live from the same stores the individual settings pages mutate.
 
-- `src/signalclaw/api_keys/__init__.py` adds four `suspended_*` fields on `StoredKey`, a `suspend(key_id, reason, actor)` method and a matching `resume(key_id)` on `ApiKeyStore`. Suspended rows are dropped from the auth lookup index so every request signed with the key fails 401 on the very next call, while the row keeps its scopes, role, ip-allowlist, expiry, last-used IP / UA, and rotation history. Resume clears all four fields so the post-resume row is indistinguishable from one that was never suspended.
-- `POST /admin/keys/{id}/suspend` and `POST /admin/keys/{id}/resume` are gated by admin scope plus the existing admin-MFA guard used by every other mutating admin route. Suspend accepts an optional `{ "reason": "<=200 chars" }` that is persisted on the row and surfaced in `GET /admin/keys`. Both routes flow through `AuditMiddleware`, so the actor key, source IP, request id, and timestamp land on the hash-chained audit log without extra plumbing. Suspending an already-suspended row is a 200 no-op; suspending a revoked row returns 404 (revocation is terminal).
-- `tests/test_api_keys_suspend.py` proves the contract end to end against the real FastAPI app: baseline auth works, suspend returns 401 on the next request, the admin listing still shows the suspended row with its reason, idempotent re-suspend is a no-op, resume restores both read and trade access on the original secret, non-admin callers get 403, missing keys return 404, a non-string reason is rejected 400, and a revoked key cannot be suspended.
+- `web/lib/adminIndex.ts` aggregates SSO, SCIM, admin MFA, auth lockout, SSO sessions, API keys, residency, retention, legal hold, privacy export, audit chain, API IP allowlist, CORS, CSP, webhook egress, per-key IP policy, workspace freeze, rotation deadline, concurrency cap, idempotency, SIEM sink, observability probes, and tenant isolation tests. Each row is normalized into `{key, label, href, category, status, summary}` with status drawn from the policy itself (e.g. residency in `enforce` mode reads `enforcing`, an empty CIDR allowlist on the API reads `off`, a workspace under freeze reads `enforcing`). The aggregator is framework free so it is unit tested directly against the file backed stores.
+- `GET /api/admin/controls` returns the JSON inventory. Uses the existing `requireAdmin` gate so the read is audited and the same admin-MFA contract applies as on every other admin route. No new permission surface.
+- `web/app/admin/controls/page.tsx` renders the inventory grouped by category (Identity, Data, Network, Operations, Observability), with a status filter, full-text search across labels and summaries, keyboard-accessible rows that deep link to the settings surface that owns the control, loading and error and empty states, and a header link from the existing `/admin` landing page so reviewers find it without being told.
+- `tests/adminIndex.test.mjs` proves the full set of rows is present with non-empty labels and summaries, that flipping the workspace freeze on flips only the freeze row to `enforcing` (no collateral status drift on other rows), and that setting a retention TTL surfaces the day counts in the retention row.
 
 ### Try it
 
 ```bash
 make dev
-make api          # http://localhost:7431
-make web          # http://localhost:3000/settings/keys
+make web          # http://localhost:3000/admin/controls
 
-# pause a possibly-compromised key during incident response:
-curl -fsS -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
-  -H "content-type: application/json" \
-  -d '{"reason": "incident-2026-IR-42"}' \
-  http://localhost:7431/admin/keys/$KEY_ID/suspend | jq
-
-# confirm the key now fails auth (expect HTTP 401):
-curl -i -H "x-api-key: $SUSPECT_SECRET" http://localhost:7431/watchlist
-
-# lift the hold after the investigation clears:
-curl -fsS -X POST -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
-  http://localhost:7431/admin/keys/$KEY_ID/resume | jq
+# fetch the JSON inventory directly (admin scope):
+curl -fsS -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:3000/api/admin/controls | jq '.counts, .controls[0:3]'
 ```
 
 ## Previously: API-key RBAC roles (owner / admin / member / viewer) with audited role changes

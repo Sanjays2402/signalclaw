@@ -162,6 +162,13 @@ export default function AdminConsole() {
                 {data.admin_mode === "production" ? "Production posture" : "Local mode"}
               </Badge>
             ) : null}
+            <Link
+              href="/admin/controls"
+              className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[11px] text-neutral-300 hover:bg-white/5 hover:text-white"
+            >
+              <ShieldCheck size={12} weight="duotone" />
+              <span>Control inventory</span>
+            </Link>
             <Button onClick={() => mutate()} aria-label="Refresh">
               <ArrowsClockwise size={14} weight="duotone" />
               <span className="ml-1">Refresh</span>
