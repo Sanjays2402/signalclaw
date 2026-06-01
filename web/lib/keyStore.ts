@@ -12,12 +12,46 @@ const DATA_FILE = path.join(DATA_DIR, "keys.json");
 
 export type Scope = "read" | "trade" | "admin";
 
+// Coarse-grained RBAC role for an API key. When set, it deterministically
+// drives the underlying `scopes` array via roleToScopes(); the two never
+// diverge because setKeyRole writes both atomically. Older keys minted
+// before roles existed have `role` undefined and continue to be governed
+// purely by their `scopes`. Owner and admin both carry the admin scope;
+// owner is reserved as a billing/contract anchor for the future.
+export type KeyRole = "owner" | "admin" | "member" | "viewer";
+
+export const ALL_ROLES: KeyRole[] = ["owner", "admin", "member", "viewer"];
+
+export function roleToScopes(role: KeyRole): Scope[] {
+  switch (role) {
+    case "owner":
+    case "admin":
+      return ["admin", "read", "trade"];
+    case "member":
+      return ["read", "trade"];
+    case "viewer":
+      return ["read"];
+  }
+}
+
+// Best-effort inverse: infer a role label for a key minted before roles
+// existed. Used purely for display in publicView; never feeds auth.
+export function inferRole(scopes: Scope[]): KeyRole {
+  const s = new Set(scopes);
+  if (s.has("admin")) return "admin";
+  if (s.has("trade")) return "member";
+  return "viewer";
+}
+
 export type StoredKey = {
   id: string;
   label: string;
   prefix: string; // first 8 chars of the plaintext, e.g. "sc_live_ab"
   hash: string; // sha256(plaintext) hex, never exposed via API
   scopes: Scope[];
+  // Coarse RBAC role. Optional for legacy keys; when present, `scopes`
+  // is kept in sync with roleToScopes(role) by setKeyRole().
+  role?: KeyRole;
   created_at: string;
   last_used_at: string | null;
   revoked: boolean;
@@ -82,11 +116,14 @@ function sha256(s: string): string {
 }
 
 export function publicView(k: StoredKey) {
+  const role: KeyRole = (k.role as KeyRole | undefined) ?? inferRole(k.scopes);
   return {
     id: k.id,
     label: k.label,
     prefix: k.prefix,
     scopes: k.scopes,
+    role,
+    effective_scopes: k.scopes,
     created_at: k.created_at,
     last_used_at: k.last_used_at,
     revoked: k.revoked,
@@ -104,6 +141,30 @@ export function publicView(k: StoredKey) {
 // found. Refuses to suspend the env admin id (use SIGNALCLAW_ADMIN_KEY env
 // removal instead) or revoked keys (already permanently dead). Reason is
 // optional free-form text capped at 200 chars for the audit trail.
+// Sets the RBAC role on a key and overwrites the underlying `scopes`
+// array with the deterministic role->scopes mapping. Both fields are
+// written atomically so the auth path never observes drift between role
+// label and effective scopes. Returns the updated key, or null if the
+// key does not exist, has been revoked, or is the env admin (which is
+// always owner-equivalent and cannot be downgraded via the API).
+export async function setKeyRole(
+  id: string,
+  role: KeyRole,
+): Promise<StoredKey | null> {
+  if (id === "env-admin") return null;
+  if (!ALL_ROLES.includes(role)) {
+    throw new Error(`invalid_role: ${role}`);
+  }
+  const store = await readStore();
+  const k = store.keys.find((x) => x.id === id);
+  if (!k) return null;
+  if (k.revoked) return null;
+  k.role = role;
+  k.scopes = roleToScopes(role);
+  await writeStore(store);
+  return k;
+}
+
 export async function setKeySuspended(
   id: string,
   suspended: boolean,
@@ -236,12 +297,18 @@ export async function createKey(
   }
 
   const secret = genSecret();
+  // Derive an initial role from scopes so a freshly minted key has a
+  // stable RBAC label that the admin console and audit trail can name.
+  // Admin is never assignable via the public createKey path, so the
+  // inferred role is at most "member" (read + trade) or "viewer" (read).
+  const initialRole: KeyRole = inferRole(scopes);
   const key: StoredKey = {
     id: genId(),
     label,
     prefix: secret.slice(0, 10),
     hash: sha256(secret),
     scopes,
+    role: initialRole,
     created_at: new Date().toISOString(),
     last_used_at: null,
     revoked: false,
@@ -344,6 +411,7 @@ export async function authenticateWithStatus(
         prefix: adminEnv.slice(0, 10),
         hash: sha256(adminEnv),
         scopes: ["admin", "read", "trade"],
+        role: "owner",
         created_at: "1970-01-01T00:00:00.000Z",
         last_used_at: new Date().toISOString(),
         revoked: false,

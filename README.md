@@ -2,7 +2,32 @@
 
 A local-first time-series signal terminal that classifies market regime (bull / chop / bear / crash) and lets you save, share, comment on, and compare runs side by side.
 
-## New: in-place webhook edit (PATCH /webhooks/{id}) with tenant-scoped audit trail
+## New: API-key RBAC roles (owner / admin / member / viewer) with audited role changes
+
+The admin console already exposed a `Role` button on every API key row, but the backend route it called did not exist, so every click 404'd and the `role` field on key listings was always blank. That is an enterprise procurement blocker: a reviewer asking "can you downgrade a leaked trading key to read-only without rotating it?" needs a real answer. This change wires RBAC roles end to end.
+
+- `web/lib/keyStore.ts` adds a `KeyRole` (`owner` / `admin` / `member` / `viewer`) and a `roleToScopes()` map. `setKeyRole()` rewrites both `role` and the underlying `scopes` array atomically so the auth path never observes drift between the role label and the effective privileges. `createKey()` now stamps an initial role inferred from the requested scopes; admin remains unassignable via the public mint path, so the inferred role is at most `member`. `publicView()` surfaces both `role` and `effective_scopes` so the admin UI can render a stable label even for legacy keys minted before the role field existed.
+- `PUT /api/admin/keys/:id/role` accepts `{ "role": "viewer" }` and is gated by admin scope plus the existing admin-MFA guard used on every other mutating admin route. Refuses to edit the env admin (rotate `SIGNALCLAW_ADMIN_KEY` instead) or revoked keys, and rejects unknown role strings with a structured `400 invalid_role`. Every accepted change writes an audit row with `role:<before>-><after>`, the source IP, and the actor key hash, so reviewers can answer "who downgraded which key, when, from where".
+- `tests/keyRole.test.mjs` proves the role map, the atomic role+scope rewrite (downgrading `member` to `viewer` actually drops the `trade` scope from the stored key, blocking trade calls on the very next request), and the refusals for env-admin, revoked keys, and bogus role strings.
+
+### Try it
+
+```bash
+make dev
+make web          # http://localhost:3000/settings/keys
+
+# downgrade a leaked trading key to read-only without rotating the secret:
+curl -fsS -X PUT -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"role": "viewer"}' \
+  http://localhost:3000/api/admin/keys/$KEY_ID/role | jq
+
+# read the current role back (useful for the admin console picker):
+curl -fsS -H "x-api-key: $SIGNALCLAW_ADMIN_KEY" \
+  http://localhost:3000/api/admin/keys/$KEY_ID/role | jq
+```
+
+## Previously: in-place webhook edit (PATCH /webhooks/{id}) with tenant-scoped audit trail
 
 Operators previously had two choices when a webhook needed a fix (typoed URL, noisy event filter, a paused subscription that needed resuming): delete and recreate, or leave it broken. Both are procurement red flags. Delete-and-recreate destroys the per-attempt delivery log and the secret rotation history that a SOC2 reviewer needs to reconstruct the timeline; leaving it broken means the operator stops trusting the dashboard. `PATCH /webhooks/{id}` closes that gap with a tenant-scoped, audited, SSRF-validated in-place edit.
 
