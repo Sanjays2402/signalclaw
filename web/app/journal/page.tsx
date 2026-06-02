@@ -4,7 +4,7 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type JournalEntry, type JournalEntryIn } from "@/lib/api";
-import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass, PencilSimple, FloppyDisk, X } from "@phosphor-icons/react/dist/ssr";
+import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass, PencilSimple, FloppyDisk, X, Link as LinkIcon, Check } from "@phosphor-icons/react/dist/ssr";
 import { entriesToCSV, entriesToJSON, entriesToMarkdown, exportFilename, filterEntries, collectTags, parseJournalUrlState, serializeJournalUrlState, sortEntries, JOURNAL_SORT_DEFAULT, type JournalSort } from "@/lib/journalExport";
 
 type ConvictionStats = {
@@ -123,7 +123,10 @@ function Journal() {
           </h1>
           <p className="muted text-xs">Thesis, conviction, and tags per trade.</p>
         </div>
-        <ExportButtons entries={filtered} />
+        <div className="flex items-center gap-2 flex-wrap">
+          <CopyLinkButton />
+          <ExportButtons entries={filtered} />
+        </div>
       </header>
 
       <ConvictionStatsRow s={stats.data} err={stats.error} />
@@ -276,6 +279,50 @@ function Journal() {
             )}
       </Card>
     </div>
+  );
+}
+
+function CopyLinkButton() {
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState(false);
+  async function onClick() {
+    try {
+      const url = window.location.href;
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        if (!ok) throw new Error("copy failed");
+      }
+      setErr(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setErr(true);
+      setTimeout(() => setErr(false), 1500);
+    }
+  }
+  const cls =
+    "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono";
+  const label = err ? "FAILED" : copied ? "COPIED" : "COPY LINK";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cls}
+      title="Copy a shareable URL of the current filtered view"
+      data-testid="journal-copy-link"
+      aria-label="Copy shareable link to current view"
+    >
+      {copied ? <Check weight="duotone" size={11} /> : <LinkIcon weight="duotone" size={11} />} {label}
+    </button>
   );
 }
 
