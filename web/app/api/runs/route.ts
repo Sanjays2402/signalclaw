@@ -25,6 +25,14 @@ export async function GET(req: NextRequest) {
   const pinnedOnly = pinnedParam === "1" || pinnedParam === "true";
   const since = sp.get("since") ?? "";
   const until = sp.get("until") ?? "";
+  const sortRaw = (sp.get("sort") ?? "").toLowerCase();
+  const sort =
+    sortRaw === "oldest" ||
+    sortRaw === "ticker" ||
+    sortRaw === "confidence" ||
+    sortRaw === "bars"
+      ? (sortRaw as "oldest" | "ticker" | "confidence" | "bars")
+      : "recent";
   const limit = parseIntParam(sp.get("limit"), 25);
   const offset = parseIntParam(sp.get("offset"), 0);
 
@@ -36,6 +44,7 @@ export async function GET(req: NextRequest) {
     pinned: pinnedOnly ? true : undefined,
     since: since || undefined,
     until: until || undefined,
+    sort,
     limit,
     offset,
   });

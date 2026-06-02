@@ -373,3 +373,56 @@ test("setRunPinned toggles pinned + pinned_at and queryRuns filters", async () =
   const miss = await store.setRunPinned("zzzzzzzzzz", true);
   assert.equal(miss, null);
 });
+
+test("queryRuns sort: recent (default), oldest, ticker, confidence, bars", async () => {
+  await store._resetForTests();
+
+  function payloadWith({ bars, confidence }) {
+    const dates = Array.from({ length: bars }, (_, i) => `2024-01-${String(i + 1).padStart(2, "0")}`);
+    const close = Array.from({ length: bars }, (_, i) => 100 + i);
+    const regime = Array.from({ length: bars }, () => "bull");
+    return {
+      ticker: "X",
+      dates,
+      close,
+      regime,
+      counts: { bull: bars, chop: 0, bear: 0, crash: 0 },
+      snapshot: {
+        label: "bull",
+        realized_vol: 0.1,
+        trend_slope: 0.001,
+        drawdown: -0.01,
+        confidence,
+        risk_scale: 1.0,
+        as_of: dates[dates.length - 1],
+      },
+      disclaimer: "research only",
+    };
+  }
+
+  const a = await store.createRun({ label: "a", ticker: "ZZZ", lookback_days: 30, payload: payloadWith({ bars: 2, confidence: 0.5 }) });
+  await new Promise((r) => setTimeout(r, 5));
+  const b = await store.createRun({ label: "b", ticker: "AAA", lookback_days: 30, payload: payloadWith({ bars: 10, confidence: 0.9 }) });
+  await new Promise((r) => setTimeout(r, 5));
+  const c = await store.createRun({ label: "c", ticker: "MMM", lookback_days: 30, payload: payloadWith({ bars: 5, confidence: 0.7 }) });
+
+  const recent = await store.queryRuns({ limit: 10 });
+  assert.deepEqual(recent.runs.map((r) => r.id), [c.id, b.id, a.id]);
+
+  const oldest = await store.queryRuns({ sort: "oldest", limit: 10 });
+  assert.deepEqual(oldest.runs.map((r) => r.id), [a.id, b.id, c.id]);
+
+  const byTicker = await store.queryRuns({ sort: "ticker", limit: 10 });
+  assert.deepEqual(byTicker.runs.map((r) => r.id), [b.id, c.id, a.id]);
+
+  const byConf = await store.queryRuns({ sort: "confidence", limit: 10 });
+  assert.deepEqual(byConf.runs.map((r) => r.id), [b.id, c.id, a.id]);
+
+  const byBars = await store.queryRuns({ sort: "bars", limit: 10 });
+  assert.deepEqual(byBars.runs.map((r) => r.id), [b.id, c.id, a.id]);
+
+  // Unknown sort value falls back to recent via API; the store treats unknown
+  // values as default since the type is constrained.
+  const fallback = await store.queryRuns({ sort: undefined, limit: 10 });
+  assert.deepEqual(fallback.runs.map((r) => r.id), [c.id, b.id, a.id]);
+});

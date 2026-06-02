@@ -24,6 +24,14 @@ export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFil
   const pinnedOnly = pinnedRaw === "1" || pinnedRaw === "true";
   const since = (sp.get("since") ?? "").trim();
   const until = (sp.get("until") ?? "").trim();
+  const sortRaw = (sp.get("sort") ?? "").toLowerCase();
+  const sort: QueryOpts["sort"] =
+    sortRaw === "oldest" ||
+    sortRaw === "ticker" ||
+    sortRaw === "confidence" ||
+    sortRaw === "bars"
+      ? (sortRaw as NonNullable<QueryOpts["sort"]>)
+      : "recent";
   return {
     q: sp.get("q") ?? "",
     regime: sp.get("regime") ?? "",
@@ -32,6 +40,7 @@ export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFil
     pinned: pinnedOnly ? true : undefined,
     since: since || undefined,
     until: until || undefined,
+    sort,
     limit: parseExportLimit(sp.get("limit")),
     offset: 0,
   };

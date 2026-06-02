@@ -329,6 +329,11 @@ export type QueryOpts = {
   until?: string;
   limit?: number;
   offset?: number;
+  // Sort order for the returned page. Default "recent" matches the legacy
+  // newest-first behavior. "oldest" reverses it. "ticker" sorts A->Z with
+  // newest-first as the tiebreaker. "confidence" and "bars" sort highest
+  // first, also tiebroken by newest-first.
+  sort?: "recent" | "oldest" | "ticker" | "confidence" | "bars";
   // Per-API-key tenant filter. Applied BEFORE search/regime/ticker filters
   // so totals reported to the caller reflect only rows the caller can see.
   // Shape: { mode: "all" } | { mode: "owner_or_unowned", keyId }
@@ -401,7 +406,34 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
       return Number.isFinite(t) && t <= untilMs;
     });
   }
-  filtered = [...filtered].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const sort = opts.sort ?? "recent";
+  const cmpRecent = (a: SavedRun, b: SavedRun) =>
+    a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0;
+  filtered = [...filtered].sort((a, b) => {
+    switch (sort) {
+      case "oldest":
+        return a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0;
+      case "ticker": {
+        const c = a.ticker.localeCompare(b.ticker);
+        return c !== 0 ? c : cmpRecent(a, b);
+      }
+      case "confidence": {
+        const ac = a.payload.snapshot?.confidence ?? -Infinity;
+        const bc = b.payload.snapshot?.confidence ?? -Infinity;
+        if (bc !== ac) return bc - ac;
+        return cmpRecent(a, b);
+      }
+      case "bars": {
+        const ab = a.payload.dates.length;
+        const bb = b.payload.dates.length;
+        if (bb !== ab) return bb - ab;
+        return cmpRecent(a, b);
+      }
+      case "recent":
+      default:
+        return cmpRecent(a, b);
+    }
+  });
   const total = filtered.length;
   const page = filtered.slice(offset, offset + limit);
   return { runs: page, total, limit, offset };

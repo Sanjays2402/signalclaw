@@ -53,6 +53,14 @@ type ListResp = {
 
 const PAGE_SIZE = 25;
 const REGIMES = ["all", "bull", "chop", "bear", "crash"] as const;
+const SORTS = [
+  { value: "recent", label: "Newest" },
+  { value: "oldest", label: "Oldest" },
+  { value: "ticker", label: "Ticker A-Z" },
+  { value: "confidence", label: "Confidence" },
+  { value: "bars", label: "Bars" },
+] as const;
+type SortValue = (typeof SORTS)[number]["value"];
 
 const fetcher = async (url: string) => {
   const r = await fetch(url, { cache: "no-store" });
@@ -81,6 +89,7 @@ export default function HistoryPage() {
   const [regime, setRegime] = useState<(typeof REGIMES)[number]>("all");
   const [tag, setTag] = useState<string>("");
   const [pinnedOnly, setPinnedOnly] = useState(false);
+  const [sort, setSort] = useState<SortValue>("recent");
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -95,6 +104,7 @@ export default function HistoryPage() {
   if (regime !== "all") params.set("regime", regime);
   if (tag) params.set("tag", tag);
   if (pinnedOnly) params.set("pinned", "1");
+  if (sort !== "recent") params.set("sort", sort);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
 
@@ -116,6 +126,7 @@ export default function HistoryPage() {
   if (regime !== "all") exportParams.set("regime", regime);
   if (tag) exportParams.set("tag", tag);
   if (pinnedOnly) exportParams.set("pinned", "1");
+  if (sort !== "recent") exportParams.set("sort", sort);
 
   function go(delta: number) {
     const next = Math.max(0, offset + delta * PAGE_SIZE);
@@ -214,6 +225,7 @@ export default function HistoryPage() {
     setRegime("all");
     setTag("");
     setPinnedOnly(false);
+    setSort("recent");
     setOffset(0);
   }
 
@@ -221,7 +233,7 @@ export default function HistoryPage() {
   const page = data?.runs ?? [];
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + page.length, total);
-  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly;
+  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly || sort !== "recent";
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -322,6 +334,27 @@ export default function HistoryPage() {
                 </button>
               );
             })}
+            <label
+              className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 muted hover:bg-white/5"
+              title="Sort the run list"
+            >
+              Sort
+              <select
+                value={sort}
+                onChange={(e) => {
+                  setSort(e.target.value as SortValue);
+                  setOffset(0);
+                }}
+                aria-label="Sort runs"
+                className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none cursor-pointer"
+              >
+                {SORTS.map((s) => (
+                  <option key={s.value} value={s.value} className="bg-[var(--bg)] text-white">
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             {hasFilters && (
               <button
                 onClick={resetFilters}
