@@ -56,6 +56,15 @@ export function parseMinBars(raw: string | null | undefined): number | undefined
   return Math.floor(n);
 }
 
+// Same parsing rules as parseMinBars. Kept as a separate symbol so call
+// sites read clearly and so we can evolve the upper-bound behavior
+// independently later (for example, clamping max to never fall below min).
+// Pairs with parseMinBars to bracket a bar-count window (e.g. show only
+// runs with 50-200 bars).
+export function parseMaxBars(raw: string | null | undefined): number | undefined {
+  return parseMinBars(raw);
+}
+
 export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFilter"> {
   const pinnedRaw = sp.get("pinned");
   const pinnedOnly = pinnedRaw === "1" || pinnedRaw === "true";
@@ -80,6 +89,7 @@ export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFil
     minConfidence: parseMinConfidence(sp.get("min_confidence")),
     maxConfidence: parseMaxConfidence(sp.get("max_confidence")),
     minBars: parseMinBars(sp.get("min_bars")),
+    maxBars: parseMaxBars(sp.get("max_bars")),
     sort,
     limit: parseExportLimit(sp.get("limit")),
     offset: 0,

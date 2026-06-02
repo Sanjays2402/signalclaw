@@ -98,6 +98,7 @@ export default function HistoryPage() {
   const [minConf, setMinConf] = useState<string>("");
   const [maxConf, setMaxConf] = useState<string>("");
   const [minBars, setMinBars] = useState<string>("");
+  const [maxBars, setMaxBars] = useState<string>("");
   const [offset, setOffset] = useState(0);
   const [hydrated, setHydrated] = useState(false);
 
@@ -139,6 +140,11 @@ export default function HistoryPage() {
       const n = Number.parseInt(urlMinBars, 10);
       if (n >= 0) setMinBars(String(n));
     }
+    const urlMaxBars = sp.get("max_bars");
+    if (urlMaxBars && /^\d{1,6}$/.test(urlMaxBars)) {
+      const n = Number.parseInt(urlMaxBars, 10);
+      if (n >= 0) setMaxBars(String(n));
+    }
     setHydrated(true);
   }, []);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
@@ -169,13 +175,14 @@ export default function HistoryPage() {
     if (minConf) sp.set("min_confidence", minConf);
     if (maxConf) sp.set("max_confidence", maxConf);
     if (minBars) sp.set("min_bars", minBars);
+    if (maxBars) sp.set("max_bars", maxBars);
     const qs = sp.toString();
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     const current = window.location.pathname + window.location.search;
     if (next !== current) {
       window.history.replaceState(null, "", next);
     }
-  }, [hydrated, dq, regime, dticker, tag, pinnedOnly, sort, since, until, minConf, maxConf, minBars]);
+  }, [hydrated, dq, regime, dticker, tag, pinnedOnly, sort, since, until, minConf, maxConf, minBars, maxBars]);
 
   const params = new URLSearchParams();
   if (dq) params.set("q", dq);
@@ -189,6 +196,7 @@ export default function HistoryPage() {
   if (minConf) params.set("min_confidence", minConf);
   if (maxConf) params.set("max_confidence", maxConf);
   if (minBars) params.set("min_bars", minBars);
+  if (maxBars) params.set("max_bars", maxBars);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
 
@@ -222,6 +230,7 @@ export default function HistoryPage() {
   if (minConf) exportParams.set("min_confidence", minConf);
   if (maxConf) exportParams.set("max_confidence", maxConf);
   if (minBars) exportParams.set("min_bars", minBars);
+  if (maxBars) exportParams.set("max_bars", maxBars);
 
   function go(delta: number) {
     const next = Math.max(0, offset + delta * PAGE_SIZE);
@@ -327,6 +336,7 @@ export default function HistoryPage() {
     setMinConf("");
     setMaxConf("");
     setMinBars("");
+    setMaxBars("");
     setOffset(0);
   }
 
@@ -334,7 +344,7 @@ export default function HistoryPage() {
   const page = data?.runs ?? [];
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + page.length, total);
-  const hasFilters = dq.length > 0 || regime !== "all" || dticker.length > 0 || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0 || minConf.length > 0 || maxConf.length > 0 || minBars.length > 0;
+  const hasFilters = dq.length > 0 || regime !== "all" || dticker.length > 0 || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0 || minConf.length > 0 || maxConf.length > 0 || minBars.length > 0 || maxBars.length > 0;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -649,6 +659,33 @@ export default function HistoryPage() {
                 placeholder="0"
                 aria-label="Minimum bars in run"
                 data-testid="filter-min-bars"
+                className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none w-12 text-right"
+              />
+            </label>
+            <label
+              className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 muted hover:bg-white/5"
+              title="Only include runs with at most this many bars. Pairs with Min bars to bracket a bar-count window (for example, 50-200 bars)."
+            >
+              Max bars
+              <input
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+                value={maxBars}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setMaxBars("");
+                  } else {
+                    const n = Math.max(0, Math.floor(Number(raw)));
+                    setMaxBars(Number.isFinite(n) ? String(n) : "");
+                  }
+                  setOffset(0);
+                }}
+                placeholder="\u221E"
+                aria-label="Maximum bars in run"
+                data-testid="filter-max-bars"
                 className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none w-12 text-right"
               />
             </label>

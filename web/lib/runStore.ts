@@ -343,6 +343,9 @@ export type QueryOpts = {
   // that are not finite non-negative integers are ignored, matching the
   // lenient policy of the other filters on this struct.
   minBars?: number;
+  // Inclusive upper bound on the number of bars (payload.dates.length).
+  // Pairs with minBars to bracket a bar-count window. Same lenience rules.
+  maxBars?: number;
   limit?: number;
   offset?: number;
   // Sort order for the returned page. Default "recent" matches the legacy
@@ -441,6 +444,11 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
   if (typeof minBars === "number" && Number.isFinite(minBars) && minBars >= 0) {
     const threshold = Math.floor(minBars);
     filtered = filtered.filter((r) => (r.payload.dates?.length ?? 0) >= threshold);
+  }
+  const maxBars = opts.maxBars;
+  if (typeof maxBars === "number" && Number.isFinite(maxBars) && maxBars >= 0) {
+    const ceiling = Math.floor(maxBars);
+    filtered = filtered.filter((r) => (r.payload.dates?.length ?? 0) <= ceiling);
   }
   const sort = opts.sort ?? "recent";
   const cmpRecent = (a: SavedRun, b: SavedRun) =>
