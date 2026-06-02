@@ -4,7 +4,7 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type JournalEntry, type JournalEntryIn } from "@/lib/api";
-import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass } from "@phosphor-icons/react/dist/ssr";
+import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass, PencilSimple, FloppyDisk, X } from "@phosphor-icons/react/dist/ssr";
 import { entriesToCSV, entriesToJSON, entriesToMarkdown, exportFilename, filterEntries, collectTags, parseJournalUrlState, serializeJournalUrlState } from "@/lib/journalExport";
 
 type ConvictionStats = {
@@ -24,6 +24,7 @@ function Journal() {
   const stats = useSWR<ConvictionStats>("/journal/stats/conviction", swrFetcher);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [convFilter, setConvFilter] = useState<"" | "1" | "2" | "3" | "4" | "5">("");
   const [tagFilter, setTagFilter] = useState("");
@@ -91,6 +92,20 @@ function Journal() {
       await api(`/journal/${id}`, { method: "DELETE" });
       await refresh();
     } finally { setBusy(null); }
+  }
+
+  async function onSaveEdit(input: JournalEntryIn) {
+    setErr(null);
+    setBusy(`edit:${input.trade_id}`);
+    try {
+      await api("/journal", { method: "POST", body: JSON.stringify(input) });
+      setEditingId(null);
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
@@ -191,30 +206,50 @@ function Journal() {
                       <div className="mono text-sm">{e.trade_id}</div>
                       <div className="muted text-xs">{e.updated_at?.slice(0, 10)}</div>
                     </div>
-                    <div className="flex-1 space-y-1.5">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge tone={e.conviction >= 4 ? "up" : e.conviction <= 2 ? "warn" : "info"}>
-                          conviction {e.conviction}/5
-                        </Badge>
-                        {e.exit_reason && <Badge tone="neutral">{e.exit_reason}</Badge>}
-                        {e.tags.map((t) => (
-                          <button
-                            key={t}
-                            type="button"
-                            onClick={() => setTagFilter(t)}
-                            title={`Filter by tag ${t}`}
-                            className="appearance-none bg-transparent p-0 border-0 cursor-pointer"
-                            data-testid="journal-tag-chip"
-                          >
-                            <Badge tone={tagFilter.toLowerCase() === t.toLowerCase() ? "info" : "neutral"}>{t}</Badge>
-                          </button>
-                        ))}
-                      </div>
-                      <p className="text-sm">{e.thesis || <span className="muted">(no thesis)</span>}</p>
-                    </div>
-                    <Button variant="danger" className="text-xs" onClick={() => onDelete(e.trade_id)} disabled={busy === e.trade_id}>
-                      <Trash weight="duotone" />
-                    </Button>
+                    {editingId === e.trade_id ? (
+                      <EditForm
+                        entry={e}
+                        busy={busy === `edit:${e.trade_id}`}
+                        onCancel={() => setEditingId(null)}
+                        onSave={onSaveEdit}
+                      />
+                    ) : (
+                      <>
+                        <div className="flex-1 space-y-1.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge tone={e.conviction >= 4 ? "up" : e.conviction <= 2 ? "warn" : "info"}>
+                              conviction {e.conviction}/5
+                            </Badge>
+                            {e.exit_reason && <Badge tone="neutral">{e.exit_reason}</Badge>}
+                            {e.tags.map((t) => (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => setTagFilter(t)}
+                                title={`Filter by tag ${t}`}
+                                className="appearance-none bg-transparent p-0 border-0 cursor-pointer"
+                                data-testid="journal-tag-chip"
+                              >
+                                <Badge tone={tagFilter.toLowerCase() === t.toLowerCase() ? "info" : "neutral"}>{t}</Badge>
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-sm">{e.thesis || <span className="muted">(no thesis)</span>}</p>
+                        </div>
+                        <Button
+                          className="text-xs"
+                          onClick={() => { setErr(null); setEditingId(e.trade_id); }}
+                          disabled={busy === e.trade_id || editingId !== null}
+                          title="Edit this entry"
+                          data-testid="journal-edit"
+                        >
+                          <PencilSimple weight="duotone" />
+                        </Button>
+                        <Button variant="danger" className="text-xs" onClick={() => onDelete(e.trade_id)} disabled={busy === e.trade_id}>
+                          <Trash weight="duotone" />
+                        </Button>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -283,6 +318,59 @@ function ExportButtons({ entries }: { entries: JournalEntry[] }) {
         <DownloadSimple weight="duotone" size={11} /> MD
       </button>
     </div>
+  );
+}
+
+function EditForm({
+  entry, busy, onSave, onCancel,
+}: {
+  entry: JournalEntry;
+  busy: boolean;
+  onSave: (e: JournalEntryIn) => void;
+  onCancel: () => void;
+}) {
+  const [thesis, setThesis] = useState(entry.thesis ?? "");
+  const [conviction, setConviction] = useState(entry.conviction ?? 3);
+  const [tags, setTags] = useState((entry.tags ?? []).join(", "));
+  const [exitReason, setExitReason] = useState(entry.exit_reason ?? "");
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    onSave({
+      trade_id: entry.trade_id,
+      thesis: thesis.trim(),
+      conviction,
+      tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
+      exit_reason: exitReason.trim() || null,
+    });
+  }
+
+  return (
+    <form onSubmit={submit} className="flex-1 grid grid-cols-1 md:grid-cols-6 gap-2 items-end" data-testid="journal-edit-form">
+      <Field label="Conviction">
+        <Select value={conviction} onChange={(e) => setConviction(parseInt(e.target.value, 10))}>
+          {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+        </Select>
+      </Field>
+      <Field label="Tags (comma)">
+        <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="breakout, earnings" />
+      </Field>
+      <Field label="Exit reason">
+        <Input value={exitReason} onChange={(e) => setExitReason(e.target.value)} placeholder="optional" />
+      </Field>
+      <Field label="Thesis">
+        <Input value={thesis} onChange={(e) => setThesis(e.target.value)} placeholder="why are you in this trade?" />
+      </Field>
+      <div className="flex items-center gap-2">
+        <Button type="submit" disabled={busy} data-testid="journal-edit-save">
+          <FloppyDisk weight="duotone" className="inline mr-1" />
+          {busy ? "Saving" : "Save"}
+        </Button>
+        <Button type="button" variant="danger" onClick={onCancel} disabled={busy} data-testid="journal-edit-cancel">
+          <X weight="duotone" />
+        </Button>
+      </div>
+    </form>
   );
 }
 
