@@ -59,6 +59,29 @@ type Store = { runs: SavedRun[] };
 
 // Tag rules: lowercase, [a-z0-9-], 1..24 chars, dedup, cap 8 per run.
 const TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+
+// YYYY-MM-DD (no time component). Used to detect bare dates so we can pin
+// `until=2024-03-15` to end-of-day UTC instead of midnight (which would
+// silently exclude every run created later that same day).
+const BARE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseSinceMs(raw: string | undefined | null): number | null {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const iso = BARE_DATE_RE.test(s) ? s + "T00:00:00.000Z" : s;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+}
+
+function parseUntilMs(raw: string | undefined | null): number | null {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const iso = BARE_DATE_RE.test(s) ? s + "T23:59:59.999Z" : s;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+}
 export const MAX_TAGS_PER_RUN = 8;
 
 export function normalizeTags(input: unknown): string[] {
@@ -295,6 +318,15 @@ export type QueryOpts = {
   ticker?: string;
   tag?: string;
   pinned?: boolean;
+  // Inclusive ISO date (YYYY-MM-DD or full ISO timestamp) lower bound on
+  // created_at. Runs created strictly before this instant are excluded.
+  // Invalid values are ignored (no filter applied), matching the lenient
+  // behavior of the other text filters on this struct.
+  since?: string;
+  // Inclusive ISO date upper bound on created_at. A bare YYYY-MM-DD is
+  // interpreted as end-of-day UTC so "until=2024-03-15" includes runs
+  // created any time on March 15.
+  until?: string;
   limit?: number;
   offset?: number;
   // Per-API-key tenant filter. Applied BEFORE search/regime/ticker filters
@@ -354,6 +386,20 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
   }
   if (opts.pinned === true) {
     filtered = filtered.filter((r) => r.pinned === true);
+  }
+  const sinceMs = parseSinceMs(opts.since);
+  if (sinceMs !== null) {
+    filtered = filtered.filter((r) => {
+      const t = Date.parse(r.created_at);
+      return Number.isFinite(t) && t >= sinceMs;
+    });
+  }
+  const untilMs = parseUntilMs(opts.until);
+  if (untilMs !== null) {
+    filtered = filtered.filter((r) => {
+      const t = Date.parse(r.created_at);
+      return Number.isFinite(t) && t <= untilMs;
+    });
   }
   filtered = [...filtered].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   const total = filtered.length;

@@ -22,12 +22,16 @@ export function parseExportLimit(raw: string | null | undefined): number {
 export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFilter"> {
   const pinnedRaw = sp.get("pinned");
   const pinnedOnly = pinnedRaw === "1" || pinnedRaw === "true";
+  const since = (sp.get("since") ?? "").trim();
+  const until = (sp.get("until") ?? "").trim();
   return {
     q: sp.get("q") ?? "",
     regime: sp.get("regime") ?? "",
     ticker: sp.get("ticker") ?? "",
     tag: sp.get("tag") ?? "",
     pinned: pinnedOnly ? true : undefined,
+    since: since || undefined,
+    until: until || undefined,
     limit: parseExportLimit(sp.get("limit")),
     offset: 0,
   };

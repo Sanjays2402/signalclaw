@@ -23,6 +23,8 @@ export async function GET(req: NextRequest) {
   const tag = sp.get("tag") ?? "";
   const pinnedParam = sp.get("pinned");
   const pinnedOnly = pinnedParam === "1" || pinnedParam === "true";
+  const since = sp.get("since") ?? "";
+  const until = sp.get("until") ?? "";
   const limit = parseIntParam(sp.get("limit"), 25);
   const offset = parseIntParam(sp.get("offset"), 0);
 
@@ -32,6 +34,8 @@ export async function GET(req: NextRequest) {
     ticker,
     tag,
     pinned: pinnedOnly ? true : undefined,
+    since: since || undefined,
+    until: until || undefined,
     limit,
     offset,
   });
