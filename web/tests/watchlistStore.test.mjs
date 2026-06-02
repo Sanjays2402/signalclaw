@@ -100,3 +100,32 @@ test("setTargets validates and persists, recordCross writes state", async () => 
 test("bad ticker throws on add", async () => {
   await assert.rejects(() => store.addTicker("1bad"));
 });
+
+test("entriesToMarkdown emits table with header, escapes pipes, and handles empty", () => {
+  const empty = store.entriesToMarkdown([]);
+  assert.match(empty, /# SignalClaw watchlist/);
+  assert.match(empty, /No tickers tracked yet/);
+
+  const md = store.entriesToMarkdown([
+    {
+      ticker: "AAPL",
+      added_at: "2025-01-01T00:00:00Z",
+      note: "has | pipe",
+      target_high: 200,
+      target_low: 150,
+      last_cross: { side: "above_high", price: 210, at: "2025-01-03T00:00:00Z" },
+    },
+    {
+      ticker: "SPY",
+      added_at: "2025-01-02T00:00:00Z",
+      note: null,
+      target_high: null,
+      target_low: null,
+      last_cross: null,
+    },
+  ]);
+  assert.match(md, /\| Ticker \| Added \| Target low \| Target high \| Note \| Last cross \|/);
+  assert.match(md, /\| AAPL \| 2025-01-01 \| 150 \| 200 \| has \\\| pipe \| above @ 210 on 2025-01-03 \|/);
+  assert.match(md, /\| SPY \| 2025-01-02 \|  \|  \|  \|  \|/);
+  assert.match(md, /2 tickers/);
+});

@@ -182,3 +182,35 @@ export function entriesToCSV(entries: WatchlistEntry[]): string {
   });
   return [header, ...lines].join("\n") + "\n";
 }
+
+// Markdown export mirrors the CSV columns as a GitHub-flavored table so the
+// watchlist can be pasted into a journal, an issue, or a chat the same way
+// /history, /compare, and shared run pages already support.
+export function entriesToMarkdown(entries: WatchlistEntry[]): string {
+  const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const head = [
+    `# SignalClaw watchlist`,
+    ``,
+    `Exported ${stamp} · ${entries.length} ticker${entries.length === 1 ? "" : "s"}`,
+    ``,
+  ];
+  if (entries.length === 0) {
+    return head.concat([`_No tickers tracked yet._`, ``]).join("\n");
+  }
+  const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+  const fmtNum = (n: number | null) => (n === null || n === undefined ? "" : String(n));
+  const table = [
+    `| Ticker | Added | Target low | Target high | Note | Last cross |`,
+    `| --- | --- | --- | --- | --- | --- |`,
+  ];
+  for (const e of entries) {
+    const added = (e.added_at || "").slice(0, 10);
+    const cross = e.last_cross
+      ? `${e.last_cross.side === "above_high" ? "above" : "below"} @ ${e.last_cross.price} on ${(e.last_cross.at || "").slice(0, 10)}`
+      : "";
+    table.push(
+      `| ${esc(e.ticker)} | ${added} | ${fmtNum(e.target_low)} | ${fmtNum(e.target_high)} | ${esc(e.note ?? "")} | ${esc(cross)} |`,
+    );
+  }
+  return head.concat(table, [""]).join("\n");
+}

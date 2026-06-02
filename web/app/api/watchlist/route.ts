@@ -5,6 +5,7 @@ import {
   normalizeTicker,
   normalizeNote,
   entriesToCSV,
+  entriesToMarkdown,
   MAX_TICKERS,
 } from "@/lib/watchlistStore";
 import { recordSafe } from "@/lib/activityStore";
@@ -19,13 +20,24 @@ function err(status: number, code: string, message: string) {
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const entries = await listWatchlist();
-  if ((sp.get("format") ?? "").toLowerCase() === "csv") {
+  const fmt = (sp.get("format") ?? "").toLowerCase();
+  if (fmt === "csv") {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     return new NextResponse(entriesToCSV(entries), {
       status: 200,
       headers: {
         "content-type": "text/csv; charset=utf-8",
         "content-disposition": `attachment; filename="signalclaw-watchlist-${stamp}.csv"`,
+      },
+    });
+  }
+  if (fmt === "md" || fmt === "markdown") {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    return new NextResponse(entriesToMarkdown(entries), {
+      status: 200,
+      headers: {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="signalclaw-watchlist-${stamp}.md"`,
       },
     });
   }
