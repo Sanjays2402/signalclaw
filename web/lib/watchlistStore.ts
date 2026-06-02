@@ -150,6 +150,82 @@ export async function addTicker(ticker: string, note: string | null = null): Pro
   return entry;
 }
 
+// Parse a bulk-import string. Accepts comma, whitespace, newline, semicolon
+// or tab separated tickers. Returns the deduped, uppercased input tokens
+// along with any tokens that failed normalization so the caller can report
+// invalid rows without aborting the whole batch.
+export function parseBulkTickers(
+  raw: string | string[] | unknown,
+): { tickers: string[]; invalid: string[] } {
+  let tokens: string[] = [];
+  if (Array.isArray(raw)) {
+    tokens = raw.flatMap((v) => (typeof v === "string" ? v.split(/[\s,;]+/) : []));
+  } else if (typeof raw === "string") {
+    tokens = raw.split(/[\s,;]+/);
+  }
+  const seen = new Set<string>();
+  const tickers: string[] = [];
+  const invalid: string[] = [];
+  for (const tok of tokens) {
+    const trimmed = tok.trim();
+    if (!trimmed) continue;
+    const norm = normalizeTicker(trimmed);
+    if (!norm) {
+      if (!invalid.includes(trimmed)) invalid.push(trimmed);
+      continue;
+    }
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    tickers.push(norm);
+  }
+  return { tickers, invalid };
+}
+
+export type BulkAddResult = {
+  added: WatchlistEntry[];
+  skipped_existing: string[];
+  skipped_limit: string[];
+  invalid: string[];
+};
+
+// Bulk add tickers. Already-present tickers are reported as skipped_existing
+// (and never have their note overwritten by an empty bulk row). Tickers that
+// would overflow MAX_TICKERS are reported as skipped_limit so the caller can
+// surface a precise message instead of failing the whole batch.
+export async function addTickersBulk(
+  raw: string | string[] | unknown,
+): Promise<BulkAddResult> {
+  const { tickers, invalid } = parseBulkTickers(raw);
+  const store = await readStore();
+  const present = new Set(store.entries.map((e) => e.ticker));
+  const added: WatchlistEntry[] = [];
+  const skipped_existing: string[] = [];
+  const skipped_limit: string[] = [];
+  for (const t of tickers) {
+    if (present.has(t)) {
+      skipped_existing.push(t);
+      continue;
+    }
+    if (store.entries.length >= MAX_TICKERS) {
+      skipped_limit.push(t);
+      continue;
+    }
+    const entry: WatchlistEntry = {
+      ticker: t,
+      added_at: new Date().toISOString(),
+      note: null,
+      target_high: null,
+      target_low: null,
+      last_cross: null,
+    };
+    store.entries.unshift(entry);
+    present.add(t);
+    added.push(entry);
+  }
+  if (added.length > 0) await writeStore(store);
+  return { added, skipped_existing, skipped_limit, invalid };
+}
+
 export async function removeTicker(ticker: string): Promise<boolean> {
   const t = normalizeTicker(ticker);
   if (!t) return false;

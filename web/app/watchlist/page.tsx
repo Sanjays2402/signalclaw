@@ -17,6 +17,7 @@ import {
   TrendUp,
   TrendDown,
   MagnifyingGlass,
+  UploadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { nearestTargetDistance, formatTargetDistancePct } from "@/lib/watchlistDistance";
 import { sortEntries, type SortKey, type SortDir } from "@/lib/watchlistSort";
@@ -91,6 +92,18 @@ function WL() {
   const [filter, setFilter] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("added");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importResult, setImportResult] = useState<
+    | {
+        added: number;
+        skipped_existing: string[];
+        skipped_limit: string[];
+        invalid: string[];
+      }
+    | null
+  >(null);
 
   const load = async () => {
     setErr(null);
@@ -126,6 +139,37 @@ function WL() {
       setErr(e);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const bulkImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importText.trim()) return;
+    setImportBusy(true);
+    setErr(null);
+    setImportResult(null);
+    try {
+      const resp = await api<{
+        added: { ticker: string }[];
+        skipped_existing: string[];
+        skipped_limit: string[];
+        invalid: string[];
+      }>("/watchlist/bulk", {
+        method: "POST",
+        body: JSON.stringify({ text: importText }),
+      });
+      setImportResult({
+        added: resp.added.length,
+        skipped_existing: resp.skipped_existing,
+        skipped_limit: resp.skipped_limit,
+        invalid: resp.invalid,
+      });
+      if (resp.added.length > 0) setImportText("");
+      await load();
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setImportBusy(false);
     }
   };
 
@@ -281,9 +325,72 @@ function WL() {
           </Button>
         </form>
         {data && (
-          <div className="muted text-[10px] mt-2 uppercase tracking-widest">
-            {data.total} / {data.limit} tracked
+          <div className="muted text-[10px] mt-2 uppercase tracking-widest flex items-center justify-between">
+            <span>{data.total} / {data.limit} tracked</span>
+            <button
+              type="button"
+              onClick={() => {
+                setImportOpen((v) => !v);
+                setImportResult(null);
+              }}
+              className="inline-flex items-center gap-1 hover:text-[var(--accent)] uppercase tracking-widest mono"
+              aria-expanded={importOpen}
+              aria-controls="wl-bulk-import"
+            >
+              <UploadSimple weight="duotone" size={12} />
+              {importOpen ? "hide import" : "bulk import"}
+            </button>
           </div>
+        )}
+        {importOpen && (
+          <form
+            id="wl-bulk-import"
+            onSubmit={bulkImport}
+            className="mt-3 pt-3 border-t border-[var(--border)] space-y-2"
+          >
+            <label className="text-[10px] muted uppercase tracking-widest mono">
+              Paste tickers (comma, space, or newline separated)
+            </label>
+            <textarea
+              value={importText}
+              onChange={(ev) => setImportText(ev.target.value)}
+              placeholder="AAPL, MSFT, GOOG&#10;NVDA TSLA SPY"
+              rows={4}
+              maxLength={4000}
+              className="mono w-full text-xs bg-transparent border border-[var(--border)] rounded p-2 focus:border-[var(--accent)] focus:outline-none"
+            />
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <Button type="submit" disabled={importBusy || !importText.trim()}>
+                {importBusy ? "Importing" : "Import tickers"}
+              </Button>
+              {importResult && (
+                <div className="text-[11px] muted mono flex items-center gap-2 flex-wrap">
+                  <Badge tone="up">+{importResult.added} added</Badge>
+                  {importResult.skipped_existing.length > 0 && (
+                    <span title={importResult.skipped_existing.join(", ")}>
+                      {importResult.skipped_existing.length} already on list
+                    </span>
+                  )}
+                  {importResult.skipped_limit.length > 0 && (
+                    <span
+                      className="text-[var(--red)]"
+                      title={importResult.skipped_limit.join(", ")}
+                    >
+                      {importResult.skipped_limit.length} hit limit
+                    </span>
+                  )}
+                  {importResult.invalid.length > 0 && (
+                    <span
+                      className="text-[var(--red)]"
+                      title={importResult.invalid.join(", ")}
+                    >
+                      {importResult.invalid.length} invalid
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </form>
         )}
       </Card>
 

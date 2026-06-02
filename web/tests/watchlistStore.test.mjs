@@ -154,3 +154,50 @@ test("entriesToMarkdown emits table with header, escapes pipes, and handles empt
   assert.match(md, /\| SPY \| 2025-01-02 \|  \|  \|  \|  \|/);
   assert.match(md, /2 tickers/);
 });
+
+test("parseBulkTickers splits on commas, whitespace, and newlines", () => {
+  const r = store.parseBulkTickers("aapl, msft  goog\nNVDA;tsla,,AAPL");
+  assert.deepEqual(r.tickers, ["AAPL", "MSFT", "GOOG", "NVDA", "TSLA"]);
+  assert.deepEqual(r.invalid, []);
+});
+
+test("parseBulkTickers reports invalid tokens once and dedupes", () => {
+  const r = store.parseBulkTickers("aapl 1bad 1bad toolongtickersymbolxyz spy SPY");
+  assert.deepEqual(r.tickers, ["AAPL", "SPY"]);
+  assert.deepEqual(r.invalid, ["1bad", "toolongtickersymbolxyz"]);
+});
+
+test("parseBulkTickers accepts an array input", () => {
+  const r = store.parseBulkTickers(["aapl,msft", "goog"]);
+  assert.deepEqual(r.tickers, ["AAPL", "MSFT", "GOOG"]);
+});
+
+test("addTickersBulk adds, skips existing, and reports invalid", async () => {
+  // Fresh data dir per test process is already set up at module load.
+  // Reset by removing any prior watchlist.json from earlier tests.
+  const fs2 = await import("node:fs");
+  try { fs2.unlinkSync("./.data/watchlist.json"); } catch {}
+  await store.addTicker("AAPL");
+  const r = await store.addTickersBulk("aapl, msft, nvda, 1bad");
+  assert.equal(r.added.length, 2);
+  assert.deepEqual(r.added.map((e) => e.ticker).sort(), ["MSFT", "NVDA"]);
+  assert.deepEqual(r.skipped_existing, ["AAPL"]);
+  assert.deepEqual(r.skipped_limit, []);
+  assert.deepEqual(r.invalid, ["1bad"]);
+  const list = await store.listWatchlist();
+  assert.equal(list.length, 3);
+});
+
+test("addTickersBulk respects MAX_TICKERS and reports overflow", async () => {
+  const fs2 = await import("node:fs");
+  try { fs2.unlinkSync("./.data/watchlist.json"); } catch {}
+  const filler = [];
+  for (let i = 0; i < store.MAX_TICKERS - 1; i++) filler.push(`T${i.toString(36).toUpperCase()}`);
+  await store.addTickersBulk(filler);
+  const r = await store.addTickersBulk(["LASTONE", "OVERFLOW1", "OVERFLOW2"]);
+  assert.equal(r.added.length, 1);
+  assert.equal(r.added[0].ticker, "LASTONE");
+  assert.deepEqual(r.skipped_limit, ["OVERFLOW1", "OVERFLOW2"]);
+  const list = await store.listWatchlist();
+  assert.equal(list.length, store.MAX_TICKERS);
+});
