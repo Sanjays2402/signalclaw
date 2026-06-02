@@ -104,6 +104,8 @@ function WL() {
       }
     | null
   >(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkRemoveBusy, setBulkRemoveBusy] = useState(false);
 
   const load = async () => {
     setErr(null);
@@ -176,9 +178,45 @@ function WL() {
   const remove = async (t: string) => {
     try {
       await api(`/watchlist/${encodeURIComponent(t)}`, { method: "DELETE" });
+      setSelected((prev) => {
+        if (!prev.has(t)) return prev;
+        const next = new Set(prev);
+        next.delete(t);
+        return next;
+      });
       await load();
     } catch (e) {
       setErr(e);
+    }
+  };
+
+  const toggleSelect = (t: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
+  };
+
+  const removeSelected = async () => {
+    if (selected.size === 0) return;
+    const tickers = Array.from(selected);
+    const word = tickers.length === 1 ? "ticker" : "tickers";
+    if (!confirm(`Remove ${tickers.length} ${word} from your watchlist?`)) return;
+    setBulkRemoveBusy(true);
+    setErr(null);
+    try {
+      await api("/watchlist/bulk", {
+        method: "DELETE",
+        body: JSON.stringify({ tickers }),
+      });
+      setSelected(new Set());
+      await load();
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setBulkRemoveBusy(false);
     }
   };
 
@@ -466,6 +504,19 @@ function WL() {
               <span className="muted text-[10px] mono uppercase tracking-widest pr-1 shrink-0">
                 {visibleEntries?.length ?? 0} / {entries.length}
               </span>
+              {selected.size > 0 && (
+                <button
+                  type="button"
+                  onClick={removeSelected}
+                  disabled={bulkRemoveBusy}
+                  className="text-[10px] mono uppercase tracking-widest border border-[var(--border)] rounded px-1.5 py-0.5 hover:text-[var(--red)] hover:border-[var(--red)] inline-flex items-center gap-1 disabled:opacity-50"
+                  data-testid="wl-bulk-remove"
+                  aria-label={`Remove ${selected.size} selected ticker${selected.size === 1 ? "" : "s"}`}
+                  title="Remove every selected ticker"
+                >
+                  <Trash weight="duotone" size={10} /> remove {selected.size}
+                </button>
+              )}
             </div>
           )}
           {visibleEntries && visibleEntries.length === 0 ? (
@@ -484,7 +535,16 @@ function WL() {
                 className="px-4 py-3 hover:bg-white/[0.02] flex flex-col gap-2"
               >
                 <div className="flex items-start justify-between gap-2 flex-wrap">
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(e.ticker)}
+                      onChange={() => toggleSelect(e.ticker)}
+                      className="mt-1 accent-[var(--accent)] cursor-pointer"
+                      aria-label={`Select ${e.ticker}`}
+                      data-testid={`wl-select-${e.ticker}`}
+                    />
+                    <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <Link
                         href={`/ticker/${e.ticker}`}
@@ -556,6 +616,7 @@ function WL() {
                         </button>
                       </div>
                     )}
+                  </div>
                   </div>
                   <button
                     onClick={() => remove(e.ticker)}

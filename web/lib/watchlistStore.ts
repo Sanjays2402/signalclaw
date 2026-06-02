@@ -237,6 +237,57 @@ export async function removeTicker(ticker: string): Promise<boolean> {
   return true;
 }
 
+export type BulkRemoveResult = {
+  removed: string[];
+  not_found: string[];
+  invalid: string[];
+};
+
+// Bulk delete. Mirrors addTickersBulk: per-row outcome so the UI can show
+// removed / not_found / invalid in one pass without aborting on the first
+// miss. Single disk write when at least one row is removed.
+export async function removeTickersBulk(raw: unknown): Promise<BulkRemoveResult> {
+  const removed: string[] = [];
+  const not_found: string[] = [];
+  const invalid: string[] = [];
+  let list: string[] = [];
+  if (Array.isArray(raw)) {
+    list = raw.map((x) => (typeof x === "string" ? x : ""));
+  } else if (typeof raw === "string") {
+    list = raw.split(/[\s,;]+/);
+  } else {
+    throw new Error("expected array of strings or text blob");
+  }
+  const seen = new Set<string>();
+  const targets: string[] = [];
+  for (const item of list) {
+    if (!item || !item.trim()) continue;
+    const t = normalizeTicker(item);
+    if (!t) {
+      invalid.push(String(item).trim().slice(0, 32));
+      continue;
+    }
+    if (seen.has(t)) continue;
+    seen.add(t);
+    targets.push(t);
+  }
+  if (targets.length === 0) {
+    return { removed, not_found, invalid };
+  }
+  const store = await readStore();
+  const before = new Set(store.entries.map((e) => e.ticker));
+  for (const t of targets) {
+    if (before.has(t)) removed.push(t);
+    else not_found.push(t);
+  }
+  if (removed.length > 0) {
+    const drop = new Set(removed);
+    store.entries = store.entries.filter((e) => !drop.has(e.ticker));
+    await writeStore(store);
+  }
+  return { removed, not_found, invalid };
+}
+
 export async function updateNote(ticker: string, note: string | null): Promise<WatchlistEntry | null> {
   const t = normalizeTicker(ticker);
   if (!t) return null;

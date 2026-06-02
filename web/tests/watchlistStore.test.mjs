@@ -201,3 +201,32 @@ test("addTickersBulk respects MAX_TICKERS and reports overflow", async () => {
   const list = await store.listWatchlist();
   assert.equal(list.length, store.MAX_TICKERS);
 });
+
+test("removeTickersBulk removes, reports not_found and invalid, single disk write", async () => {
+  const fs2 = await import("node:fs");
+  try { fs2.unlinkSync("./.data/watchlist.json"); } catch {}
+  await store.addTickersBulk(["AAPL", "MSFT", "NVDA"]);
+  const r = await store.removeTickersBulk("aapl, msft, ghost, 1bad, msft");
+  assert.deepEqual(r.removed.sort(), ["AAPL", "MSFT"]);
+  assert.deepEqual(r.not_found, ["GHOST"]);
+  assert.deepEqual(r.invalid, ["1bad"]);
+  const list = await store.listWatchlist();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].ticker, "NVDA");
+});
+
+test("removeTickersBulk accepts array form and is a no-op when nothing matches", async () => {
+  const fs2 = await import("node:fs");
+  try { fs2.unlinkSync("./.data/watchlist.json"); } catch {}
+  await store.addTickersBulk(["AAPL", "MSFT"]);
+  const r = await store.removeTickersBulk(["GOOG", "META"]);
+  assert.deepEqual(r.removed, []);
+  assert.deepEqual(r.not_found.sort(), ["GOOG", "META"]);
+  assert.deepEqual(r.invalid, []);
+  const list = await store.listWatchlist();
+  assert.equal(list.length, 2);
+});
+
+test("removeTickersBulk rejects non-array, non-string input", async () => {
+  await assert.rejects(() => store.removeTickersBulk(42), /expected array of strings or text blob/);
+});
