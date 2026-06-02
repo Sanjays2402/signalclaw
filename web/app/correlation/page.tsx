@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
@@ -7,6 +7,12 @@ import { swrFetcher, type CorrelationMatrix, type Diversification } from "@/lib/
 import { GridFour, Warning, ChartLine, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import { correlationToCSV, correlationToJSON, correlationFilename } from "@/lib/correlationExport";
+import {
+  CORR_THRESHOLD_DEFAULT,
+  CORR_WINDOW_DEFAULT,
+  parseCorrelationUrlState,
+  serializeCorrelationUrlState,
+} from "@/lib/correlationUrl";
 
 export default function CorrelationPage() {
   return (
@@ -17,16 +23,40 @@ export default function CorrelationPage() {
 }
 
 function Correlation() {
-  const [window, setWindow] = useState(60);
-  const [threshold, setThreshold] = useState(0.7);
-  const [appliedWindow, setAppliedWindow] = useState(60);
-  const [appliedThr, setAppliedThr] = useState(0.7);
+  const [window, setWindow] = useState(CORR_WINDOW_DEFAULT);
+  const [threshold, setThreshold] = useState(CORR_THRESHOLD_DEFAULT);
+  const [appliedWindow, setAppliedWindow] = useState(CORR_WINDOW_DEFAULT);
+  const [appliedThr, setAppliedThr] = useState(CORR_THRESHOLD_DEFAULT);
+  const [hydrated, setHydrated] = useState(false);
 
   const corrKey = `/correlation?window=${appliedWindow}`;
   const divKey = `/diversification?window=${appliedWindow}&threshold=${appliedThr}`;
 
   const corr = useSWR<CorrelationMatrix>(corrKey, swrFetcher);
   const div = useSWR<Diversification>(divKey, swrFetcher);
+
+  // Hydrate window and threshold from the URL once so /correlation?window=120&threshold=0.85
+  // works as a shareable deep link.
+  useEffect(() => {
+    const s = parseCorrelationUrlState(globalThis.window.location.search);
+    setWindow(s.window);
+    setThreshold(s.threshold);
+    setAppliedWindow(s.window);
+    setAppliedThr(s.threshold);
+    setHydrated(true);
+  }, []);
+
+  // After hydration, mirror the applied state back to the address bar so the
+  // current view is shareable by copying the URL. replaceState avoids
+  // polluting browser history each time Apply is clicked.
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeCorrelationUrlState({ window: appliedWindow, threshold: appliedThr });
+    const loc = globalThis.window.location;
+    const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
+    const current = loc.pathname + loc.search;
+    if (next !== current) globalThis.window.history.replaceState(null, "", next);
+  }, [hydrated, appliedWindow, appliedThr]);
 
   function apply(e: React.FormEvent) {
     e.preventDefault();
