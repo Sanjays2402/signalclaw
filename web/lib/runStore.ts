@@ -327,6 +327,11 @@ export type QueryOpts = {
   // interpreted as end-of-day UTC so "until=2024-03-15" includes runs
   // created any time on March 15.
   until?: string;
+  // Inclusive lower bound on the run's snapshot confidence, expressed as a
+  // fraction in [0, 1]. Runs whose snapshot has no confidence are excluded
+  // when this filter is set. Values outside [0, 1] or non-finite numbers
+  // are ignored, matching the lenient behavior of the other filters.
+  minConfidence?: number;
   limit?: number;
   offset?: number;
   // Sort order for the returned page. Default "recent" matches the legacy
@@ -405,6 +410,13 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
     filtered = filtered.filter((r) => {
       const t = Date.parse(r.created_at);
       return Number.isFinite(t) && t <= untilMs;
+    });
+  }
+  const minConf = opts.minConfidence;
+  if (typeof minConf === "number" && Number.isFinite(minConf) && minConf >= 0 && minConf <= 1) {
+    filtered = filtered.filter((r) => {
+      const c = r.payload.snapshot?.confidence;
+      return typeof c === "number" && Number.isFinite(c) && c >= minConf;
     });
   }
   const sort = opts.sort ?? "recent";

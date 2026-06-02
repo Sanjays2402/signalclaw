@@ -94,6 +94,7 @@ export default function HistoryPage() {
   const [sort, setSort] = useState<SortValue>("recent");
   const [since, setSince] = useState<string>("");
   const [until, setUntil] = useState<string>("");
+  const [minConf, setMinConf] = useState<string>("");
   const [offset, setOffset] = useState(0);
   const [hydrated, setHydrated] = useState(false);
 
@@ -118,6 +119,11 @@ export default function HistoryPage() {
     if (urlSince && /^\d{4}-\d{2}-\d{2}$/.test(urlSince)) setSince(urlSince);
     const urlUntil = sp.get("until");
     if (urlUntil && /^\d{4}-\d{2}-\d{2}$/.test(urlUntil)) setUntil(urlUntil);
+    const urlMinConf = sp.get("min_confidence");
+    if (urlMinConf && /^\d{1,3}$/.test(urlMinConf)) {
+      const n = Number.parseInt(urlMinConf, 10);
+      if (n >= 0 && n <= 100) setMinConf(String(n));
+    }
     setHydrated(true);
   }, []);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
@@ -143,13 +149,14 @@ export default function HistoryPage() {
     if (sort !== "recent") sp.set("sort", sort);
     if (since) sp.set("since", since);
     if (until) sp.set("until", until);
+    if (minConf) sp.set("min_confidence", minConf);
     const qs = sp.toString();
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     const current = window.location.pathname + window.location.search;
     if (next !== current) {
       window.history.replaceState(null, "", next);
     }
-  }, [hydrated, dq, regime, tag, pinnedOnly, sort, since, until]);
+  }, [hydrated, dq, regime, tag, pinnedOnly, sort, since, until, minConf]);
 
   const params = new URLSearchParams();
   if (dq) params.set("q", dq);
@@ -159,6 +166,7 @@ export default function HistoryPage() {
   if (sort !== "recent") params.set("sort", sort);
   if (since) params.set("since", since);
   if (until) params.set("until", until);
+  if (minConf) params.set("min_confidence", minConf);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
 
@@ -188,6 +196,7 @@ export default function HistoryPage() {
   if (sort !== "recent") exportParams.set("sort", sort);
   if (since) exportParams.set("since", since);
   if (until) exportParams.set("until", until);
+  if (minConf) exportParams.set("min_confidence", minConf);
 
   function go(delta: number) {
     const next = Math.max(0, offset + delta * PAGE_SIZE);
@@ -289,6 +298,7 @@ export default function HistoryPage() {
     setSort("recent");
     setSince("");
     setUntil("");
+    setMinConf("");
     setOffset(0);
   }
 
@@ -296,7 +306,7 @@ export default function HistoryPage() {
   const page = data?.runs ?? [];
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + page.length, total);
-  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0;
+  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0 || minConf.length > 0;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -351,6 +361,7 @@ export default function HistoryPage() {
                 if (sort !== "recent") sp.set("sort", sort);
                 if (since) sp.set("since", since);
                 if (until) sp.set("until", until);
+                if (minConf) sp.set("min_confidence", minConf);
                 const qs = sp.toString();
                 const path = qs ? `/history?${qs}` : `/history`;
                 const url = new URL(path, window.location.origin).toString();
@@ -507,6 +518,35 @@ export default function HistoryPage() {
                 data-testid="filter-until"
                 className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none cursor-pointer"
               />
+            </label>
+            <label
+              className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 muted hover:bg-white/5"
+              title="Only include runs whose snapshot confidence is at least this percent (0-100)"
+            >
+              Min conf
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                inputMode="numeric"
+                value={minConf}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setMinConf("");
+                  } else {
+                    const n = Math.max(0, Math.min(100, Math.floor(Number(raw))));
+                    setMinConf(Number.isFinite(n) ? String(n) : "");
+                  }
+                  setOffset(0);
+                }}
+                placeholder="0"
+                aria-label="Minimum snapshot confidence percent"
+                data-testid="filter-min-confidence"
+                className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none w-10 text-right"
+              />
+              <span aria-hidden="true">%</span>
             </label>
             {hasFilters && (
               <button

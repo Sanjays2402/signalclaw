@@ -21,6 +21,21 @@ export function parseExportLimit(raw: string | null | undefined): number {
   return Math.min(Math.max(v, 1), EXPORT_MAX_LIMIT);
 }
 
+export function parseMinConfidence(raw: string | null | undefined): number | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  const s = raw.trim();
+  if (!s) return undefined;
+  // Accept either a fraction in [0, 1] (e.g. "0.75") or a percent in (1, 100]
+  // (e.g. "75" or "75%"). UI commonly types percents; API callers commonly
+  // pass fractions. Out-of-range or unparseable values are ignored.
+  const pct = s.endsWith("%");
+  const n = Number.parseFloat(pct ? s.slice(0, -1) : s);
+  if (!Number.isFinite(n)) return undefined;
+  const frac = pct || n > 1 ? n / 100 : n;
+  if (!Number.isFinite(frac) || frac < 0 || frac > 1) return undefined;
+  return frac;
+}
+
 export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFilter"> {
   const pinnedRaw = sp.get("pinned");
   const pinnedOnly = pinnedRaw === "1" || pinnedRaw === "true";
@@ -42,6 +57,7 @@ export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFil
     pinned: pinnedOnly ? true : undefined,
     since: since || undefined,
     until: until || undefined,
+    minConfidence: parseMinConfidence(sp.get("min_confidence")),
     sort,
     limit: parseExportLimit(sp.get("limit")),
     offset: 0,
