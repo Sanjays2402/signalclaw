@@ -17,7 +17,8 @@ import {
 } from "@/components/ui";
 import { api, swrFetcher, type Alert, type AlertIn, type AlertHistory } from "@/lib/api";
 import { filterAlerts, type AlertStateFilter } from "@/lib/alertFilter";
-import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple, Power, MagnifyingGlass } from "@phosphor-icons/react/dist/ssr";
+import { sortAlerts, type AlertSortKey, type AlertSortDir } from "@/lib/alertSort";
+import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple, Power, MagnifyingGlass, ArrowUp, ArrowDown } from "@phosphor-icons/react/dist/ssr";
 
 const CONDITIONS = [
   { v: "price_above", l: "price >" },
@@ -40,10 +41,12 @@ function Alerts() {
   const [formErr, setFormErr] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<AlertStateFilter>("");
+  const [sortKey, setSortKey] = useState<AlertSortKey>("ticker");
+  const [sortDir, setSortDir] = useState<AlertSortDir>("asc");
   const allAlerts = data?.alerts ?? [];
   const visibleAlerts = useMemo(
-    () => filterAlerts(allAlerts, { query, state: stateFilter }),
-    [allAlerts, query, stateFilter],
+    () => sortAlerts(filterAlerts(allAlerts, { query, state: stateFilter }), sortKey, sortDir),
+    [allAlerts, query, stateFilter, sortKey, sortDir],
   );
 
   async function onCreate(input: AlertIn) {
@@ -145,14 +148,37 @@ function Alerts() {
                 <option value="enabled">Enabled only</option>
                 <option value="disabled">Disabled only</option>
               </Select>
+              <Select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as AlertSortKey)}
+                title="Sort alerts by"
+                data-testid="alert-sort-key"
+                className="w-auto"
+              >
+                <option value="ticker">Sort: ticker</option>
+                <option value="value">Sort: value</option>
+                <option value="cooldown">Sort: cooldown</option>
+                <option value="last_fired">Sort: last fired</option>
+              </Select>
+              <button
+                type="button"
+                onClick={() => setSortDir(sortDir === "asc" ? "desc" : "asc")}
+                title={sortDir === "asc" ? "Ascending (click to flip)" : "Descending (click to flip)"}
+                aria-label={`Sort direction ${sortDir}`}
+                data-testid="alert-sort-dir"
+                className="text-[10px] uppercase tracking-widest mono px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] inline-flex items-center gap-1"
+              >
+                {sortDir === "asc" ? <ArrowUp weight="bold" size={10} /> : <ArrowDown weight="bold" size={10} />}
+                {sortDir}
+              </button>
               <span className="muted text-xs mono" data-testid="alert-filter-count">
                 {visibleAlerts.length}/{allAlerts.length}
               </span>
-              {(query || stateFilter) && (
+              {(query || stateFilter || sortKey !== "ticker" || sortDir !== "asc") && (
                 <button
                   type="button"
                   className="text-[10px] uppercase tracking-widest mono px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)]"
-                  onClick={() => { setQuery(""); setStateFilter(""); }}
+                  onClick={() => { setQuery(""); setStateFilter(""); setSortKey("ticker"); setSortDir("asc"); }}
                 >
                   Clear
                 </button>
