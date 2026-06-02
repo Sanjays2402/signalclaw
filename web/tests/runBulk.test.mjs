@@ -107,3 +107,19 @@ test("bulkRunOp: set_tags replaces", async () => {
   const after = await store.listRuns();
   assert.deepEqual(after[0].tags, ["gamma"]);
 });
+
+test("runsToMarkdown: bulk selection renders one section per run", async () => {
+  await store._resetForTests();
+  const ids = await seed(3);
+  const runs = [];
+  for (const id of ids) {
+    const r = await store.getRun(id);
+    if (r) runs.push(r);
+  }
+  const md = store.runsToMarkdown(runs);
+  assert.ok(md.length > 0, "markdown must not be empty");
+  assert.ok(md.includes("SPY"), "ticker should appear in markdown");
+  for (const r of runs) {
+    assert.ok(md.includes(r.id), `run id ${r.id} should appear in markdown`);
+  }
+});

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bulkRunOp, getRun, runsToCSV, type SavedRun } from "@/lib/runStore";
+import { bulkRunOp, getRun, runsToCSV, runsToMarkdown, type SavedRun } from "@/lib/runStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,11 +40,11 @@ export async function POST(req: NextRequest) {
   const ids = rawIds.filter((v): v is string => typeof v === "string" && v.length > 0);
   if (ids.length === 0) return err(400, "bad_ids", "ids must be strings");
 
-  // Export action: stream CSV or JSON for the given ids.
+  // Export action: stream CSV, JSON, or Markdown for the given ids.
   if (action === "export") {
     const format = (typeof body.format === "string" ? body.format : "csv").toLowerCase();
-    if (format !== "csv" && format !== "json") {
-      return err(400, "bad_format", "format must be csv or json");
+    if (format !== "csv" && format !== "json" && format !== "md" && format !== "markdown") {
+      return err(400, "bad_format", "format must be csv, json, or md");
     }
     const found: SavedRun[] = [];
     for (const id of ids) {
@@ -63,6 +63,15 @@ export async function POST(req: NextRequest) {
           },
         },
       );
+    }
+    if (format === "md" || format === "markdown") {
+      return new NextResponse(runsToMarkdown(found), {
+        status: 200,
+        headers: {
+          "content-type": "text/markdown; charset=utf-8",
+          "content-disposition": `attachment; filename="signalclaw-runs-selected-${stamp}.md"`,
+        },
+      });
     }
     return new NextResponse(runsToCSV(found), {
       status: 200,

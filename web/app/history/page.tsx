@@ -205,7 +205,7 @@ export default function HistoryPage() {
     }
   }
 
-  async function bulkExport(format: "csv" | "json") {
+  async function bulkExport(format: "csv" | "json" | "md") {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
     setBulkBusy(true);
@@ -581,6 +581,15 @@ export default function HistoryPage() {
                     className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50"
                   >
                     <Code size={11} weight="bold" /> JSON
+                  </button>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => bulkExport("md")}
+                    data-testid="bulk-export-md"
+                    title="Download a Markdown summary of selected runs, easy to paste into Slack or issues"
+                    className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <DownloadSimple size={11} weight="bold" /> MD
                   </button>
                   <button
                     disabled={bulkBusy}
