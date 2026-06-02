@@ -20,7 +20,15 @@ import {
   UploadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { nearestTargetDistance, formatTargetDistancePct } from "@/lib/watchlistDistance";
-import { sortEntries, type SortKey, type SortDir } from "@/lib/watchlistSort";
+import {
+  sortEntries,
+  parseWatchlistUrlState,
+  serializeWatchlistUrlState,
+  SORT_KEY_DEFAULT,
+  SORT_DIR_DEFAULT,
+  type SortKey,
+  type SortDir,
+} from "@/lib/watchlistSort";
 
 type Entry = {
   ticker: string;
@@ -90,8 +98,9 @@ function WL() {
   const [checkResp, setCheckResp] = useState<CheckResp | null>(null);
   const [checking, setChecking] = useState(false);
   const [filter, setFilter] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("added");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [sortKey, setSortKey] = useState<SortKey>(SORT_KEY_DEFAULT);
+  const [sortDir, setSortDir] = useState<SortDir>(SORT_DIR_DEFAULT);
+  const [hydrated, setHydrated] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -120,6 +129,27 @@ function WL() {
   useEffect(() => {
     load();
   }, []);
+
+  // Hydrate filter and sort from the URL once so /watchlist?q=AAPL&sort=ticker&dir=asc
+  // works as a shareable deep link from bookmarks or other pages.
+  useEffect(() => {
+    const s = parseWatchlistUrlState(window.location.search);
+    if (s.filter) setFilter(s.filter);
+    setSortKey(s.sortKey);
+    setSortDir(s.sortDir);
+    setHydrated(true);
+  }, []);
+
+  // After hydration, mirror filter and sort back to the address bar so the
+  // current view is shareable by copying the URL. replaceState avoids
+  // polluting browser history on each keystroke.
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeWatchlistUrlState({ filter, sortKey, sortDir });
+    const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    const current = window.location.pathname + window.location.search;
+    if (next !== current) window.history.replaceState(null, "", next);
+  }, [hydrated, filter, sortKey, sortDir]);
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
