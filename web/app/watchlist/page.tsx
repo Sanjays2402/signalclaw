@@ -19,6 +19,7 @@ import {
   MagnifyingGlass,
 } from "@phosphor-icons/react/dist/ssr";
 import { nearestTargetDistance, formatTargetDistancePct } from "@/lib/watchlistDistance";
+import { sortEntries, type SortKey, type SortDir } from "@/lib/watchlistSort";
 
 type Entry = {
   ticker: string;
@@ -88,6 +89,8 @@ function WL() {
   const [checkResp, setCheckResp] = useState<CheckResp | null>(null);
   const [checking, setChecking] = useState(false);
   const [filter, setFilter] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("added");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const load = async () => {
     setErr(null);
@@ -202,13 +205,15 @@ function WL() {
   const visibleEntries = useMemo(() => {
     if (entries == null) return null;
     const q = filter.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter((e) => {
-      if (e.ticker.toLowerCase().includes(q)) return true;
-      if (e.note && e.note.toLowerCase().includes(q)) return true;
-      return false;
-    });
-  }, [entries, filter]);
+    const filtered = !q
+      ? entries
+      : entries.filter((e) => {
+          if (e.ticker.toLowerCase().includes(q)) return true;
+          if (e.note && e.note.toLowerCase().includes(q)) return true;
+          return false;
+        });
+    return sortEntries(filtered, sortKey, sortDir, checks);
+  }, [entries, filter, sortKey, sortDir, checks]);
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
@@ -309,13 +314,13 @@ function WL() {
       ) : (
         <>
           {entries.length > 4 && (
-            <div className="panel p-2 flex items-center gap-2">
+            <div className="panel p-2 flex items-center gap-2 flex-wrap">
               <MagnifyingGlass weight="duotone" size={14} className="ml-1 text-[var(--accent)] shrink-0" />
               <Input
                 value={filter}
                 onChange={(ev) => setFilter(ev.target.value)}
                 placeholder="Filter ticker or note"
-                className="flex-1 text-xs border-0 bg-transparent focus:ring-0"
+                className="flex-1 text-xs border-0 bg-transparent focus:ring-0 min-w-[120px]"
                 maxLength={64}
                 aria-label="Filter watchlist"
               />
@@ -329,6 +334,28 @@ function WL() {
                   clear
                 </button>
               )}
+              <label className="text-[10px] muted uppercase tracking-widest mono flex items-center gap-1">
+                sort
+                <select
+                  value={sortKey}
+                  onChange={(ev) => setSortKey(ev.target.value as SortKey)}
+                  className="bg-transparent border border-[var(--border)] rounded px-1 py-0.5 text-[11px] mono"
+                  aria-label="Sort watchlist by"
+                >
+                  <option value="added">added</option>
+                  <option value="ticker">ticker</option>
+                  <option value="distance">distance</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+                className="text-[10px] muted hover:text-[var(--accent)] uppercase tracking-widest mono border border-[var(--border)] rounded px-1.5 py-0.5"
+                aria-label={`Toggle sort direction, currently ${sortDir}`}
+                title={`Sort ${sortDir === "asc" ? "ascending" : "descending"}`}
+              >
+                {sortDir}
+              </button>
               <span className="muted text-[10px] mono uppercase tracking-widest pr-1 shrink-0">
                 {visibleEntries?.length ?? 0} / {entries.length}
               </span>
