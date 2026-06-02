@@ -205,6 +205,7 @@ export default function HistoryPage() {
   if (since) exportParams.set("since", since);
   if (until) exportParams.set("until", until);
   if (minConf) exportParams.set("min_confidence", minConf);
+  if (maxConf) exportParams.set("max_confidence", maxConf);
 
   function go(delta: number) {
     const next = Math.max(0, offset + delta * PAGE_SIZE);

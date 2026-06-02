@@ -142,6 +142,20 @@ test("end-to-end: pinned=1 narrows to pinned runs only", async () => {
   assert.equal(runs[0].ticker, "MSFT");
 });
 
+test("parseExportQuery: forwards both min_confidence and max_confidence (regression - max was dropped from history export URL)", () => {
+  const opts = ep.parseExportQuery(sp("min_confidence=40&max_confidence=60"));
+  // parseMinConfidence converts percent inputs to fractions in [0, 1].
+  assert.ok(opts.minConfidence !== undefined && Math.abs(opts.minConfidence - 0.4) < 1e-9);
+  assert.ok(opts.maxConfidence !== undefined && Math.abs(opts.maxConfidence - 0.6) < 1e-9);
+});
+
+test("end-to-end: max_confidence bounds the result set (excludes confidence=0.5 run when max=40%)", async () => {
+  const opts = ep.parseExportQuery(sp("max_confidence=40"));
+  const { total } = await rs.queryRuns(opts);
+  // All seeded runs have snapshot confidence 0.5, so a 40% ceiling excludes them all.
+  assert.equal(total, 0);
+});
+
 test("end-to-end: tag + pinned combine", async () => {
   const opts = ep.parseExportQuery(sp("tag=earnings&pinned=true"));
   const { runs, total } = await rs.queryRuns(opts);
