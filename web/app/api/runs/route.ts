@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createRun, queryRuns, normalizeTags } from "@/lib/runStore";
-import { parseMinConfidence, parseMaxConfidence } from "@/lib/runsExportParams";
+import { parseMinConfidence, parseMaxConfidence, parseMinBars } from "@/lib/runsExportParams";
 import { recordSafe } from "@/lib/activityStore";
 
 export const runtime = "nodejs";
@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
   const until = sp.get("until") ?? "";
   const minConfidence = parseMinConfidence(sp.get("min_confidence"));
   const maxConfidence = parseMaxConfidence(sp.get("max_confidence"));
+  const minBars = parseMinBars(sp.get("min_bars"));
   const sortRaw = (sp.get("sort") ?? "").toLowerCase();
   const sort =
     sortRaw === "oldest" ||
@@ -49,6 +50,7 @@ export async function GET(req: NextRequest) {
     until: until || undefined,
     minConfidence,
     maxConfidence,
+    minBars,
     sort,
     limit,
     offset,

@@ -337,6 +337,12 @@ export type QueryOpts = {
   // minConfidence to bracket a confidence window (for example, surfacing
   // "uncertain" runs in 30-60% for review).
   maxConfidence?: number;
+  // Inclusive lower bound on the number of bars (payload.dates.length) in
+  // the saved run. Useful when sorting by "bars" or just hiding short
+  // runs (intraday probes, partial backfills) from a long history. Values
+  // that are not finite non-negative integers are ignored, matching the
+  // lenient policy of the other filters on this struct.
+  minBars?: number;
   limit?: number;
   offset?: number;
   // Sort order for the returned page. Default "recent" matches the legacy
@@ -430,6 +436,11 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
       const c = r.payload.snapshot?.confidence;
       return typeof c === "number" && Number.isFinite(c) && c <= maxConf;
     });
+  }
+  const minBars = opts.minBars;
+  if (typeof minBars === "number" && Number.isFinite(minBars) && minBars >= 0) {
+    const threshold = Math.floor(minBars);
+    filtered = filtered.filter((r) => (r.payload.dates?.length ?? 0) >= threshold);
   }
   const sort = opts.sort ?? "recent";
   const cmpRecent = (a: SavedRun, b: SavedRun) =>

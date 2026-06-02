@@ -43,6 +43,19 @@ export function parseMaxConfidence(raw: string | null | undefined): number | und
   return parseMinConfidence(raw);
 }
 
+// Parse a min_bars query param. Accepts non-negative integers ("50",
+// "  100 "). Floating values are floored. Negative, non-finite, or
+// unparseable values are ignored so the filter degrades to a no-op, matching
+// the lenient policy of the other run filters.
+export function parseMinBars(raw: string | null | undefined): number | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  const s = raw.trim();
+  if (!s) return undefined;
+  const n = Number.parseFloat(s);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.floor(n);
+}
+
 export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFilter"> {
   const pinnedRaw = sp.get("pinned");
   const pinnedOnly = pinnedRaw === "1" || pinnedRaw === "true";
@@ -66,6 +79,7 @@ export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFil
     until: until || undefined,
     minConfidence: parseMinConfidence(sp.get("min_confidence")),
     maxConfidence: parseMaxConfidence(sp.get("max_confidence")),
+    minBars: parseMinBars(sp.get("min_bars")),
     sort,
     limit: parseExportLimit(sp.get("limit")),
     offset: 0,
