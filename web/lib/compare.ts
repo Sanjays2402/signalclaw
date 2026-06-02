@@ -140,7 +140,77 @@ export function compareToCSV(meta: CompareMeta, summary: CompareSummary): string
 }
 
 // Filename helper. Stable, safe for Content-Disposition.
-export function compareExportFilename(meta: CompareMeta, format: "csv" | "json"): string {
+export function compareExportFilename(
+  meta: CompareMeta,
+  format: "csv" | "json" | "md",
+): string {
   const safe = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "_");
   return `signalclaw-compare-${safe(meta.a.ticker)}-vs-${safe(meta.b.ticker)}-${safe(meta.a.id)}-${safe(meta.b.id)}.${format}`;
+}
+
+function fmtPct(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "--";
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${(n * 100).toFixed(2)}%`;
+}
+
+function fmtDeltaPct(n: number): string {
+  if (!Number.isFinite(n)) return "--";
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${(n * 100).toFixed(2)} pts`;
+}
+
+function fmtConf(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "--";
+  return `${(n * 100).toFixed(0)}%`;
+}
+
+// Render the compare summary as a Markdown document, easy to paste into
+// Slack, GitHub issues, or a research note. Mirrors the CSV export columns
+// (A, B, delta) but optimized for human reading.
+export function compareToMarkdown(meta: CompareMeta, summary: CompareSummary): string {
+  const lines: string[] = [];
+  const aTitle = `${meta.a.ticker} (${meta.a.lookback_days}d)`;
+  const bTitle = `${meta.b.ticker} (${meta.b.lookback_days}d)`;
+  lines.push(`# SignalClaw compare: ${aTitle} vs ${bTitle}`);
+  lines.push("");
+  lines.push(`- **A** \`${meta.a.id}\` · ${meta.a.label} · saved ${meta.a.created_at}`);
+  lines.push(`- **B** \`${meta.b.id}\` · ${meta.b.label} · saved ${meta.b.created_at}`);
+  lines.push("");
+  lines.push("## Summary");
+  lines.push("");
+  lines.push("| Metric | A | B | Delta (B - A) |");
+  lines.push("| --- | --- | --- | --- |");
+  lines.push(
+    `| Bars | ${summary.a.bars} | ${summary.b.bars} | ${summary.b.bars - summary.a.bars} |`,
+  );
+  lines.push(
+    `| Regime | ${summary.a.regime ?? "--"} | ${summary.b.regime ?? "--"} |  |`,
+  );
+  const confDelta =
+    summary.a.confidence !== null && summary.b.confidence !== null
+      ? `${((summary.b.confidence - summary.a.confidence) * 100).toFixed(0)} pts`
+      : "--";
+  lines.push(
+    `| Confidence | ${fmtConf(summary.a.confidence)} | ${fmtConf(summary.b.confidence)} | ${confDelta} |`,
+  );
+  const pctDelta =
+    summary.a.pct_change !== null && summary.b.pct_change !== null
+      ? fmtDeltaPct(summary.b.pct_change - summary.a.pct_change)
+      : "--";
+  lines.push(
+    `| Window return | ${fmtPct(summary.a.pct_change)} | ${fmtPct(summary.b.pct_change)} | ${pctDelta} |`,
+  );
+  lines.push("");
+  lines.push("## Regime mix");
+  lines.push("");
+  lines.push("| Regime | A | B | Delta (B - A) |");
+  lines.push("| --- | --- | --- | --- |");
+  for (const k of REGIME_ORDER) {
+    lines.push(
+      `| ${k} | ${fmtPct(summary.a.mix[k] ?? 0)} | ${fmtPct(summary.b.mix[k] ?? 0)} | ${fmtDeltaPct(summary.mix_diff[k] ?? 0)} |`,
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
 }

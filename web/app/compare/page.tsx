@@ -372,6 +372,13 @@ export default function ComparePage() {
             >
               <DownloadSimple size={12} weight="bold" /> JSON
             </a>
+            <a
+              href={`/api/runs/compare/export?a=${encodeURIComponent(cmp.a.id)}&b=${encodeURIComponent(cmp.b.id)}&format=md`}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
+              title="Download a Markdown summary, easy to paste into Slack or issues"
+            >
+              <DownloadSimple size={12} weight="bold" /> MD
+            </a>
           </div>
         </>
       )}

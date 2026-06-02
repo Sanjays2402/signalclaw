@@ -6,6 +6,7 @@ import {
   mixDiff,
   isValidRunId,
   compareToCSV,
+  compareToMarkdown,
   compareExportFilename,
   type CompareMeta,
   type CompareSummary,
@@ -27,9 +28,10 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const a = (sp.get("a") ?? "").trim();
   const b = (sp.get("b") ?? "").trim();
-  const format = (sp.get("format") ?? "csv").toLowerCase();
-  if (format !== "csv" && format !== "json") {
-    return err(400, "bad_format", "format must be csv or json");
+  const rawFormat = (sp.get("format") ?? "csv").toLowerCase();
+  const format = rawFormat === "markdown" ? "md" : rawFormat;
+  if (format !== "csv" && format !== "json" && format !== "md") {
+    return err(400, "bad_format", "format must be csv, json, or md");
   }
   if (!a || !b) return err(400, "missing_ids", "provide a and b query params");
   if (!isValidRunId(a) || !isValidRunId(b)) {
@@ -64,8 +66,18 @@ export async function GET(req: NextRequest) {
     a: { id: ra.id, label: ra.label, ticker: ra.ticker, lookback_days: ra.lookback_days, created_at: ra.created_at },
     b: { id: rb.id, label: rb.label, ticker: rb.ticker, lookback_days: rb.lookback_days, created_at: rb.created_at },
   };
-  const filename = compareExportFilename(meta, format as "csv" | "json");
+  const filename = compareExportFilename(meta, format as "csv" | "json" | "md");
 
+  if (format === "md") {
+    return new NextResponse(compareToMarkdown(meta, summary), {
+      status: 200,
+      headers: {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="${filename}"`,
+        "cache-control": "private, max-age=0, must-revalidate",
+      },
+    });
+  }
   if (format === "json") {
     return new NextResponse(JSON.stringify({ a: meta.a, b: meta.b, summary }, null, 2), {
       status: 200,

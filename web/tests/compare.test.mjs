@@ -149,3 +149,48 @@ test("parseCompareParams accepts any object exposing get()", () => {
   const fake = { get: (k) => (k === "a" ? "run_aaa111" : k === "b" ? "run_bbb222" : null) };
   assert.deepEqual(mod.parseCompareParams(fake), { a: "run_aaa111", b: "run_bbb222" });
 });
+
+test("compareToMarkdown renders summary + mix tables with B minus A deltas", () => {
+  const md = mod.compareToMarkdown(sampleMeta, sampleSummary);
+  // Header line names both runs.
+  assert.ok(md.startsWith("# SignalClaw compare: AAPL (200d) vs MSFT (200d)"));
+  // Run ids surfaced for traceability.
+  assert.ok(md.includes("`run_aaa111`"));
+  assert.ok(md.includes("`run_bbb222`"));
+  // Bars row: 200 / 180 / -20.
+  assert.ok(md.includes("| Bars | 200 | 180 | -20 |"));
+  // Regime row leaves delta blank (categorical).
+  assert.ok(md.includes("| Regime | bull | chop |  |"));
+  // Confidence delta: 60% - 80% = -20 pts.
+  assert.ok(md.includes("| Confidence | 80% | 60% | -20 pts |"));
+  // Window return delta: -5% - 10% = -15 pts.
+  assert.ok(md.includes("| Window return | +10.00% | -5.00% | -15.00 pts |"));
+  // Mix table emits one row per regime in canonical order.
+  const lines = md.split("\n");
+  const mixIdx = lines.findIndex((l) => l === "## Regime mix");
+  assert.ok(mixIdx > 0);
+  const order = ["bull", "chop", "bear", "crash"];
+  for (let i = 0; i < order.length; i++) {
+    assert.ok(lines[mixIdx + 4 + i].startsWith(`| ${order[i]} |`));
+  }
+});
+
+test("compareToMarkdown handles null regimes and missing pct_change", () => {
+  const meta = sampleMeta;
+  const s = {
+    a: { bars: 0, mix: { bull: 0, chop: 0, bear: 0, crash: 0 }, regime: null, confidence: null, pct_change: null },
+    b: { bars: 0, mix: { bull: 0, chop: 0, bear: 0, crash: 0 }, regime: null, confidence: null, pct_change: null },
+    mix_diff: { bull: 0, chop: 0, bear: 0, crash: 0 },
+  };
+  const md = mod.compareToMarkdown(meta, s);
+  assert.ok(md.includes("| Regime | -- | -- |  |"));
+  assert.ok(md.includes("| Confidence | -- | -- | -- |"));
+  assert.ok(md.includes("| Window return | -- | -- | -- |"));
+});
+
+test("compareExportFilename supports md format", () => {
+  assert.equal(
+    mod.compareExportFilename(sampleMeta, "md"),
+    "signalclaw-compare-AAPL-vs-MSFT-run_aaa111-run_bbb222.md",
+  );
+});
