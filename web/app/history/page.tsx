@@ -291,7 +291,7 @@ export default function HistoryPage() {
                 setQ(e.target.value);
                 setOffset(0);
               }}
-              placeholder="Search label, ticker, or id"
+              placeholder="Search label, ticker, id, tag, or notes"
               aria-label="Search runs"
               className="w-full bg-[var(--bg)] border border-[var(--border-strong)] rounded-sm pl-8 pr-2 py-1.5 text-[12px] mono focus:outline-none focus:border-[var(--amber)]/60"
             />

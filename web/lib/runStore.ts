@@ -375,7 +375,8 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
         r.label.toLowerCase().includes(q) ||
         r.ticker.toLowerCase().includes(q) ||
         r.id.toLowerCase().includes(q) ||
-        (r.tags ?? []).some((t) => t.includes(q)),
+        (r.tags ?? []).some((t) => t.includes(q)) ||
+        (r.notes ?? "").toLowerCase().includes(q),
     );
   }
   if (regime && regime !== "all") {

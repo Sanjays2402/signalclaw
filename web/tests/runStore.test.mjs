@@ -321,6 +321,48 @@ test("setRunNotes returns null for missing id", async () => {
   assert.equal(res, null);
 });
 
+test("queryRuns q searches inside notes (case-insensitive substring)", async () => {
+  await store._resetForTests();
+  const a = await store.createRun({
+    label: "alpha",
+    ticker: "SPY",
+    lookback_days: 30,
+    payload: samplePayload,
+  });
+  const b = await store.createRun({
+    label: "beta",
+    ticker: "QQQ",
+    lookback_days: 30,
+    payload: samplePayload,
+  });
+  await store.setRunNotes(a.id, "Watching breakout above 440 into FOMC");
+  await store.setRunNotes(b.id, "thin volume, fade rallies");
+
+  // Note-only substring (not in label/ticker/id/tags) finds the run.
+  const fomc = await store.queryRuns({ q: "fomc" });
+  assert.equal(fomc.total, 1);
+  assert.equal(fomc.runs[0].id, a.id);
+
+  // Mixed-case match works.
+  const fade = await store.queryRuns({ q: "FADE" });
+  assert.equal(fade.total, 1);
+  assert.equal(fade.runs[0].id, b.id);
+
+  // Empty-notes runs don't crash and aren't matched by arbitrary text.
+  const c = await store.createRun({
+    label: "gamma",
+    ticker: "IWM",
+    lookback_days: 30,
+    payload: samplePayload,
+  });
+  const none = await store.queryRuns({ q: "definitely-not-anywhere" });
+  assert.equal(none.total, 0);
+  // And searching the label still works for the no-notes run.
+  const gamma = await store.queryRuns({ q: "gamma" });
+  assert.equal(gamma.total, 1);
+  assert.equal(gamma.runs[0].id, c.id);
+});
+
 test("notes persist across reads and survive ensureTags backfill", async () => {
   await store._resetForTests();
   const r = await store.createRun({
