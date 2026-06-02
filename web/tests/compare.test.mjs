@@ -122,3 +122,30 @@ test("compareExportFilename strips unsafe chars and pins extension", () => {
     "signalclaw-compare-BRK.B-vs-A_B-run_aaa111-run_bbb222.json",
   );
 });
+
+test("parseCompareParams pulls valid a and b ids from URLSearchParams", () => {
+  const p = new URLSearchParams("a=run_aaa111&b=run_bbb222");
+  assert.deepEqual(mod.parseCompareParams(p), { a: "run_aaa111", b: "run_bbb222" });
+});
+
+test("parseCompareParams returns nulls for missing or malformed ids", () => {
+  assert.deepEqual(mod.parseCompareParams(new URLSearchParams("")), { a: null, b: null });
+  assert.deepEqual(
+    mod.parseCompareParams(new URLSearchParams("a=../etc/passwd&b=run_okokok")),
+    { a: null, b: "run_okokok" },
+  );
+  assert.deepEqual(
+    mod.parseCompareParams(new URLSearchParams("a=run_okokok&b=short")),
+    { a: "run_okokok", b: null },
+  );
+});
+
+test("parseCompareParams refuses self-compare by zeroing b", () => {
+  const p = new URLSearchParams("a=run_same01&b=run_same01");
+  assert.deepEqual(mod.parseCompareParams(p), { a: "run_same01", b: null });
+});
+
+test("parseCompareParams accepts any object exposing get()", () => {
+  const fake = { get: (k) => (k === "a" ? "run_aaa111" : k === "b" ? "run_bbb222" : null) };
+  assert.deepEqual(mod.parseCompareParams(fake), { a: "run_aaa111", b: "run_bbb222" });
+});

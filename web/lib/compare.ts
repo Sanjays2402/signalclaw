@@ -45,6 +45,21 @@ export function isValidRunId(s: unknown): s is string {
   return typeof s === "string" && ID_RE.test(s);
 }
 
+// Pull a deep-linked (a, b) pair out of a URLSearchParams-ish input.
+// Returns nulls for missing or malformed ids, and refuses a self-compare
+// (same id on both sides) by zeroing b. Used by /compare to hydrate the
+// run pickers from a shared URL like /compare?a=run_abc&b=run_xyz.
+export function parseCompareParams(
+  params: { get(key: string): string | null } | URLSearchParams,
+): { a: string | null; b: string | null } {
+  const rawA = params.get("a");
+  const rawB = params.get("b");
+  const a = isValidRunId(rawA) ? rawA : null;
+  let b = isValidRunId(rawB) ? rawB : null;
+  if (a && b && a === b) b = null;
+  return { a, b };
+}
+
 // Side-by-side row shape used by the compare export. One row per metric,
 // columns for A and B and the B minus A delta. Kept as a pure helper so the
 // route handler stays thin and tests can pin the exact wire format.

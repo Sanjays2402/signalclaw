@@ -4,11 +4,14 @@ import useSWR from "swr";
 import Link from "next/link";
 import { Card, Loading, ErrorBox, Empty, Badge, Select, Field, fmtPct } from "@/components/ui";
 import CompareChart from "@/components/CompareChart";
+import { parseCompareParams, isValidRunId } from "@/lib/compare";
 import {
   ArrowsLeftRight,
   ArrowRight,
   ClockCounterClockwise,
   DownloadSimple,
+  LinkSimple,
+  Check,
   Swap,
 } from "@phosphor-icons/react/dist/ssr";
 
@@ -81,18 +84,72 @@ export default function ComparePage() {
 
   const runs = list?.runs ?? [];
 
+  // Initial state is hydrated from ?a=&b= in the URL so /compare links
+  // are shareable. Ids are validated here so a bogus query string falls
+  // back cleanly to the auto-pick behaviour.
   const [aId, setAId] = useState<string>("");
   const [bId, setBId] = useState<string>("");
+  const [urlHydrated, setUrlHydrated] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  // Auto-pick the two most recent distinct runs once the list loads.
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const parsed = parseCompareParams(new URLSearchParams(window.location.search));
+    if (parsed.a) setAId(parsed.a);
+    if (parsed.b) setBId(parsed.b);
+    setUrlHydrated(true);
+  }, []);
+
+  // Auto-pick the two most recent distinct runs once the list loads and
+  // only if the URL did not already pin a pair.
+  useEffect(() => {
+    if (!urlHydrated) return;
     if (runs.length >= 2 && !aId && !bId) {
       setAId(runs[0].id);
       setBId(runs[1].id);
     } else if (runs.length === 1 && !aId) {
       setAId(runs[0].id);
     }
-  }, [runs, aId, bId]);
+  }, [runs, aId, bId, urlHydrated]);
+
+  // Keep the URL in sync with the current selection so a copy of the
+  // address bar (or the explicit Copy link button) reproduces the view.
+  useEffect(() => {
+    if (!urlHydrated || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (isValidRunId(aId)) url.searchParams.set("a", aId);
+    else url.searchParams.delete("a");
+    if (isValidRunId(bId)) url.searchParams.set("b", bId);
+    else url.searchParams.delete("b");
+    const next = url.pathname + (url.search ? url.search : "");
+    const current = window.location.pathname + window.location.search;
+    if (next !== current) window.history.replaceState(null, "", next);
+  }, [aId, bId, urlHydrated]);
+
+  async function copyShareLink() {
+    if (typeof window === "undefined") return;
+    const href = window.location.href;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(href);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = href;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard can be blocked by permissions; fall back to a prompt so
+      // the user can still grab the link manually.
+      window.prompt("Copy this link", href);
+    }
+  }
 
   const canCompare = aId && bId && aId !== bId;
 
@@ -291,6 +348,16 @@ export default function ComparePage() {
             >
               <ClockCounterClockwise size={12} weight="bold" /> History
             </Link>
+            <button
+              type="button"
+              onClick={copyShareLink}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
+              title="Copy a shareable link to this comparison"
+              aria-live="polite"
+            >
+              {copied ? <Check size={12} weight="bold" /> : <LinkSimple size={12} weight="bold" />}
+              {copied ? "Copied" : "Copy link"}
+            </button>
             <a
               href={`/api/runs/compare/export?a=${encodeURIComponent(cmp.a.id)}&b=${encodeURIComponent(cmp.b.id)}&format=csv`}
               className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
