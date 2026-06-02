@@ -48,6 +48,8 @@ export type JournalFilter = {
   query?: string;
   /** Optional exact-match conviction (1..5). Anything else means no conviction filter. */
   conviction?: number | null;
+  /** Optional exact-match tag (case insensitive). Entry must have a tag equal to this. */
+  tag?: string | null;
 };
 
 /**
@@ -66,9 +68,14 @@ export function filterEntries(
     filter.conviction <= 5
       ? filter.conviction
       : null;
-  if (!q && conv === null) return entries;
+  const tag = (filter.tag ?? "").trim().toLowerCase();
+  if (!q && conv === null && !tag) return entries;
   return entries.filter((e) => {
     if (conv !== null && e.conviction !== conv) return false;
+    if (tag) {
+      const tags = (e.tags ?? []).map((t) => t.toLowerCase());
+      if (!tags.includes(tag)) return false;
+    }
     if (!q) return true;
     if ((e.trade_id ?? "").toLowerCase().includes(q)) return true;
     if ((e.thesis ?? "").toLowerCase().includes(q)) return true;
@@ -78,6 +85,22 @@ export function filterEntries(
     }
     return false;
   });
+}
+
+/**
+ * Sorted, deduped list of tags across the given entries. Stable case (first-seen
+ * casing wins). Useful to populate a tag filter dropdown on /journal.
+ */
+export function collectTags(entries: JournalEntryLite[]): string[] {
+  const seen = new Map<string, string>();
+  for (const e of entries) {
+    for (const t of e.tags ?? []) {
+      const key = t.trim().toLowerCase();
+      if (!key) continue;
+      if (!seen.has(key)) seen.set(key, t.trim());
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
 }
 
 export function exportFilename(ext: "csv" | "json"): string {

@@ -5,7 +5,7 @@ import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type JournalEntry, type JournalEntryIn } from "@/lib/api";
 import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass } from "@phosphor-icons/react/dist/ssr";
-import { entriesToCSV, entriesToJSON, exportFilename, filterEntries } from "@/lib/journalExport";
+import { entriesToCSV, entriesToJSON, exportFilename, filterEntries, collectTags } from "@/lib/journalExport";
 
 type ConvictionStats = {
   buckets: { conviction: number; n_trades: number; realized_pnl: number; avg_realized_pnl: number; win_rate: number }[];
@@ -26,14 +26,17 @@ function Journal() {
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [convFilter, setConvFilter] = useState<"" | "1" | "2" | "3" | "4" | "5">("");
+  const [tagFilter, setTagFilter] = useState("");
 
   const allEntries = list.data?.entries ?? [];
+  const tagOptions = useMemo(() => collectTags(allEntries), [allEntries]);
   const filtered = useMemo(
     () => filterEntries(allEntries, {
       query,
       conviction: convFilter === "" ? null : parseInt(convFilter, 10),
+      tag: tagFilter || null,
     }),
-    [allEntries, query, convFilter],
+    [allEntries, query, convFilter, tagFilter],
   );
 
   async function refresh() {
@@ -107,14 +110,26 @@ function Journal() {
                       <option key={n} value={String(n)}>Conviction {n}</option>
                     ))}
                   </Select>
+                  <Select
+                    value={tagFilter}
+                    onChange={(e) => setTagFilter(e.target.value)}
+                    data-testid="journal-filter-tag"
+                    title="Filter by tag"
+                    disabled={tagOptions.length === 0}
+                  >
+                    <option value="">All tags</option>
+                    {tagOptions.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </Select>
                   <span className="muted text-xs mono" data-testid="journal-filter-count">
                     {filtered.length}/{allEntries.length}
                   </span>
-                  {(query || convFilter) && (
+                  {(query || convFilter || tagFilter) && (
                     <button
                       type="button"
                       className="text-[10px] uppercase tracking-widest mono px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)]"
-                      onClick={() => { setQuery(""); setConvFilter(""); }}
+                      onClick={() => { setQuery(""); setConvFilter(""); setTagFilter(""); }}
                     >
                       Clear
                     </button>
@@ -136,7 +151,18 @@ function Journal() {
                           conviction {e.conviction}/5
                         </Badge>
                         {e.exit_reason && <Badge tone="neutral">{e.exit_reason}</Badge>}
-                        {e.tags.map((t) => <Badge key={t} tone="neutral">{t}</Badge>)}
+                        {e.tags.map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setTagFilter(t)}
+                            title={`Filter by tag ${t}`}
+                            className="appearance-none bg-transparent p-0 border-0 cursor-pointer"
+                            data-testid="journal-tag-chip"
+                          >
+                            <Badge tone={tagFilter.toLowerCase() === t.toLowerCase() ? "info" : "neutral"}>{t}</Badge>
+                          </button>
+                        ))}
                       </div>
                       <p className="text-sm">{e.thesis || <span className="muted">(no thesis)</span>}</p>
                     </div>

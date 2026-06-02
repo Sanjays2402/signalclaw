@@ -92,3 +92,36 @@ test("filterEntries combines query and conviction with AND semantics", () => {
     [],
   );
 });
+
+test("filterEntries tag filter is exact-match and case insensitive", () => {
+  assert.deepEqual(mod.filterEntries(entries, { tag: "breakout" }).map((e) => e.trade_id), ["t1"]);
+  assert.deepEqual(mod.filterEntries(entries, { tag: "BREAKOUT" }).map((e) => e.trade_id), ["t1"]);
+  assert.deepEqual(mod.filterEntries(entries, { tag: "pairs" }).map((e) => e.trade_id), ["t2,with comma"]);
+  assert.deepEqual(mod.filterEntries(entries, { tag: "break" }), []); // substring should not match
+  assert.deepEqual(mod.filterEntries(entries, { tag: "no-such" }), []);
+  assert.deepEqual(mod.filterEntries(entries, { tag: "" }), entries);
+  assert.deepEqual(mod.filterEntries(entries, { tag: null }), entries);
+});
+
+test("filterEntries combines tag with query and conviction (AND)", () => {
+  assert.deepEqual(
+    mod.filterEntries(entries, { tag: "breakout", conviction: 4 }).map((e) => e.trade_id),
+    ["t1"],
+  );
+  assert.deepEqual(mod.filterEntries(entries, { tag: "breakout", conviction: 2 }), []);
+  assert.deepEqual(
+    mod.filterEntries(entries, { tag: "breakout", query: "pivot" }).map((e) => e.trade_id),
+    ["t1"],
+  );
+  assert.deepEqual(mod.filterEntries(entries, { tag: "breakout", query: "pairs" }), []);
+});
+
+test("collectTags returns sorted, deduped, case-insensitive union", () => {
+  const entriesWithDupes = [
+    { ...entries[0], tags: ["Breakout", "earnings"] },
+    { ...entries[1], tags: ["pairs", "breakout", "Earnings"] },
+    { trade_id: "t3", thesis: "", conviction: 3, tags: ["", "  ", "zeta"], exit_reason: null, created_at: "", updated_at: "" },
+  ];
+  assert.deepEqual(mod.collectTags(entriesWithDupes), ["Breakout", "earnings", "pairs", "zeta"]);
+  assert.deepEqual(mod.collectTags([]), []);
+});
