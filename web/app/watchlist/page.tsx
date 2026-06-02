@@ -18,6 +18,7 @@ import {
   TrendDown,
   MagnifyingGlass,
 } from "@phosphor-icons/react/dist/ssr";
+import { nearestTargetDistance, formatTargetDistancePct } from "@/lib/watchlistDistance";
 
 type Entry = {
   ticker: string;
@@ -69,6 +70,8 @@ function fmtPrice(n: number | null): string {
   if (n >= 1) return n.toFixed(2);
   return n.toFixed(4);
 }
+
+
 
 function WL() {
   const [data, setData] = useState<ListResp | null>(null);
@@ -484,6 +487,32 @@ function WL() {
                         )}
                       </div>
                     )}
+                    {check && check.last_close !== null && !isCrossed && (() => {
+                      const dist = nearestTargetDistance(
+                        check.last_close,
+                        check.target_high,
+                        check.target_low,
+                      );
+                      if (!dist) return null;
+                      const pctAbs = Math.abs(dist.pct);
+                      const near = pctAbs <= 2;
+                      const label =
+                        dist.side === "high"
+                          ? `${formatTargetDistancePct(pctAbs)} to high`
+                          : `${formatTargetDistancePct(pctAbs)} to low`;
+                      return (
+                        <span
+                          className={`mono text-[10px] px-1.5 py-0.5 rounded border ${
+                            near
+                              ? "border-[var(--accent)] text-[var(--accent)]"
+                              : "border-[var(--border)] muted"
+                          }`}
+                          title={`Distance from last close to nearest target (${dist.abs.toFixed(4)})`}
+                        >
+                          {near ? "near · " : ""}{label}
+                        </span>
+                      );
+                    })()}
                     {check && check.status === "no_data" && (
                       <span className="muted">no run data yet</span>
                     )}
