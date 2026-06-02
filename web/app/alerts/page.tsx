@@ -446,6 +446,14 @@ function AlertHistoryCard({ refreshKey }: { refreshKey: number }) {
                 >
                   <DownloadSimple weight="duotone" size={11} /> JSON
                 </a>
+                <a
+                  href={`/api/alerts/history?format=md${suffix}`}
+                  className={linkCls}
+                  title={`${tip} as Markdown`}
+                  data-testid="alert-history-export-md"
+                >
+                  <DownloadSimple weight="duotone" size={11} /> MD
+                </a>
               </>
             );
           })()}

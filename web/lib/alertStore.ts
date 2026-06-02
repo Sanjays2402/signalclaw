@@ -295,6 +295,33 @@ export function eventsToJSON(events: AlertEvent[]): string {
   return JSON.stringify(payload, null, 2) + "\n";
 }
 
+// Markdown export of fire history as a GitHub-flavored table so the list can
+// be pasted into a trade review doc or chat. Mirrors the CSV columns and
+// matches the /journal and /watchlist markdown exports already shipping.
+export function eventsToMarkdown(events: AlertEvent[]): string {
+  const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const head = [
+    `# SignalClaw alert fire history`,
+    ``,
+    `Exported ${stamp} \u00b7 ${events.length} fire${events.length === 1 ? "" : "s"}`,
+    ``,
+  ];
+  if (events.length === 0) {
+    return head.concat([`_No fires yet._`, ``]).join("\n");
+  }
+  const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  const table = [
+    `| Fired at | Ticker | Condition | Value | Observed | Alert ID | Note |`,
+    `| --- | --- | --- | --- | --- | --- | --- |`,
+  ];
+  for (const e of events) {
+    table.push(
+      `| ${e.fired_at} | ${esc(e.ticker ?? "")} | ${esc(e.condition ?? "")} | ${e.value} | ${e.observed} | ${esc(e.alert_id ?? "")} | ${esc(e.note ?? "")} |`,
+    );
+  }
+  return head.concat(table, [""]).join("\n");
+}
+
 export async function clearHistory(ownerId?: string | null): Promise<number> {
   const oid = normalizeOwnerId(ownerId);
   const store = await readStore();

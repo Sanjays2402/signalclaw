@@ -4,6 +4,7 @@ import {
   listAllHistory,
   eventsToCSV,
   eventsToJSON,
+  eventsToMarkdown,
   normalizeTicker,
 } from "@/lib/alertStore";
 
@@ -16,7 +17,7 @@ export async function GET(req: NextRequest) {
   const ticker = rawTicker ? normalizeTicker(rawTicker) || undefined : undefined;
   const fmt = (sp.get("format") ?? "").toLowerCase();
 
-  if (fmt === "csv" || fmt === "json") {
+  if (fmt === "csv" || fmt === "json" || fmt === "md" || fmt === "markdown") {
     const events = await listAllHistory({ ticker });
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     if (fmt === "csv") {
@@ -25,6 +26,15 @@ export async function GET(req: NextRequest) {
         headers: {
           "content-type": "text/csv; charset=utf-8",
           "content-disposition": `attachment; filename="signalclaw-alert-history-${stamp}.csv"`,
+        },
+      });
+    }
+    if (fmt === "md" || fmt === "markdown") {
+      return new NextResponse(eventsToMarkdown(events), {
+        status: 200,
+        headers: {
+          "content-type": "text/markdown; charset=utf-8",
+          "content-disposition": `attachment; filename="signalclaw-alert-history-${stamp}.md"`,
         },
       });
     }

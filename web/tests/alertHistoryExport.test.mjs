@@ -53,3 +53,45 @@ test("eventsToJSON wraps events with count and exported_at", () => {
   assert.equal(json.events[0].ticker, "AAPL");
   assert.ok(typeof json.exported_at === "string");
 });
+
+test("eventsToMarkdown emits a GitHub-flavored table with one row per event", () => {
+  const md = store.eventsToMarkdown(events);
+  const lines = md.trimEnd().split("\n");
+  assert.equal(lines[0], "# SignalClaw alert fire history");
+  assert.ok(lines[2].includes("2 fires"));
+  // header + separator + 2 data rows
+  const tableRows = lines.filter((l) => l.startsWith("|"));
+  assert.equal(tableRows.length, 4);
+  assert.ok(tableRows[0].includes("Fired at"));
+  assert.ok(tableRows[0].includes("Ticker"));
+  assert.ok(tableRows[2].includes("AAPL"));
+  assert.ok(tableRows[3].includes("MSFT"));
+});
+
+test("eventsToMarkdown handles an empty list with a placeholder line", () => {
+  const md = store.eventsToMarkdown([]);
+  assert.ok(md.includes("# SignalClaw alert fire history"));
+  assert.ok(md.includes("0 fires"));
+  assert.ok(md.includes("_No fires yet._"));
+});
+
+test("eventsToMarkdown escapes pipes and newlines in note and ticker fields", () => {
+  const tricky = [
+    {
+      alert_id: "a3",
+      ticker: "X|Y",
+      condition: "price_above",
+      value: 1,
+      observed: 2,
+      fired_at: "2025-01-03T00:00:00.000Z",
+      note: "line one\nline two | pipe",
+    },
+  ];
+  const md = store.eventsToMarkdown(tricky);
+  // The note row must not break the table by containing a raw newline or pipe.
+  const row = md.split("\n").find((l) => l.includes("a3"));
+  assert.ok(row);
+  assert.ok(!row.includes("\n"));
+  assert.ok(row.includes("X\\|Y"));
+  assert.ok(row.includes("line one line two \\| pipe"));
+});
