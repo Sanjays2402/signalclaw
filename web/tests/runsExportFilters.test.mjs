@@ -68,6 +68,37 @@ test("parseExportFormat: defaults to csv, rejects unknown, accepts json", () => 
   assert.equal(ep.parseExportFormat(""), null);
 });
 
+test("parseExportFormat: accepts md and markdown (both normalize to md)", () => {
+  assert.equal(ep.parseExportFormat("md"), "md");
+  assert.equal(ep.parseExportFormat("MD"), "md");
+  assert.equal(ep.parseExportFormat("markdown"), "md");
+  assert.equal(ep.parseExportFormat("Markdown"), "md");
+});
+
+test("exportHeaders: md format gets .md extension and text/markdown content type", () => {
+  const h = ep.exportHeaders(3, 3, "md");
+  assert.equal(h["content-type"], "text/markdown; charset=utf-8");
+  assert.match(h["content-disposition"], /signalclaw-runs-.*\.md/);
+  assert.equal(h["x-truncated"], "0");
+});
+
+test("runsToMarkdown: header, one row per run, escapes pipes, empty fallback", async () => {
+  const md = rs.runsToMarkdown([r1, r3]);
+  assert.match(md, /# SignalClaw runs \(2\)/);
+  assert.match(md, /\| Ticker \| Label \|/);
+  assert.match(md, /\| SPY \|/);
+  assert.match(md, /\| MSFT \|/);
+  assert.match(md, /`#earnings`/);
+  assert.match(md, /research tooling/);
+  // One header line + separator + 2 rows + spacing/footer
+  const rows = md.split("\n").filter((l) => l.startsWith("| ") && !l.startsWith("| ---") && !l.startsWith("| Ticker"));
+  assert.equal(rows.length, 2);
+
+  const empty = rs.runsToMarkdown([]);
+  assert.match(empty, /# SignalClaw runs \(0\)/);
+  assert.match(empty, /No runs matched/);
+});
+
 test("parseExportLimit: clamps to [1, 200] and tolerates junk", () => {
   assert.equal(ep.parseExportLimit(null), 200);
   assert.equal(ep.parseExportLimit("50"), 50);

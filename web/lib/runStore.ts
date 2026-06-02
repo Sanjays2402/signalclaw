@@ -514,6 +514,49 @@ export function runsToCSV(runs: SavedRun[]): string {
   return lines.join("\n") + "\n";
 }
 
+// Pure Markdown serializer for a *list* of saved runs. Designed for pasting
+// a filtered history view into Slack, GitHub issues, or notes apps without
+// dumping the full per-bar payload. One row per run, headline numbers only.
+export function runsToMarkdown(runs: SavedRun[]): string {
+  const fmtPct = (n: number | null | undefined) =>
+    typeof n === "number" && Number.isFinite(n)
+      ? (n * 100).toFixed(1) + "%"
+      : "--";
+  const lines: string[] = [];
+  lines.push(`# SignalClaw runs (${runs.length})`);
+  lines.push("");
+  if (runs.length === 0) {
+    lines.push("_No runs matched the current filters._");
+    lines.push("");
+    return lines.join("\n") + "\n";
+  }
+  lines.push("| Ticker | Label | Regime | Conf | Bars | Lookback | Tags | Saved | Run id |");
+  lines.push("| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |");
+  const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  for (const r of runs) {
+    const snap = r.payload.snapshot;
+    const bars = (r.payload.dates ?? []).length;
+    const tagStr =
+      (r.tags ?? []).length > 0
+        ? r.tags.map((t) => "`#" + t + "`").join(" ")
+        : "--";
+    lines.push(
+      `| ${esc(r.ticker)} | ${esc(r.label)} | ${
+        snap ? snap.label.toUpperCase() : "--"
+      } | ${fmtPct(snap?.confidence)} | ${bars} | ${r.lookback_days}d | ${tagStr} | ${
+        r.created_at
+      } | \`${r.id}\` |`,
+    );
+  }
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  lines.push(
+    "_SignalClaw is research tooling. Outputs may be wrong. Do your own work._",
+  );
+  return lines.join("\n") + "\n";
+}
+
 // Pure Markdown serializer for one saved run. Designed for pasting into Slack,
 // GitHub issues, or notes apps without losing the headline numbers.
 export function runToMarkdown(run: SavedRun): string {

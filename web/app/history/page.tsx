@@ -295,6 +295,14 @@ export default function HistoryPage() {
             >
               <Code size={11} weight="bold" /> JSON
             </a>
+            <a
+              href={`/api/runs/export?${exportParams.toString()}&format=md`}
+              className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
+              title={total > 200 ? `Download Markdown summary (first 200 of ${total} matching runs)` : "Download Markdown summary of matching runs"}
+              data-testid="download-history-md"
+            >
+              <DownloadSimple size={11} weight="bold" /> MD
+            </a>
             <button
               onClick={refreshAll}
               className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] muted hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"

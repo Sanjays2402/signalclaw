@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { queryRuns, runsToCSV } from "@/lib/runStore";
+import { queryRuns, runsToCSV, runsToMarkdown } from "@/lib/runStore";
 import { parseExportFormat, parseExportQuery, exportHeaders } from "@/lib/runsExportParams";
 
 export const runtime = "nodejs";
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const format = parseExportFormat(sp.get("format"));
   if (!format) {
     return NextResponse.json(
-      { error: { code: "bad_format", message: "format must be csv or json" } },
+      { error: { code: "bad_format", message: "format must be csv, json, or md" } },
       { status: 400 },
     );
   }
@@ -27,6 +27,9 @@ export async function GET(req: NextRequest) {
       JSON.stringify({ total, exported: runs.length, truncated: runs.length < total, runs }, null, 2),
       { status: 200, headers },
     );
+  }
+  if (format === "md") {
+    return new NextResponse(runsToMarkdown(runs), { status: 200, headers });
   }
   return new NextResponse(runsToCSV(runs), { status: 200, headers });
 }

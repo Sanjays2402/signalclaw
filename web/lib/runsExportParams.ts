@@ -3,14 +3,16 @@
 // Both routes must honor the same filters as /api/runs (q, regime, ticker,\n// tag, pinned). Centralizing the parsing here keeps the two routes in sync\n// and lets the parsing be unit-tested without booting Next.
 import type { QueryOpts } from "./runStore";
 
-export type ExportFormat = "csv" | "json";
+export type ExportFormat = "csv" | "json" | "md";
 
 export const EXPORT_MAX_LIMIT = 200;
 export const EXPORT_DEFAULT_LIMIT = 200;
 
 export function parseExportFormat(raw: string | null | undefined): ExportFormat | null {
   const f = (raw ?? "csv").toLowerCase();
-  return f === "csv" || f === "json" ? f : null;
+  if (f === "csv" || f === "json" || f === "md") return f;
+  if (f === "markdown") return "md";
+  return null;
 }
 
 export function parseExportLimit(raw: string | null | undefined): number {
@@ -48,9 +50,13 @@ export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFil
 
 export function exportHeaders(total: number, exported: number, format: ExportFormat): Record<string, string> {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-  const ext = format === "json" ? "json" : "csv";
+  const ext = format === "json" ? "json" : format === "md" ? "md" : "csv";
   const contentType =
-    format === "json" ? "application/json; charset=utf-8" : "text/csv; charset=utf-8";
+    format === "json"
+      ? "application/json; charset=utf-8"
+      : format === "md"
+        ? "text/markdown; charset=utf-8"
+        : "text/csv; charset=utf-8";
   return {
     "x-total-count": String(total),
     "x-exported-count": String(exported),

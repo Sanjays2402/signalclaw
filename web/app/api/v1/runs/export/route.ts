@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticate, extractKey } from "@/lib/keyStore";
 import { enforceRateLimit } from "@/lib/v1Guard";
 import { recordAuditEvent } from "@/lib/auditStore";
-import { queryRuns, runsToCSV } from "@/lib/runStore";
+import { queryRuns, runsToCSV, runsToMarkdown } from "@/lib/runStore";
 import { ownerFilterForKey } from "@/lib/runAcl";
 import { parseExportFormat, parseExportQuery, exportHeaders } from "@/lib/runsExportParams";
 
@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const format = parseExportFormat(sp.get("format"));
   if (!format) {
-    return err(400, "bad_format", "format must be csv or json");
+    return err(400, "bad_format", "format must be csv, json, or md");
   }
 
   const { runs, total } = await queryRuns({
@@ -47,6 +47,9 @@ export async function GET(req: NextRequest) {
       JSON.stringify({ total, exported: runs.length, truncated: runs.length < total, runs }, null, 2),
       { status: 200, headers },
     );
+  }
+  if (format === "md") {
+    return new NextResponse(runsToMarkdown(runs), { status: 200, headers });
   }
   return new NextResponse(runsToCSV(runs), { status: 200, headers });
 
