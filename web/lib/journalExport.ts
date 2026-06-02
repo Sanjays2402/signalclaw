@@ -43,6 +43,43 @@ export function entriesToJSON(entries: JournalEntryLite[]): string {
   return JSON.stringify(payload, null, 2) + "\n";
 }
 
+export type JournalFilter = {
+  /** Free text. Matches trade_id, thesis, exit_reason, or any tag. Case insensitive. */
+  query?: string;
+  /** Optional exact-match conviction (1..5). Anything else means no conviction filter. */
+  conviction?: number | null;
+};
+
+/**
+ * Pure filter over journal entries. Empty / missing filter returns the input as-is.
+ * Used by /journal so the visible list and export buttons stay in sync.
+ */
+export function filterEntries(
+  entries: JournalEntryLite[],
+  filter: JournalFilter,
+): JournalEntryLite[] {
+  const q = (filter.query ?? "").trim().toLowerCase();
+  const conv =
+    typeof filter.conviction === "number" &&
+    Number.isFinite(filter.conviction) &&
+    filter.conviction >= 1 &&
+    filter.conviction <= 5
+      ? filter.conviction
+      : null;
+  if (!q && conv === null) return entries;
+  return entries.filter((e) => {
+    if (conv !== null && e.conviction !== conv) return false;
+    if (!q) return true;
+    if ((e.trade_id ?? "").toLowerCase().includes(q)) return true;
+    if ((e.thesis ?? "").toLowerCase().includes(q)) return true;
+    if ((e.exit_reason ?? "").toLowerCase().includes(q)) return true;
+    for (const t of e.tags ?? []) {
+      if (t.toLowerCase().includes(q)) return true;
+    }
+    return false;
+  });
+}
+
 export function exportFilename(ext: "csv" | "json"): string {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   return `signalclaw-journal-${stamp}.${ext}`;

@@ -61,3 +61,34 @@ test("exportFilename has expected shape", () => {
   const j = mod.exportFilename("json");
   assert.ok(j.endsWith(".json"));
 });
+
+test("filterEntries returns input as-is for empty filter", () => {
+  assert.deepEqual(mod.filterEntries(entries, {}), entries);
+  assert.deepEqual(mod.filterEntries(entries, { query: "", conviction: null }), entries);
+});
+
+test("filterEntries query matches trade_id, thesis, tags, exit_reason; case insensitive", () => {
+  assert.deepEqual(mod.filterEntries(entries, { query: "BREAKOUT" }).map((e) => e.trade_id), ["t1"]);
+  assert.deepEqual(mod.filterEntries(entries, { query: "pairs" }).map((e) => e.trade_id), ["t2,with comma"]);
+  assert.deepEqual(mod.filterEntries(entries, { query: "stopped" }).map((e) => e.trade_id), ["t2,with comma"]);
+  assert.deepEqual(mod.filterEntries(entries, { query: "t1" }).map((e) => e.trade_id), ["t1"]);
+  assert.deepEqual(mod.filterEntries(entries, { query: "no-such-token" }), []);
+});
+
+test("filterEntries conviction filter requires exact match in 1..5", () => {
+  assert.deepEqual(mod.filterEntries(entries, { conviction: 4 }).map((e) => e.trade_id), ["t1"]);
+  assert.deepEqual(mod.filterEntries(entries, { conviction: 2 }).map((e) => e.trade_id), ["t2,with comma"]);
+  assert.deepEqual(mod.filterEntries(entries, { conviction: 99 }), entries);
+  assert.deepEqual(mod.filterEntries(entries, { conviction: 0 }), entries);
+});
+
+test("filterEntries combines query and conviction with AND semantics", () => {
+  assert.deepEqual(
+    mod.filterEntries(entries, { query: "breakout", conviction: 4 }).map((e) => e.trade_id),
+    ["t1"],
+  );
+  assert.deepEqual(
+    mod.filterEntries(entries, { query: "breakout", conviction: 2 }),
+    [],
+  );
+});

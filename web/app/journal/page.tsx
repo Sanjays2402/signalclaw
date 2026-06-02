@@ -1,11 +1,11 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type JournalEntry, type JournalEntryIn } from "@/lib/api";
-import { Notebook, Plus, Trash, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
-import { entriesToCSV, entriesToJSON, exportFilename } from "@/lib/journalExport";
+import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass } from "@phosphor-icons/react/dist/ssr";
+import { entriesToCSV, entriesToJSON, exportFilename, filterEntries } from "@/lib/journalExport";
 
 type ConvictionStats = {
   buckets: { conviction: number; n_trades: number; realized_pnl: number; avg_realized_pnl: number; win_rate: number }[];
@@ -24,6 +24,17 @@ function Journal() {
   const stats = useSWR<ConvictionStats>("/journal/stats/conviction", swrFetcher);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [convFilter, setConvFilter] = useState<"" | "1" | "2" | "3" | "4" | "5">("");
+
+  const allEntries = list.data?.entries ?? [];
+  const filtered = useMemo(
+    () => filterEntries(allEntries, {
+      query,
+      conviction: convFilter === "" ? null : parseInt(convFilter, 10),
+    }),
+    [allEntries, query, convFilter],
+  );
 
   async function refresh() {
     await Promise.all([mutate("/journal"), mutate("/journal/stats/conviction")]);
@@ -61,7 +72,7 @@ function Journal() {
           </h1>
           <p className="muted text-xs">Thesis, conviction, and tags per trade.</p>
         </div>
-        <ExportButtons entries={list.data?.entries ?? []} />
+        <ExportButtons entries={filtered} />
       </header>
 
       <ConvictionStatsRow s={stats.data} err={stats.error} />
@@ -70,11 +81,50 @@ function Journal() {
       <Card title="Entries">
         {list.error ? <ErrorBox err={list.error} /> :
           !list.data ? <Loading /> :
-            list.data.entries.length === 0 ? (
+            allEntries.length === 0 ? (
               <Empty title="No journal entries yet" hint="Log your thesis on each trade to grade your edge." />
             ) : (
-              <ul className="divide-y divide-[var(--border)]">
-                {list.data.entries.map((e) => (
+              <>
+                <div className="flex items-center gap-2 flex-wrap pb-3 mb-3 border-b border-[var(--border)]">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <MagnifyingGlass weight="duotone" size={14} className="absolute left-2 top-1/2 -translate-y-1/2 opacity-60 pointer-events-none" />
+                    <Input
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Search trade id, thesis, tags, exit reason"
+                      className="pl-7"
+                      data-testid="journal-filter-query"
+                    />
+                  </div>
+                  <Select
+                    value={convFilter}
+                    onChange={(e) => setConvFilter(e.target.value as typeof convFilter)}
+                    data-testid="journal-filter-conviction"
+                    title="Filter by conviction"
+                  >
+                    <option value="">All conviction</option>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <option key={n} value={String(n)}>Conviction {n}</option>
+                    ))}
+                  </Select>
+                  <span className="muted text-xs mono" data-testid="journal-filter-count">
+                    {filtered.length}/{allEntries.length}
+                  </span>
+                  {(query || convFilter) && (
+                    <button
+                      type="button"
+                      className="text-[10px] uppercase tracking-widest mono px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)]"
+                      onClick={() => { setQuery(""); setConvFilter(""); }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {filtered.length === 0 ? (
+                  <Empty title="No entries match" hint="Try clearing the filter or widening your search." />
+                ) : (
+                <ul className="divide-y divide-[var(--border)]">
+                {filtered.map((e) => (
                   <li key={e.trade_id} className="py-3 flex items-start gap-3">
                     <div className="shrink-0 w-24">
                       <div className="mono text-sm">{e.trade_id}</div>
@@ -96,6 +146,8 @@ function Journal() {
                   </li>
                 ))}
               </ul>
+                )}
+              </>
             )}
       </Card>
     </div>
