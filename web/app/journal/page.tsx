@@ -1,11 +1,11 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type JournalEntry, type JournalEntryIn } from "@/lib/api";
 import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass } from "@phosphor-icons/react/dist/ssr";
-import { entriesToCSV, entriesToJSON, exportFilename, filterEntries, collectTags } from "@/lib/journalExport";
+import { entriesToCSV, entriesToJSON, exportFilename, filterEntries, collectTags, parseJournalUrlState, serializeJournalUrlState } from "@/lib/journalExport";
 
 type ConvictionStats = {
   buckets: { conviction: number; n_trades: number; realized_pnl: number; avg_realized_pnl: number; win_rate: number }[];
@@ -27,6 +27,28 @@ function Journal() {
   const [query, setQuery] = useState("");
   const [convFilter, setConvFilter] = useState<"" | "1" | "2" | "3" | "4" | "5">("");
   const [tagFilter, setTagFilter] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+
+  // Hydrate filters from the URL once so /journal?tag=earnings&conviction=4
+  // works as a deep link from elsewhere in the app or a bookmark.
+  useEffect(() => {
+    const s = parseJournalUrlState(window.location.search);
+    if (s.query) setQuery(s.query);
+    if (s.conviction) setConvFilter(s.conviction);
+    if (s.tag) setTagFilter(s.tag);
+    setHydrated(true);
+  }, []);
+
+  // After hydration, mirror filters back to the address bar so the current
+  // view is shareable by copying the URL. replaceState avoids polluting
+  // history on each keystroke and avoids a server re-render.
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeJournalUrlState({ query, conviction: convFilter, tag: tagFilter });
+    const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    const current = window.location.pathname + window.location.search;
+    if (next !== current) window.history.replaceState(null, "", next);
+  }, [hydrated, query, convFilter, tagFilter]);
 
   const allEntries = list.data?.entries ?? [];
   const tagOptions = useMemo(() => collectTags(allEntries), [allEntries]);

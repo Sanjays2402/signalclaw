@@ -43,6 +43,37 @@ export function entriesToJSON(entries: JournalEntryLite[]): string {
   return JSON.stringify(payload, null, 2) + "\n";
 }
 
+/**
+ * Pure URL <-> filter state helpers for /journal. Used so the address bar
+ * mirrors active filters (shareable links) and reloads restore the view.
+ */
+export type JournalUrlState = {
+  query: string;
+  conviction: "" | "1" | "2" | "3" | "4" | "5";
+  tag: string;
+};
+
+export function parseJournalUrlState(
+  search: string | URLSearchParams,
+): JournalUrlState {
+  const sp = typeof search === "string" ? new URLSearchParams(search) : search;
+  const q = (sp.get("q") ?? "").slice(0, 200);
+  const rawConv = sp.get("conviction") ?? "";
+  const conv: JournalUrlState["conviction"] = /^[1-5]$/.test(rawConv)
+    ? (rawConv as JournalUrlState["conviction"])
+    : "";
+  const tag = (sp.get("tag") ?? "").slice(0, 64);
+  return { query: q, conviction: conv, tag };
+}
+
+export function serializeJournalUrlState(state: JournalUrlState): string {
+  const sp = new URLSearchParams();
+  if (state.query) sp.set("q", state.query);
+  if (state.conviction) sp.set("conviction", state.conviction);
+  if (state.tag) sp.set("tag", state.tag);
+  return sp.toString();
+}
+
 export type JournalFilter = {
   /** Free text. Matches trade_id, thesis, exit_reason, or any tag. Case insensitive. */
   query?: string;

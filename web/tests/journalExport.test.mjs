@@ -125,3 +125,37 @@ test("collectTags returns sorted, deduped, case-insensitive union", () => {
   assert.deepEqual(mod.collectTags(entriesWithDupes), ["Breakout", "earnings", "pairs", "zeta"]);
   assert.deepEqual(mod.collectTags([]), []);
 });
+
+test("parseJournalUrlState pulls q, conviction, tag from URL search", () => {
+  const s = mod.parseJournalUrlState("?q=foo&conviction=4&tag=earnings");
+  assert.deepEqual(s, { query: "foo", conviction: "4", tag: "earnings" });
+});
+
+test("parseJournalUrlState ignores invalid conviction and missing params", () => {
+  assert.deepEqual(mod.parseJournalUrlState(""), { query: "", conviction: "", tag: "" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=9"), { query: "", conviction: "", tag: "" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=abc"), { query: "", conviction: "", tag: "" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=0"), { query: "", conviction: "", tag: "" });
+});
+
+test("parseJournalUrlState accepts URLSearchParams and clamps lengths", () => {
+  const longQ = "x".repeat(500);
+  const longTag = "y".repeat(200);
+  const sp = new URLSearchParams();
+  sp.set("q", longQ);
+  sp.set("tag", longTag);
+  const s = mod.parseJournalUrlState(sp);
+  assert.equal(s.query.length, 200);
+  assert.equal(s.tag.length, 64);
+});
+
+test("serializeJournalUrlState skips empty fields and roundtrips", () => {
+  assert.equal(mod.serializeJournalUrlState({ query: "", conviction: "", tag: "" }), "");
+  assert.equal(
+    mod.serializeJournalUrlState({ query: "foo", conviction: "3", tag: "ai" }),
+    "q=foo&conviction=3&tag=ai",
+  );
+  const state = { query: "foo bar", conviction: "5", tag: "earnings" };
+  const round = mod.parseJournalUrlState(mod.serializeJournalUrlState(state));
+  assert.deepEqual(round, state);
+});
