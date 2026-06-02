@@ -5,7 +5,7 @@ import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type JournalEntry, type JournalEntryIn } from "@/lib/api";
 import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass, PencilSimple, FloppyDisk, X } from "@phosphor-icons/react/dist/ssr";
-import { entriesToCSV, entriesToJSON, entriesToMarkdown, exportFilename, filterEntries, collectTags, parseJournalUrlState, serializeJournalUrlState } from "@/lib/journalExport";
+import { entriesToCSV, entriesToJSON, entriesToMarkdown, exportFilename, filterEntries, collectTags, parseJournalUrlState, serializeJournalUrlState, sortEntries, JOURNAL_SORT_DEFAULT, type JournalSort } from "@/lib/journalExport";
 
 type ConvictionStats = {
   buckets: { conviction: number; n_trades: number; realized_pnl: number; avg_realized_pnl: number; win_rate: number }[];
@@ -30,6 +30,7 @@ function Journal() {
   const [tagFilter, setTagFilter] = useState("");
   const [sinceFilter, setSinceFilter] = useState("");
   const [untilFilter, setUntilFilter] = useState("");
+  const [sort, setSort] = useState<JournalSort>(JOURNAL_SORT_DEFAULT);
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate filters from the URL once so /journal?tag=earnings&conviction=4
@@ -41,6 +42,7 @@ function Journal() {
     if (s.tag) setTagFilter(s.tag);
     if (s.since) setSinceFilter(s.since);
     if (s.until) setUntilFilter(s.until);
+    if (s.sort) setSort(s.sort);
     setHydrated(true);
   }, []);
 
@@ -49,23 +51,26 @@ function Journal() {
   // history on each keystroke and avoids a server re-render.
   useEffect(() => {
     if (!hydrated) return;
-    const qs = serializeJournalUrlState({ query, conviction: convFilter, tag: tagFilter, since: sinceFilter, until: untilFilter });
+    const qs = serializeJournalUrlState({ query, conviction: convFilter, tag: tagFilter, since: sinceFilter, until: untilFilter, sort });
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     const current = window.location.pathname + window.location.search;
     if (next !== current) window.history.replaceState(null, "", next);
-  }, [hydrated, query, convFilter, tagFilter, sinceFilter, untilFilter]);
+  }, [hydrated, query, convFilter, tagFilter, sinceFilter, untilFilter, sort]);
 
   const allEntries = list.data?.entries ?? [];
   const tagOptions = useMemo(() => collectTags(allEntries), [allEntries]);
   const filtered = useMemo(
-    () => filterEntries(allEntries, {
-      query,
-      conviction: convFilter === "" ? null : parseInt(convFilter, 10),
-      tag: tagFilter || null,
-      since: sinceFilter || null,
-      until: untilFilter || null,
-    }),
-    [allEntries, query, convFilter, tagFilter, sinceFilter, untilFilter],
+    () => sortEntries(
+      filterEntries(allEntries, {
+        query,
+        conviction: convFilter === "" ? null : parseInt(convFilter, 10),
+        tag: tagFilter || null,
+        since: sinceFilter || null,
+        until: untilFilter || null,
+      }),
+      sort,
+    ),
+    [allEntries, query, convFilter, tagFilter, sinceFilter, untilFilter, sort],
   );
 
   async function refresh() {
@@ -183,14 +188,27 @@ function Journal() {
                     data-testid="journal-filter-until"
                     className="w-auto"
                   />
+                  <Select
+                    value={sort}
+                    onChange={(e) => setSort(e.target.value as JournalSort)}
+                    data-testid="journal-sort"
+                    title="Sort entries"
+                    className="w-auto"
+                  >
+                    <option value="updated_desc">Newest first</option>
+                    <option value="updated_asc">Oldest first</option>
+                    <option value="conviction_desc">Conviction high to low</option>
+                    <option value="conviction_asc">Conviction low to high</option>
+                    <option value="trade_id_asc">Trade ID A-Z</option>
+                  </Select>
                   <span className="muted text-xs mono" data-testid="journal-filter-count">
                     {filtered.length}/{allEntries.length}
                   </span>
-                  {(query || convFilter || tagFilter || sinceFilter || untilFilter) && (
+                  {(query || convFilter || tagFilter || sinceFilter || untilFilter || sort !== JOURNAL_SORT_DEFAULT) && (
                     <button
                       type="button"
                       className="text-[10px] uppercase tracking-widest mono px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)]"
-                      onClick={() => { setQuery(""); setConvFilter(""); setTagFilter(""); setSinceFilter(""); setUntilFilter(""); }}
+                      onClick={() => { setQuery(""); setConvFilter(""); setTagFilter(""); setSinceFilter(""); setUntilFilter(""); setSort(JOURNAL_SORT_DEFAULT); }}
                     >
                       Clear
                     </button>

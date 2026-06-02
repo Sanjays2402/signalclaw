@@ -76,6 +76,27 @@ export function entriesToMarkdown(entries: JournalEntryLite[]): string {
  * Pure URL <-> filter state helpers for /journal. Used so the address bar
  * mirrors active filters (shareable links) and reloads restore the view.
  */
+/**
+ * Sort order for the visible journal list. Default is the most recently
+ * updated entry first, matching how the API has historically returned data.
+ */
+export type JournalSort =
+  | "updated_desc"
+  | "updated_asc"
+  | "conviction_desc"
+  | "conviction_asc"
+  | "trade_id_asc";
+
+export const JOURNAL_SORT_DEFAULT: JournalSort = "updated_desc";
+
+const JOURNAL_SORTS: readonly JournalSort[] = [
+  "updated_desc",
+  "updated_asc",
+  "conviction_desc",
+  "conviction_asc",
+  "trade_id_asc",
+];
+
 export type JournalUrlState = {
   query: string;
   conviction: "" | "1" | "2" | "3" | "4" | "5";
@@ -84,6 +105,8 @@ export type JournalUrlState = {
   since: string;
   /** Inclusive upper bound on updated_at, formatted YYYY-MM-DD. Empty means unset. */
   until: string;
+  /** Visible sort order. Defaults to updated_desc when absent or invalid. */
+  sort: JournalSort;
 };
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -106,7 +129,11 @@ export function parseJournalUrlState(
   const tag = (sp.get("tag") ?? "").slice(0, 64);
   const since = normalizeDateParam(sp.get("since"));
   const until = normalizeDateParam(sp.get("until"));
-  return { query: q, conviction: conv, tag, since, until };
+  const rawSort = sp.get("sort") ?? "";
+  const sort: JournalSort = (JOURNAL_SORTS as readonly string[]).includes(rawSort)
+    ? (rawSort as JournalSort)
+    : JOURNAL_SORT_DEFAULT;
+  return { query: q, conviction: conv, tag, since, until, sort };
 }
 
 export function serializeJournalUrlState(state: JournalUrlState): string {
@@ -116,7 +143,43 @@ export function serializeJournalUrlState(state: JournalUrlState): string {
   if (state.tag) sp.set("tag", state.tag);
   if (state.since) sp.set("since", state.since);
   if (state.until) sp.set("until", state.until);
+  if (state.sort && state.sort !== JOURNAL_SORT_DEFAULT) sp.set("sort", state.sort);
   return sp.toString();
+}
+
+/**
+ * Pure stable sort over journal entries. Returns a new array and does not
+ * mutate the input. Ties fall back to trade_id ascending so the order stays
+ * deterministic across renders.
+ */
+export function sortEntries(
+  entries: JournalEntryLite[],
+  sort: JournalSort = JOURNAL_SORT_DEFAULT,
+): JournalEntryLite[] {
+  const out = entries.slice();
+  const byTradeId = (a: JournalEntryLite, b: JournalEntryLite) =>
+    (a.trade_id ?? "").localeCompare(b.trade_id ?? "");
+  const byUpdated = (dir: 1 | -1) => (a: JournalEntryLite, b: JournalEntryLite) => {
+    const av = a.updated_at ?? "";
+    const bv = b.updated_at ?? "";
+    if (av === bv) return byTradeId(a, b);
+    return av < bv ? -dir : dir;
+  };
+  const byConviction = (dir: 1 | -1) => (a: JournalEntryLite, b: JournalEntryLite) => {
+    const av = Number.isFinite(a.conviction) ? a.conviction : -Infinity;
+    const bv = Number.isFinite(b.conviction) ? b.conviction : -Infinity;
+    if (av === bv) return byTradeId(a, b);
+    return av < bv ? -dir : dir;
+  };
+  switch (sort) {
+    case "updated_asc": out.sort(byUpdated(1)); break;
+    case "conviction_desc": out.sort(byConviction(-1)); break;
+    case "conviction_asc": out.sort(byConviction(1)); break;
+    case "trade_id_asc": out.sort(byTradeId); break;
+    case "updated_desc":
+    default: out.sort(byUpdated(-1)); break;
+  }
+  return out;
 }
 
 export type JournalFilter = {

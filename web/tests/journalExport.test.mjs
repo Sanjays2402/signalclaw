@@ -128,14 +128,14 @@ test("collectTags returns sorted, deduped, case-insensitive union", () => {
 
 test("parseJournalUrlState pulls q, conviction, tag from URL search", () => {
   const s = mod.parseJournalUrlState("?q=foo&conviction=4&tag=earnings");
-  assert.deepEqual(s, { query: "foo", conviction: "4", tag: "earnings", since: "", until: "" });
+  assert.deepEqual(s, { query: "foo", conviction: "4", tag: "earnings", since: "", until: "", sort: "updated_desc" });
 });
 
 test("parseJournalUrlState ignores invalid conviction and missing params", () => {
-  assert.deepEqual(mod.parseJournalUrlState(""), { query: "", conviction: "", tag: "", since: "", until: "" });
-  assert.deepEqual(mod.parseJournalUrlState("?conviction=9"), { query: "", conviction: "", tag: "", since: "", until: "" });
-  assert.deepEqual(mod.parseJournalUrlState("?conviction=abc"), { query: "", conviction: "", tag: "", since: "", until: "" });
-  assert.deepEqual(mod.parseJournalUrlState("?conviction=0"), { query: "", conviction: "", tag: "", since: "", until: "" });
+  assert.deepEqual(mod.parseJournalUrlState(""), { query: "", conviction: "", tag: "", since: "", until: "", sort: "updated_desc" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=9"), { query: "", conviction: "", tag: "", since: "", until: "", sort: "updated_desc" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=abc"), { query: "", conviction: "", tag: "", since: "", until: "", sort: "updated_desc" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=0"), { query: "", conviction: "", tag: "", since: "", until: "", sort: "updated_desc" });
 });
 
 test("parseJournalUrlState accepts URLSearchParams and clamps lengths", () => {
@@ -150,12 +150,12 @@ test("parseJournalUrlState accepts URLSearchParams and clamps lengths", () => {
 });
 
 test("serializeJournalUrlState skips empty fields and roundtrips", () => {
-  assert.equal(mod.serializeJournalUrlState({ query: "", conviction: "", tag: "", since: "", until: "" }), "");
+  assert.equal(mod.serializeJournalUrlState({ query: "", conviction: "", tag: "", since: "", until: "", sort: "updated_desc" }), "");
   assert.equal(
-    mod.serializeJournalUrlState({ query: "foo", conviction: "3", tag: "ai", since: "", until: "" }),
+    mod.serializeJournalUrlState({ query: "foo", conviction: "3", tag: "ai", since: "", until: "", sort: "updated_desc" }),
     "q=foo&conviction=3&tag=ai",
   );
-  const state = { query: "foo bar", conviction: "5", tag: "earnings", since: "", until: "" };
+  const state = { query: "foo bar", conviction: "5", tag: "earnings", since: "", until: "", sort: "updated_desc" };
   const round = mod.parseJournalUrlState(mod.serializeJournalUrlState(state));
   assert.deepEqual(round, state);
 });
@@ -217,16 +217,16 @@ test("filterEntries date range filters on updated_at YYYY-MM-DD", () => {
 test("parseJournalUrlState pulls since/until and validates YYYY-MM-DD", () => {
   assert.deepEqual(
     mod.parseJournalUrlState("?since=2025-01-02&until=2025-01-03"),
-    { query: "", conviction: "", tag: "", since: "2025-01-02", until: "2025-01-03" },
+    { query: "", conviction: "", tag: "", since: "2025-01-02", until: "2025-01-03", sort: "updated_desc" },
   );
   assert.deepEqual(
     mod.parseJournalUrlState("?since=bad&until=2025/01/02"),
-    { query: "", conviction: "", tag: "", since: "", until: "" },
+    { query: "", conviction: "", tag: "", since: "", until: "", sort: "updated_desc" },
   );
 });
 
 test("serializeJournalUrlState round-trips since/until", () => {
-  const state = { query: "", conviction: "", tag: "", since: "2025-01-02", until: "2025-01-03" };
+  const state = { query: "", conviction: "", tag: "", since: "2025-01-02", until: "2025-01-03", sort: "updated_desc" };
   assert.equal(
     mod.serializeJournalUrlState(state),
     "since=2025-01-02&until=2025-01-03",
@@ -237,4 +237,51 @@ test("serializeJournalUrlState round-trips since/until", () => {
 test("exportFilename supports md extension", () => {
   const f = mod.exportFilename("md");
   assert.match(f, /^signalclaw-journal-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.md$/);
+});
+
+const sortEntries = [
+  { trade_id: "b", thesis: "", conviction: 3, tags: [], exit_reason: null, created_at: "", updated_at: "2025-01-02T10:00:00Z" },
+  { trade_id: "a", thesis: "", conviction: 5, tags: [], exit_reason: null, created_at: "", updated_at: "2025-01-01T10:00:00Z" },
+  { trade_id: "c", thesis: "", conviction: 1, tags: [], exit_reason: null, created_at: "", updated_at: "2025-01-03T10:00:00Z" },
+];
+
+test("sortEntries default sorts by updated_at descending, stable on tie via trade_id", () => {
+  assert.deepEqual(mod.sortEntries(sortEntries).map((e) => e.trade_id), ["c", "b", "a"]);
+  // Same updated_at falls back to trade_id ascending.
+  const tied = [
+    { ...sortEntries[0], trade_id: "z", updated_at: "2025-01-05T00:00:00Z" },
+    { ...sortEntries[0], trade_id: "m", updated_at: "2025-01-05T00:00:00Z" },
+  ];
+  assert.deepEqual(mod.sortEntries(tied).map((e) => e.trade_id), ["m", "z"]);
+});
+
+test("sortEntries supports updated_asc, conviction_desc/asc, trade_id_asc", () => {
+  assert.deepEqual(mod.sortEntries(sortEntries, "updated_asc").map((e) => e.trade_id), ["a", "b", "c"]);
+  assert.deepEqual(mod.sortEntries(sortEntries, "conviction_desc").map((e) => e.trade_id), ["a", "b", "c"]);
+  assert.deepEqual(mod.sortEntries(sortEntries, "conviction_asc").map((e) => e.trade_id), ["c", "b", "a"]);
+  assert.deepEqual(mod.sortEntries(sortEntries, "trade_id_asc").map((e) => e.trade_id), ["a", "b", "c"]);
+});
+
+test("sortEntries does not mutate the input array", () => {
+  const before = sortEntries.map((e) => e.trade_id);
+  mod.sortEntries(sortEntries, "trade_id_asc");
+  assert.deepEqual(sortEntries.map((e) => e.trade_id), before);
+});
+
+test("parseJournalUrlState reads sort and falls back to updated_desc on unknown", () => {
+  assert.equal(mod.parseJournalUrlState("?sort=conviction_desc").sort, "conviction_desc");
+  assert.equal(mod.parseJournalUrlState("?sort=trade_id_asc").sort, "trade_id_asc");
+  assert.equal(mod.parseJournalUrlState("?sort=bogus").sort, "updated_desc");
+  assert.equal(mod.parseJournalUrlState("").sort, "updated_desc");
+});
+
+test("serializeJournalUrlState omits sort when it is the default", () => {
+  assert.equal(
+    mod.serializeJournalUrlState({ query: "", conviction: "", tag: "", since: "", until: "", sort: "updated_desc" }),
+    "",
+  );
+  assert.equal(
+    mod.serializeJournalUrlState({ query: "", conviction: "", tag: "", since: "", until: "", sort: "conviction_desc" }),
+    "sort=conviction_desc",
+  );
 });
