@@ -1378,6 +1378,14 @@ function Row({
           <DownloadSimple size={11} weight="bold" /> CSV
         </a>
         <a
+          href={`/api/runs/${run.id}/export?format=json`}
+          data-testid="row-export-json"
+          className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1"
+          title="Download JSON, easy to pipe into jq or another tool"
+        >
+          <DownloadSimple size={11} weight="bold" /> JSON
+        </a>
+        <a
           href={`/api/runs/${run.id}/export?format=md`}
           data-testid="row-export-md"
           className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1"
