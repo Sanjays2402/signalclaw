@@ -8,6 +8,7 @@ import {
   ArrowsLeftRight,
   ArrowRight,
   ClockCounterClockwise,
+  DownloadSimple,
   Swap,
 } from "@phosphor-icons/react/dist/ssr";
 
@@ -290,6 +291,20 @@ export default function ComparePage() {
             >
               <ClockCounterClockwise size={12} weight="bold" /> History
             </Link>
+            <a
+              href={`/api/runs/compare/export?a=${encodeURIComponent(cmp.a.id)}&b=${encodeURIComponent(cmp.b.id)}&format=csv`}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
+              title="Download comparison summary as CSV"
+            >
+              <DownloadSimple size={12} weight="bold" /> CSV
+            </a>
+            <a
+              href={`/api/runs/compare/export?a=${encodeURIComponent(cmp.a.id)}&b=${encodeURIComponent(cmp.b.id)}&format=json`}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
+              title="Download comparison summary as JSON"
+            >
+              <DownloadSimple size={12} weight="bold" /> JSON
+            </a>
           </div>
         </>
       )}

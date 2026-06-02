@@ -49,3 +49,76 @@ test("isValidRunId enforces charset and length bounds", () => {
   assert.equal(mod.isValidRunId(null), false);
   assert.equal(mod.isValidRunId(123), false);
 });
+
+const sampleMeta = {
+  a: { id: "run_aaa111", label: "AAPL 200d", ticker: "AAPL", lookback_days: 200, created_at: "2026-05-01T00:00:00.000Z" },
+  b: { id: "run_bbb222", label: "MSFT 200d", ticker: "MSFT", lookback_days: 200, created_at: "2026-05-02T00:00:00.000Z" },
+};
+const sampleSummary = {
+  a: { bars: 200, mix: { bull: 0.5, chop: 0.3, bear: 0.2, crash: 0 }, regime: "bull", confidence: 0.8, pct_change: 0.1 },
+  b: { bars: 180, mix: { bull: 0.2, chop: 0.6, bear: 0.1, crash: 0.1 }, regime: "chop", confidence: 0.6, pct_change: -0.05 },
+  mix_diff: { bull: -0.3, chop: 0.3, bear: -0.1, crash: 0.1 },
+};
+
+test("compareToCSV emits one row per metric with delta column", () => {
+  const csv = mod.compareToCSV(sampleMeta, sampleSummary);
+  const rows = csv.trim().split("\n");
+  // 3 comment/meta lines + header + 4 scalar metrics + 4 mix metrics = 12
+  assert.equal(rows.length, 12);
+  assert.equal(rows[0], "# signalclaw compare export");
+  assert.ok(rows[1].startsWith("# A,run_aaa111,AAPL,"));
+  assert.ok(rows[2].startsWith("# B,run_bbb222,MSFT,"));
+  assert.equal(rows[3], "metric,a,b,delta");
+  assert.equal(rows[4], "bars,200,180,-20");
+  assert.equal(rows[5], "regime,bull,chop,");
+  // confidence row: delta = 0.6 - 0.8 = -0.2 (allow float)
+  const conf = rows[6].split(",");
+  assert.equal(conf[0], "confidence");
+  assert.ok(Math.abs(Number(conf[3]) - -0.2) < 1e-9);
+  // mix_bull delta = -0.3
+  const bull = rows.find((r) => r.startsWith("mix_bull,"));
+  assert.ok(bull);
+  assert.ok(Math.abs(Number(bull.split(",")[3]) - -0.3) < 1e-9);
+});
+
+test("compareToCSV leaves delta empty when one side is null", () => {
+  const s = {
+    a: { ...sampleSummary.a, confidence: null, pct_change: null },
+    b: sampleSummary.b,
+    mix_diff: sampleSummary.mix_diff,
+  };
+  const csv = mod.compareToCSV(sampleMeta, s);
+  const rows = csv.trim().split("\n");
+  const conf = rows.find((r) => r.startsWith("confidence,")).split(",");
+  assert.equal(conf[1], "");
+  assert.equal(conf[3], "");
+  const pct = rows.find((r) => r.startsWith("pct_change,")).split(",");
+  assert.equal(pct[1], "");
+  assert.equal(pct[3], "");
+});
+
+test("compareToCSV escapes labels with commas and quotes", () => {
+  const meta = {
+    a: { ...sampleMeta.a, label: 'AAPL, "long" 200d' },
+    b: sampleMeta.b,
+  };
+  const csv = mod.compareToCSV(meta, sampleSummary);
+  // The escaped label is inside the A comment line. Confirm both the wrapping
+  // quotes and the doubled inner quotes survived.
+  assert.ok(csv.includes('"AAPL, ""long"" 200d"'));
+});
+
+test("compareExportFilename strips unsafe chars and pins extension", () => {
+  const meta = {
+    a: { ...sampleMeta.a, ticker: "BRK.B" },
+    b: { ...sampleMeta.b, ticker: "A/B" },
+  };
+  assert.equal(
+    mod.compareExportFilename(meta, "csv"),
+    "signalclaw-compare-BRK.B-vs-A_B-run_aaa111-run_bbb222.csv",
+  );
+  assert.equal(
+    mod.compareExportFilename(meta, "json"),
+    "signalclaw-compare-BRK.B-vs-A_B-run_aaa111-run_bbb222.json",
+  );
+});
