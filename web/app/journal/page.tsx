@@ -5,7 +5,7 @@ import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type JournalEntry, type JournalEntryIn } from "@/lib/api";
 import { Notebook, Plus, Trash, DownloadSimple, MagnifyingGlass } from "@phosphor-icons/react/dist/ssr";
-import { entriesToCSV, entriesToJSON, exportFilename, filterEntries, collectTags, parseJournalUrlState, serializeJournalUrlState } from "@/lib/journalExport";
+import { entriesToCSV, entriesToJSON, entriesToMarkdown, exportFilename, filterEntries, collectTags, parseJournalUrlState, serializeJournalUrlState } from "@/lib/journalExport";
 
 type ConvictionStats = {
   buckets: { conviction: number; n_trades: number; realized_pnl: number; avg_realized_pnl: number; win_rate: number }[];
@@ -204,9 +204,15 @@ function Journal() {
 
 function ExportButtons({ entries }: { entries: JournalEntry[] }) {
   const disabled = entries.length === 0;
-  function download(ext: "csv" | "json") {
-    const body = ext === "csv" ? entriesToCSV(entries) : entriesToJSON(entries);
-    const mime = ext === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8";
+  function download(ext: "csv" | "json" | "md") {
+    const body =
+      ext === "csv" ? entriesToCSV(entries) :
+      ext === "json" ? entriesToJSON(entries) :
+      entriesToMarkdown(entries);
+    const mime =
+      ext === "csv" ? "text/csv;charset=utf-8" :
+      ext === "json" ? "application/json;charset=utf-8" :
+      "text/markdown;charset=utf-8";
     const blob = new Blob([body], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -241,6 +247,16 @@ function ExportButtons({ entries }: { entries: JournalEntry[] }) {
         data-testid="journal-export-json"
       >
         <DownloadSimple weight="duotone" size={11} /> JSON
+      </button>
+      <button
+        type="button"
+        onClick={() => download("md")}
+        disabled={disabled}
+        className={cls}
+        title="Download journal entries as Markdown"
+        data-testid="journal-export-md"
+      >
+        <DownloadSimple weight="duotone" size={11} /> MD
       </button>
     </div>
   );

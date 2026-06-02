@@ -159,3 +159,33 @@ test("serializeJournalUrlState skips empty fields and roundtrips", () => {
   const round = mod.parseJournalUrlState(mod.serializeJournalUrlState(state));
   assert.deepEqual(round, state);
 });
+
+test("entriesToMarkdown renders header + GFM table row per entry, escaping pipes and newlines", () => {
+  const md = mod.entriesToMarkdown(entries);
+  assert.match(md, /^# SignalClaw journal\n/);
+  assert.match(md, /Exported \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z \u00b7 2 entries/);
+  assert.match(md, /\| Trade ID \| Updated \| Conviction \| Exit reason \| Tags \| Thesis \|/);
+  assert.match(md, /\| --- \| --- \| --- \| --- \| --- \| --- \|/);
+  assert.match(md, /\| t1 \| 2025-01-02 \| 4\/5 \|  \| breakout, earnings \| breakout above prior pivot \|/);
+  // Newlines collapse to space; quoted text and commas are fine in MD; no raw \n inside row
+  assert.match(md, /why, "this trade" newline test/);
+  // Pipes in cell text are escaped
+  const piped = mod.entriesToMarkdown([
+    { trade_id: "p1", thesis: "a|b", conviction: 3, tags: ["x|y"], exit_reason: null, created_at: "", updated_at: "2025-01-04T00:00:00Z" },
+  ]);
+  assert.match(piped, /a\\\|b/);
+  assert.match(piped, /x\\\|y/);
+});
+
+test("entriesToMarkdown handles empty list with a placeholder", () => {
+  const md = mod.entriesToMarkdown([]);
+  assert.match(md, /^# SignalClaw journal\n/);
+  assert.match(md, /\u00b7 0 entries/);
+  assert.match(md, /_No journal entries yet\._/);
+  assert.ok(!md.includes("| Trade ID |"));
+});
+
+test("exportFilename supports md extension", () => {
+  const f = mod.exportFilename("md");
+  assert.match(f, /^signalclaw-journal-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.md$/);
+});

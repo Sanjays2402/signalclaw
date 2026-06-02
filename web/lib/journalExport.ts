@@ -43,6 +43,35 @@ export function entriesToJSON(entries: JournalEntryLite[]): string {
   return JSON.stringify(payload, null, 2) + "\n";
 }
 
+// Markdown export mirrors the CSV columns as a GitHub-flavored table so the
+// journal can be pasted into a trade review doc, an issue, or a chat the same
+// way /watchlist and /history already support.
+export function entriesToMarkdown(entries: JournalEntryLite[]): string {
+  const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const head = [
+    `# SignalClaw journal`,
+    ``,
+    `Exported ${stamp} \u00b7 ${entries.length} entr${entries.length === 1 ? "y" : "ies"}`,
+    ``,
+  ];
+  if (entries.length === 0) {
+    return head.concat([`_No journal entries yet._`, ``]).join("\n");
+  }
+  const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  const table = [
+    `| Trade ID | Updated | Conviction | Exit reason | Tags | Thesis |`,
+    `| --- | --- | --- | --- | --- | --- |`,
+  ];
+  for (const e of entries) {
+    const updated = (e.updated_at || "").slice(0, 10);
+    const tags = (e.tags ?? []).join(", ");
+    table.push(
+      `| ${esc(e.trade_id ?? "")} | ${updated} | ${e.conviction ?? ""}/5 | ${esc(e.exit_reason ?? "")} | ${esc(tags)} | ${esc(e.thesis ?? "")} |`,
+    );
+  }
+  return head.concat(table, [""]).join("\n");
+}
+
 /**
  * Pure URL <-> filter state helpers for /journal. Used so the address bar
  * mirrors active filters (shareable links) and reloads restore the view.
@@ -134,7 +163,7 @@ export function collectTags(entries: JournalEntryLite[]): string[] {
   return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
 }
 
-export function exportFilename(ext: "csv" | "json"): string {
+export function exportFilename(ext: "csv" | "json" | "md"): string {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   return `signalclaw-journal-${stamp}.${ext}`;
 }
