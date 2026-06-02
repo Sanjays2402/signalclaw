@@ -16,7 +16,7 @@ import {
   fmtUsd,
 } from "@/components/ui";
 import { api, swrFetcher, type Alert, type AlertIn, type AlertHistory } from "@/lib/api";
-import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple, Power } from "@phosphor-icons/react/dist/ssr";
 
 const CONDITIONS = [
   { v: "price_above", l: "price >" },
@@ -56,6 +56,16 @@ function Alerts() {
     setBusy(id);
     try {
       await api(`/api/alerts/${id}`, { method: "DELETE" });
+      await mutate("/api/alerts");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onToggle(id: string, enabled: boolean) {
+    setBusy(id);
+    try {
+      await api(`/api/alerts/${id}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
       await mutate("/api/alerts");
     } finally {
       setBusy(null);
@@ -147,7 +157,21 @@ function Alerts() {
                         {a.note || ""}
                       </td>
                       <td>
-                        <Badge tone={a.enabled ? "up" : "neutral"}>{a.enabled ? "on" : "off"}</Badge>
+                        <button
+                          type="button"
+                          onClick={() => onToggle(a.id, !a.enabled)}
+                          disabled={busy === a.id}
+                          title={a.enabled ? "Disable this alert" : "Enable this alert"}
+                          aria-label={a.enabled ? "Disable alert" : "Enable alert"}
+                          aria-pressed={a.enabled}
+                          data-testid="alert-toggle"
+                          className="appearance-none bg-transparent p-0 border-0 cursor-pointer disabled:opacity-50"
+                        >
+                          <Badge tone={a.enabled ? "up" : "neutral"}>
+                            <Power weight="duotone" size={10} className="inline mr-0.5" />
+                            {a.enabled ? "on" : "off"}
+                          </Badge>
+                        </button>
                       </td>
                       <td>
                         <Button

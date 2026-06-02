@@ -204,6 +204,23 @@ export async function createAlert(
   return { ok: true, alert };
 }
 
+export async function setAlertEnabled(
+  id: string,
+  enabled: boolean,
+  ownerId?: string | null,
+): Promise<Alert | null> {
+  const oid = normalizeOwnerId(ownerId);
+  const store = await readStore();
+  const bucket = store.tenants[oid];
+  if (!bucket) return null;
+  const alert = bucket.alerts.find((a) => a.id === id);
+  if (!alert) return null;
+  if (alert.enabled === enabled) return alert;
+  alert.enabled = enabled;
+  await writeStore(store);
+  return alert;
+}
+
 export async function deleteAlert(id: string, ownerId?: string | null): Promise<boolean> {
   const oid = normalizeOwnerId(ownerId);
   const store = await readStore();

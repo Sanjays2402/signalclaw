@@ -101,3 +101,47 @@ test("deleteAlert removes by id", async () => {
   const again = await store.deleteAlert(c.alert.id);
   assert.equal(again, false);
 });
+
+test("setAlertEnabled toggles flag and returns updated alert", async () => {
+  await fs.rm(path.join(process.cwd(), ".data", "alerts.json"), { force: true });
+
+  const c = await store.createAlert({ ticker: "META", condition: "price_above", value: 500 });
+  assert.equal(c.ok, true);
+  assert.equal(c.alert.enabled, true);
+
+  const off = await store.setAlertEnabled(c.alert.id, false);
+  assert.ok(off);
+  assert.equal(off.enabled, false);
+
+  const list = await store.listAlerts();
+  assert.equal(list.find((a) => a.id === c.alert.id).enabled, false);
+
+  const on = await store.setAlertEnabled(c.alert.id, true);
+  assert.ok(on);
+  assert.equal(on.enabled, true);
+
+  // No-op when already in desired state still returns the alert.
+  const same = await store.setAlertEnabled(c.alert.id, true);
+  assert.ok(same);
+  assert.equal(same.enabled, true);
+
+  // Unknown id returns null.
+  const miss = await store.setAlertEnabled("nope-not-real", false);
+  assert.equal(miss, null);
+});
+
+test("setAlertEnabled disabled alert is skipped by runCheck", async () => {
+  await fs.rm(path.join(process.cwd(), ".data", "alerts.json"), { force: true });
+
+  const c = await store.createAlert({ ticker: "AMZN", condition: "price_above", value: 100, cooldown_hours: 0 });
+  assert.equal(c.ok, true);
+  await store.setAlertEnabled(c.alert.id, false);
+
+  const r = await store.runCheck({ AMZN: 200 });
+  assert.equal(r.hits.length, 0);
+
+  await store.setAlertEnabled(c.alert.id, true);
+  const r2 = await store.runCheck({ AMZN: 200 });
+  assert.equal(r2.hits.length, 1);
+  assert.equal(r2.hits[0].ticker, "AMZN");
+});
