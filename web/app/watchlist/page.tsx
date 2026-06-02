@@ -236,6 +236,13 @@ function WL() {
             <DownloadSimple weight="duotone" size={14} /> Export CSV
           </a>
           <a
+            href="/api/watchlist?format=json"
+            className="text-xs inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+            title="Download watchlist as JSON"
+          >
+            <DownloadSimple weight="duotone" size={14} /> Export JSON
+          </a>
+          <a
             href="/api/watchlist?format=md"
             className="text-xs inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
             title="Download watchlist as a Markdown table"

@@ -5,6 +5,7 @@ import {
   normalizeTicker,
   normalizeNote,
   entriesToCSV,
+  entriesToJSON,
   entriesToMarkdown,
   MAX_TICKERS,
 } from "@/lib/watchlistStore";
@@ -28,6 +29,16 @@ export async function GET(req: NextRequest) {
       headers: {
         "content-type": "text/csv; charset=utf-8",
         "content-disposition": `attachment; filename="signalclaw-watchlist-${stamp}.csv"`,
+      },
+    });
+  }
+  if (fmt === "json") {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    return new NextResponse(entriesToJSON(entries), {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "content-disposition": `attachment; filename="signalclaw-watchlist-${stamp}.json"`,
       },
     });
   }

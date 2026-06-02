@@ -101,6 +101,31 @@ test("bad ticker throws on add", async () => {
   await assert.rejects(() => store.addTicker("1bad"));
 });
 
+test("entriesToJSON wraps entries with exported_at and count", () => {
+  const out = store.entriesToJSON([
+    {
+      ticker: "AAPL",
+      added_at: "2025-01-01T00:00:00Z",
+      note: "earnings",
+      target_high: 200,
+      target_low: 150,
+      last_cross: null,
+    },
+  ]);
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.count, 1);
+  assert.equal(parsed.entries[0].ticker, "AAPL");
+  assert.equal(parsed.entries[0].target_low, 150);
+  assert.match(parsed.exported_at, /^\d{4}-\d{2}-\d{2}T/);
+  // Pretty-printed and newline-terminated for diff friendliness.
+  assert.ok(out.endsWith("\n"));
+  assert.ok(out.includes("\n  "));
+
+  const empty = JSON.parse(store.entriesToJSON([]));
+  assert.equal(empty.count, 0);
+  assert.deepEqual(empty.entries, []);
+});
+
 test("entriesToMarkdown emits table with header, escapes pipes, and handles empty", () => {
   const empty = store.entriesToMarkdown([]);
   assert.match(empty, /# SignalClaw watchlist/);

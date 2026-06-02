@@ -172,6 +172,19 @@ export async function updateNote(ticker: string, note: string | null): Promise<W
   return entry;
 }
 
+// JSON export bundles the entries with an exported_at stamp and a count so
+// downstream tools can tell when the snapshot was taken without parsing
+// filenames. Shape is intentionally distinct from the back-compat list
+// response (which still wraps tickers + entries for legacy clients).
+export function entriesToJSON(entries: WatchlistEntry[]): string {
+  const payload = {
+    exported_at: new Date().toISOString(),
+    count: entries.length,
+    entries,
+  };
+  return JSON.stringify(payload, null, 2) + "\n";
+}
+
 export function entriesToCSV(entries: WatchlistEntry[]): string {
   const header = "ticker,added_at,note,target_low,target_high";
   const lines = entries.map((e) => {
