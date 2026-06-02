@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
 import { api } from "@/lib/api";
@@ -16,6 +16,7 @@ import {
   ArrowsClockwise,
   TrendUp,
   TrendDown,
+  MagnifyingGlass,
 } from "@phosphor-icons/react/dist/ssr";
 
 type Entry = {
@@ -83,6 +84,7 @@ function WL() {
   const [checks, setChecks] = useState<Record<string, CheckRow>>({});
   const [checkResp, setCheckResp] = useState<CheckResp | null>(null);
   const [checking, setChecking] = useState(false);
+  const [filter, setFilter] = useState("");
 
   const load = async () => {
     setErr(null);
@@ -191,6 +193,20 @@ function WL() {
   const entries = data?.entries ?? null;
   const anyTargets = (entries ?? []).some((e) => e.target_high !== null || e.target_low !== null);
 
+  // Client-side filter matches ticker or note (case-insensitive). The full
+  // list still drives totals and the "Check now" availability so filtering
+  // is purely a view concern.
+  const visibleEntries = useMemo(() => {
+    if (entries == null) return null;
+    const q = filter.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter((e) => {
+      if (e.ticker.toLowerCase().includes(q)) return true;
+      if (e.note && e.note.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }, [entries, filter]);
+
   return (
     <div className="max-w-3xl mx-auto space-y-4">
       <header className="flex items-end justify-between flex-wrap gap-3">
@@ -274,8 +290,41 @@ function WL() {
           hint="Add a symbol above to seed the daily pipeline."
         />
       ) : (
+        <>
+          {entries.length > 4 && (
+            <div className="panel p-2 flex items-center gap-2">
+              <MagnifyingGlass weight="duotone" size={14} className="ml-1 text-[var(--accent)] shrink-0" />
+              <Input
+                value={filter}
+                onChange={(ev) => setFilter(ev.target.value)}
+                placeholder="Filter ticker or note"
+                className="flex-1 text-xs border-0 bg-transparent focus:ring-0"
+                maxLength={64}
+                aria-label="Filter watchlist"
+              />
+              {filter && (
+                <button
+                  type="button"
+                  onClick={() => setFilter("")}
+                  className="text-[10px] muted hover:text-[var(--accent)] uppercase tracking-widest mono px-2"
+                  aria-label="Clear filter"
+                >
+                  clear
+                </button>
+              )}
+              <span className="muted text-[10px] mono uppercase tracking-widest pr-1 shrink-0">
+                {visibleEntries?.length ?? 0} / {entries.length}
+              </span>
+            </div>
+          )}
+          {visibleEntries && visibleEntries.length === 0 ? (
+            <Empty
+              title="No matches"
+              hint={`Nothing matches \u201C${filter}\u201D. Clear the filter to see all ${entries.length} tickers.`}
+            />
+          ) : (
         <ul className="panel divide-y divide-[var(--border)]">
-          {entries.map((e) => {
+          {(visibleEntries ?? entries).map((e) => {
             const check = checks[e.ticker];
             const isCrossed = check && (check.status === "above_high" || check.status === "below_low");
             return (
@@ -447,6 +496,8 @@ function WL() {
             );
           })}
         </ul>
+          )}
+        </>
       )}
     </div>
   );
