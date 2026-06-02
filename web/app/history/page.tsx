@@ -23,6 +23,7 @@ import {
   NotePencil,
   PushPin,
   PushPinSlash,
+  Link as LinkIcon,
 } from "@phosphor-icons/react/dist/ssr";
 
 type TagCount = { tag: string; count: number };
@@ -112,6 +113,7 @@ export default function HistoryPage() {
     }
     setHydrated(true);
   }, []);
+  const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkErr, setBulkErr] = useState<string | null>(null);
@@ -119,6 +121,26 @@ export default function HistoryPage() {
   const [bulkTagMode, setBulkTagMode] = useState<null | "add" | "remove">(null);
 
   const dq = useDebounced(q, 200);
+
+  // After hydration, mirror active filters back into the address bar so the
+  // current view is shareable by copying the URL and survives reloads. We use
+  // replaceState rather than router.replace so there is no scroll jump or
+  // server re-render and the back button is not polluted on every keystroke.
+  useEffect(() => {
+    if (!hydrated) return;
+    const sp = new URLSearchParams();
+    if (dq) sp.set("q", dq);
+    if (regime !== "all") sp.set("regime", regime);
+    if (tag) sp.set("tag", tag);
+    if (pinnedOnly) sp.set("pinned", "1");
+    if (sort !== "recent") sp.set("sort", sort);
+    const qs = sp.toString();
+    const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    const current = window.location.pathname + window.location.search;
+    if (next !== current) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [hydrated, dq, regime, tag, pinnedOnly, sort]);
 
   const params = new URLSearchParams();
   if (dq) params.set("q", dq);
@@ -303,6 +325,50 @@ export default function HistoryPage() {
             >
               <DownloadSimple size={11} weight="bold" /> MD
             </a>
+            <button
+              type="button"
+              onClick={async () => {
+                const sp = new URLSearchParams();
+                if (dq) sp.set("q", dq);
+                if (regime !== "all") sp.set("regime", regime);
+                if (tag) sp.set("tag", tag);
+                if (pinnedOnly) sp.set("pinned", "1");
+                if (sort !== "recent") sp.set("sort", sort);
+                const qs = sp.toString();
+                const path = qs ? `/history?${qs}` : `/history`;
+                const url = new URL(path, window.location.origin).toString();
+                try {
+                  if (navigator.clipboard?.writeText) {
+                    await navigator.clipboard.writeText(url);
+                  } else {
+                    const ta = document.createElement("textarea");
+                    ta.value = url;
+                    ta.style.position = "fixed";
+                    ta.style.opacity = "0";
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(ta);
+                  }
+                  setCopyState("ok");
+                } catch {
+                  setCopyState("err");
+                }
+                setTimeout(() => setCopyState("idle"), 1800);
+              }}
+              aria-label="Copy link to current filter view"
+              title="Copy a link to this filtered view of history"
+              data-testid="copy-filter-link"
+              className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
+            >
+              {copyState === "ok" ? (
+                <><Check size={11} weight="bold" /> Copied</>
+              ) : copyState === "err" ? (
+                <><X size={11} weight="bold" /> Failed</>
+              ) : (
+                <><LinkIcon size={11} weight="bold" /> Copy link</>
+              )}
+            </button>
             <button
               onClick={refreshAll}
               className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] muted hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
