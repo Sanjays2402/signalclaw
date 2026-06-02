@@ -1327,6 +1327,15 @@ function Row({
         >
           <DownloadSimple size={11} weight="bold" /> PDF
         </a>
+        <Link
+          href={`/compare?a=${encodeURIComponent(run.id)}`}
+          data-testid="row-compare"
+          className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1"
+          title="Compare with another saved run"
+          aria-label="Compare this run with another saved run"
+        >
+          <ArrowsLeftRight size={11} weight="bold" /> Compare
+        </Link>
         {!editing && (
           <button
             onClick={() => setEditing(true)}
