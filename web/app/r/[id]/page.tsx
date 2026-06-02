@@ -81,12 +81,14 @@ export default async function SharePage({ params }: Params) {
             {(run.tags ?? []).length > 0 && (
               <div className="flex items-center gap-1 flex-wrap pt-1">
                 {run.tags.map((t) => (
-                  <span
+                  <Link
                     key={t}
-                    className="text-[10px] mono px-1.5 py-0.5 rounded-sm border border-[var(--border)] muted lowercase"
+                    href={`/history?tag=${encodeURIComponent(t)}`}
+                    className="text-[10px] mono px-1.5 py-0.5 rounded-sm border border-[var(--border)] muted lowercase hover:bg-white/5 hover:text-white focus:outline-none focus:ring-1 focus:ring-[var(--amber)]"
+                    title={`See all runs tagged #${t}`}
                   >
                     #{t}
-                  </span>
+                  </Link>
                 ))}
               </div>
             )}

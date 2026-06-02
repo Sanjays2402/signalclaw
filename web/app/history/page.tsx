@@ -91,6 +91,27 @@ export default function HistoryPage() {
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [sort, setSort] = useState<SortValue>("recent");
   const [offset, setOffset] = useState(0);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Hydrate filters from URL query once on mount so links like
+  // /history?tag=earnings or /history?regime=bull&pinned=1 work as deep links.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const urlQ = sp.get("q");
+    if (urlQ) setQ(urlQ);
+    const urlRegime = sp.get("regime");
+    if (urlRegime && (REGIMES as readonly string[]).includes(urlRegime)) {
+      setRegime(urlRegime as (typeof REGIMES)[number]);
+    }
+    const urlTag = sp.get("tag");
+    if (urlTag) setTag(urlTag);
+    if (sp.get("pinned") === "1") setPinnedOnly(true);
+    const urlSort = sp.get("sort");
+    if (urlSort && SORTS.some((s) => s.value === urlSort)) {
+      setSort(urlSort as SortValue);
+    }
+    setHydrated(true);
+  }, []);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkErr, setBulkErr] = useState<string | null>(null);
@@ -109,7 +130,12 @@ export default function HistoryPage() {
   params.set("offset", String(offset));
 
   const key = `/api/runs?${params.toString()}`;
-  const { data, error, isLoading, mutate } = useSWR<ListResp>(key, fetcher);
+  // Wait for URL filter hydration so deep-links like /history?tag=foo don't
+  // briefly request the unfiltered list before the URL filters apply.
+  const { data, error, isLoading, mutate } = useSWR<ListResp>(
+    hydrated ? key : null,
+    fetcher,
+  );
   const { data: tagsData, mutate: mutateTags } = useSWR<{ tags: TagCount[] }>(
     "/api/runs/tags",
     fetcher,
