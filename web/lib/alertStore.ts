@@ -221,6 +221,74 @@ export async function setAlertEnabled(
   return alert;
 }
 
+export type AlertPatch = {
+  value?: unknown;
+  note?: unknown;
+  cooldown_hours?: unknown;
+  enabled?: unknown;
+};
+
+export async function updateAlert(
+  id: string,
+  patch: AlertPatch,
+  ownerId?: string | null,
+): Promise<{ ok: true; alert: Alert } | { ok: false; err: ValidationError; status: number }> {
+  const oid = normalizeOwnerId(ownerId);
+  const store = await readStore();
+  const bucket = store.tenants[oid];
+  if (!bucket) return { ok: false, err: { code: "not_found", message: "alert not found" }, status: 404 };
+  const alert = bucket.alerts.find((a) => a.id === id);
+  if (!alert) return { ok: false, err: { code: "not_found", message: "alert not found" }, status: 404 };
+
+  const next: Alert = { ...alert };
+  let touched = false;
+
+  if (Object.prototype.hasOwnProperty.call(patch, "value")) {
+    const v =
+      typeof patch.value === "number" ? patch.value : parseFloat(String(patch.value));
+    if (!Number.isFinite(v)) {
+      return { ok: false, err: { code: "bad_value", message: "value must be a finite number" }, status: 400 };
+    }
+    if (alert.condition.startsWith("price") && v <= 0) {
+      return { ok: false, err: { code: "bad_value", message: "price targets must be positive" }, status: 400 };
+    }
+    next.value = v;
+    touched = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "note")) {
+    next.note = normalizeNote(patch.note);
+    touched = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "cooldown_hours")) {
+    const raw = patch.cooldown_hours;
+    const n =
+      raw === undefined || raw === null || raw === ""
+        ? alert.cooldown_hours
+        : Math.floor(Number(raw));
+    if (!Number.isFinite(n) || n < 0) {
+      return { ok: false, err: { code: "bad_cooldown", message: "cooldown_hours must be a non-negative integer" }, status: 400 };
+    }
+    next.cooldown_hours = n;
+    touched = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+    next.enabled = Boolean(patch.enabled);
+    touched = true;
+  }
+
+  if (!touched) {
+    return { ok: false, err: { code: "no_fields", message: "patch must include at least one editable field" }, status: 400 };
+  }
+
+  const idx = bucket.alerts.findIndex((a) => a.id === id);
+  bucket.alerts[idx] = next;
+  await writeStore(store);
+  return { ok: true, alert: next };
+}
+
 export async function deleteAlert(id: string, ownerId?: string | null): Promise<boolean> {
   const oid = normalizeOwnerId(ownerId);
   const store = await readStore();

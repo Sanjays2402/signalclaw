@@ -18,7 +18,7 @@ import {
 import { api, swrFetcher, type Alert, type AlertIn, type AlertHistory } from "@/lib/api";
 import { filterAlerts, type AlertStateFilter } from "@/lib/alertFilter";
 import { sortAlerts, type AlertSortKey, type AlertSortDir } from "@/lib/alertSort";
-import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple, Power, MagnifyingGlass, ArrowUp, ArrowDown } from "@phosphor-icons/react/dist/ssr";
+import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple, Power, MagnifyingGlass, ArrowUp, ArrowDown, PencilSimple, Check, X } from "@phosphor-icons/react/dist/ssr";
 
 const CONDITIONS = [
   { v: "price_above", l: "price >" },
@@ -39,6 +39,11 @@ function Alerts() {
   const { data, error, isLoading } = useSWR<{ alerts: Alert[] }>("/api/alerts", swrFetcher);
   const [busy, setBusy] = useState<string | null>(null);
   const [formErr, setFormErr] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [editCooldown, setEditCooldown] = useState("");
+  const [editErr, setEditErr] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<AlertStateFilter>("");
   const [sortKey, setSortKey] = useState<AlertSortKey>("ticker");
@@ -78,6 +83,46 @@ function Alerts() {
     try {
       await api(`/api/alerts/${id}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
       await mutate("/api/alerts");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function startEdit(a: Alert) {
+    setEditErr(null);
+    setEditId(a.id);
+    const isPct = a.condition.includes("pct");
+    const displayVal = isPct
+      ? (a.value * 100).toString()
+      : String(a.value);
+    setEditValue(displayVal);
+    setEditNote(a.note ?? "");
+    setEditCooldown(String(a.cooldown_hours));
+  }
+
+  function cancelEdit() {
+    setEditId(null);
+    setEditErr(null);
+  }
+
+  async function saveEdit(a: Alert) {
+    setEditErr(null);
+    const isPct = a.condition.includes("pct");
+    const rawVal = parseFloat(editValue);
+    if (!Number.isFinite(rawVal)) { setEditErr("value must be a number"); return; }
+    const value = isPct ? rawVal / 100 : rawVal;
+    const cooldown = Math.floor(Number(editCooldown));
+    if (!Number.isFinite(cooldown) || cooldown < 0) { setEditErr("cooldown must be a non-negative integer"); return; }
+    setBusy(a.id);
+    try {
+      await api(`/api/alerts/${a.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ value, note: editNote.trim(), cooldown_hours: cooldown }),
+      });
+      await mutate("/api/alerts");
+      setEditId(null);
+    } catch (e: any) {
+      setEditErr(e?.message ?? String(e));
     } finally {
       setBusy(null);
     }
@@ -212,6 +257,7 @@ function Alerts() {
                         ? `${(a.value * 100).toFixed(2)}%`
                         : fmtUsd(a.value)
                       : String(a.value);
+                  const isEditing = editId === a.id;
                   return (
                     <tr key={a.id}>
                       <td className="mono font-semibold">{a.ticker}</td>
@@ -221,19 +267,56 @@ function Alerts() {
                       <td>
                         <RuleVisual kind="alert" trigger={val} condition={a.condition} />
                       </td>
-                      <td className="r mono">{valDisp}</td>
-                      <td className="r mono muted">{a.cooldown_hours}h</td>
+                      <td className="r mono">
+                        {isEditing ? (
+                          <Input
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            type="number"
+                            step="any"
+                            data-testid="alert-edit-value"
+                            className="w-24 text-right"
+                          />
+                        ) : (
+                          valDisp
+                        )}
+                      </td>
+                      <td className="r mono muted">
+                        {isEditing ? (
+                          <Input
+                            value={editCooldown}
+                            onChange={(e) => setEditCooldown(e.target.value)}
+                            type="number"
+                            min={0}
+                            step={1}
+                            data-testid="alert-edit-cooldown"
+                            className="w-16 text-right"
+                          />
+                        ) : (
+                          `${a.cooldown_hours}h`
+                        )}
+                      </td>
                       <td className="muted mono" style={{ fontSize: 11 }}>
                         {a.last_fired_at ?? "never"}
                       </td>
                       <td className="muted" style={{ fontSize: 11, maxWidth: 200, whiteSpace: "normal" }}>
-                        {a.note || ""}
+                        {isEditing ? (
+                          <Input
+                            value={editNote}
+                            onChange={(e) => setEditNote(e.target.value)}
+                            placeholder="note"
+                            data-testid="alert-edit-note"
+                            className="w-full"
+                          />
+                        ) : (
+                          a.note || ""
+                        )}
                       </td>
                       <td>
                         <button
                           type="button"
                           onClick={() => onToggle(a.id, !a.enabled)}
-                          disabled={busy === a.id}
+                          disabled={busy === a.id || isEditing}
                           title={a.enabled ? "Disable this alert" : "Enable this alert"}
                           aria-label={a.enabled ? "Disable alert" : "Enable alert"}
                           aria-pressed={a.enabled}
@@ -247,14 +330,58 @@ function Alerts() {
                         </button>
                       </td>
                       <td>
-                        <Button
-                          variant="danger"
-                          onClick={() => onDelete(a.id)}
-                          disabled={busy === a.id}
-                          className="text-[10px]"
-                        >
-                          <Trash weight="duotone" size={11} />
-                        </Button>
+                        <div className="inline-flex items-center gap-1">
+                          {isEditing ? (
+                            <>
+                              <Button
+                                variant="ghost"
+                                onClick={() => saveEdit(a)}
+                                disabled={busy === a.id}
+                                className="text-[10px]"
+                                data-testid="alert-edit-save"
+                                title="Save changes"
+                              >
+                                <Check weight="bold" size={11} />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                onClick={cancelEdit}
+                                disabled={busy === a.id}
+                                className="text-[10px]"
+                                data-testid="alert-edit-cancel"
+                                title="Cancel"
+                              >
+                                <X weight="bold" size={11} />
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button
+                                variant="ghost"
+                                onClick={() => startEdit(a)}
+                                disabled={busy === a.id || editId !== null}
+                                className="text-[10px]"
+                                data-testid="alert-edit"
+                                title="Edit value, note, cooldown"
+                              >
+                                <PencilSimple weight="duotone" size={11} />
+                              </Button>
+                              <Button
+                                variant="danger"
+                                onClick={() => onDelete(a.id)}
+                                disabled={busy === a.id}
+                                className="text-[10px]"
+                              >
+                                <Trash weight="duotone" size={11} />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                        {isEditing && editErr && (
+                          <div className="text-[10px] text-[var(--danger,#f55)] mt-1" data-testid="alert-edit-err">
+                            {editErr}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
