@@ -4,7 +4,8 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type JournalEntry, type JournalEntryIn } from "@/lib/api";
-import { Notebook, Plus, Trash } from "@phosphor-icons/react/dist/ssr";
+import { Notebook, Plus, Trash, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import { entriesToCSV, entriesToJSON, exportFilename } from "@/lib/journalExport";
 
 type ConvictionStats = {
   buckets: { conviction: number; n_trades: number; realized_pnl: number; avg_realized_pnl: number; win_rate: number }[];
@@ -60,6 +61,7 @@ function Journal() {
           </h1>
           <p className="muted text-xs">Thesis, conviction, and tags per trade.</p>
         </div>
+        <ExportButtons entries={list.data?.entries ?? []} />
       </header>
 
       <ConvictionStatsRow s={stats.data} err={stats.error} />
@@ -96,6 +98,50 @@ function Journal() {
               </ul>
             )}
       </Card>
+    </div>
+  );
+}
+
+function ExportButtons({ entries }: { entries: JournalEntry[] }) {
+  const disabled = entries.length === 0;
+  function download(ext: "csv" | "json") {
+    const body = ext === "csv" ? entriesToCSV(entries) : entriesToJSON(entries);
+    const mime = ext === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8";
+    const blob = new Blob([body], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = exportFilename(ext);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const cls =
+    "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono" +
+    (disabled ? " opacity-40 pointer-events-none" : "");
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => download("csv")}
+        disabled={disabled}
+        className={cls}
+        title="Download journal entries as CSV"
+        data-testid="journal-export-csv"
+      >
+        <DownloadSimple weight="duotone" size={11} /> CSV
+      </button>
+      <button
+        type="button"
+        onClick={() => download("json")}
+        disabled={disabled}
+        className={cls}
+        title="Download journal entries as JSON"
+        data-testid="journal-export-json"
+      >
+        <DownloadSimple weight="duotone" size={11} /> JSON
+      </button>
     </div>
   );
 }
