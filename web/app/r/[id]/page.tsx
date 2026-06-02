@@ -12,6 +12,7 @@ import {
   ArrowRight,
   NotePencil,
   DownloadSimple,
+  ArrowsLeftRight,
 } from "@phosphor-icons/react/dist/ssr";
 
 export const runtime = "nodejs";
@@ -119,6 +120,15 @@ export default async function SharePage({ params }: Params) {
             >
               <DownloadSimple size={12} weight="bold" /> JSON
             </a>
+            <Link
+              href={`/compare?a=${run.id}`}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5 focus:outline-none focus:ring-1 focus:ring-[var(--amber)]"
+              aria-label="Compare this run with another saved run"
+              data-testid="compare-with"
+              title="Open /compare with this run pre-selected as A"
+            >
+              <ArrowsLeftRight size={12} weight="bold" /> Compare
+            </Link>
             <Link
               href="/demo"
               className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
