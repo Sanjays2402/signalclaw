@@ -340,12 +340,16 @@ function CreateAlertForm({
 
 function AlertHistoryCard({ refreshKey }: { refreshKey: number }) {
   const [ticker, setTicker] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [offset, setOffset] = useState(0);
   const limit = 25;
   const qs = new URLSearchParams();
   qs.set("limit", String(limit));
   qs.set("offset", String(offset));
   if (ticker.trim()) qs.set("ticker", ticker.trim().toUpperCase());
+  if (fromDate.trim()) qs.set("from", fromDate.trim());
+  if (toDate.trim()) qs.set("to", toDate.trim());
   const key = `/api/alerts/history?${qs.toString()}&_=${refreshKey}`;
   const { data, error, isLoading } = useSWR<AlertHistory>(key, swrFetcher);
   const [busy, setBusy] = useState(false);
@@ -397,6 +401,44 @@ function AlertHistoryCard({ refreshKey }: { refreshKey: number }) {
             className="w-28"
           />
         </Field>
+        <Field label="From">
+          <Input
+            type="date"
+            value={fromDate}
+            onChange={(e) => {
+              setOffset(0);
+              setFromDate(e.target.value);
+            }}
+            data-testid="alert-history-from"
+            className="w-36"
+          />
+        </Field>
+        <Field label="To">
+          <Input
+            type="date"
+            value={toDate}
+            onChange={(e) => {
+              setOffset(0);
+              setToDate(e.target.value);
+            }}
+            data-testid="alert-history-to"
+            className="w-36"
+          />
+        </Field>
+        {(fromDate || toDate) && (
+          <button
+            type="button"
+            onClick={() => {
+              setOffset(0);
+              setFromDate("");
+              setToDate("");
+            }}
+            className="text-[10px] uppercase tracking-widest mono muted hover:text-[var(--fg)]"
+            data-testid="alert-history-date-clear"
+          >
+            Clear dates
+          </button>
+        )}
         <div className="muted text-[11px] mono">
           {data ? `${data.total} total` : ""}
         </div>
@@ -420,13 +462,20 @@ function AlertHistoryCard({ refreshKey }: { refreshKey: number }) {
           {(() => {
             const exportQs = new URLSearchParams();
             if (ticker.trim()) exportQs.set("ticker", ticker.trim().toUpperCase());
+            if (fromDate.trim()) exportQs.set("from", fromDate.trim());
+            if (toDate.trim()) exportQs.set("to", toDate.trim());
             const suffix = exportQs.toString() ? `&${exportQs.toString()}` : "";
             const disabled = !data || data.total === 0;
             const linkCls =
               "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono" +
               (disabled ? " opacity-40 pointer-events-none" : "");
-            const tip = ticker.trim()
-              ? `Download fire history for ${ticker.trim().toUpperCase()}`
+            const parts: string[] = [];
+            if (ticker.trim()) parts.push(ticker.trim().toUpperCase());
+            if (fromDate.trim() || toDate.trim()) {
+              parts.push(`${fromDate.trim() || "start"} to ${toDate.trim() || "now"}`);
+            }
+            const tip = parts.length
+              ? `Download fire history (${parts.join(", ")})`
               : "Download all fire history";
             return (
               <>

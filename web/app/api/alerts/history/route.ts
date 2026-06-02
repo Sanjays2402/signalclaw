@@ -15,10 +15,12 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const rawTicker = sp.get("ticker");
   const ticker = rawTicker ? normalizeTicker(rawTicker) || undefined : undefined;
+  const from = sp.get("from") || undefined;
+  const to = sp.get("to") || undefined;
   const fmt = (sp.get("format") ?? "").toLowerCase();
 
   if (fmt === "csv" || fmt === "json" || fmt === "md" || fmt === "markdown") {
-    const events = await listAllHistory({ ticker });
+    const events = await listAllHistory({ ticker, from, to });
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     if (fmt === "csv") {
       return new NextResponse(eventsToCSV(events), {
@@ -49,6 +51,6 @@ export async function GET(req: NextRequest) {
 
   const limit = Math.min(200, Math.max(1, parseInt(sp.get("limit") || "25", 10) || 25));
   const offset = Math.max(0, parseInt(sp.get("offset") || "0", 10) || 0);
-  const data = await listHistory({ limit, offset, ticker });
+  const data = await listHistory({ limit, offset, ticker, from, to });
   return NextResponse.json(data);
 }

@@ -233,14 +233,44 @@ export async function deleteAlert(id: string, ownerId?: string | null): Promise<
   return true;
 }
 
-export async function listHistory(opts: { ticker?: string; limit: number; offset: number; ownerId?: string | null }):
+// Normalize a YYYY-MM-DD string. Returns null when the input is missing,
+// blank, or not a valid date so the caller can ignore the filter rather
+// than reject every event silently.
+export function normalizeHistoryDate(v: string | undefined | null): string | null {
+  if (!v) return null;
+  const s = String(v).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  return s;
+}
+
+// Apply ticker + inclusive YYYY-MM-DD date-range filters to a history list.
+// Exported so the tests can pin behavior without round-tripping through the
+// SWR + Next.js stack.
+export function filterHistoryEvents(
+  history: AlertEvent[],
+  opts: { ticker?: string; from?: string | null; to?: string | null },
+): AlertEvent[] {
+  const from = normalizeHistoryDate(opts.from);
+  const to = normalizeHistoryDate(opts.to);
+  return history.filter((e) => {
+    if (opts.ticker && e.ticker !== opts.ticker) return false;
+    if (from || to) {
+      const day = (e.fired_at || "").slice(0, 10);
+      if (from && day < from) return false;
+      if (to && day > to) return false;
+    }
+    return true;
+  });
+}
+
+export async function listHistory(opts: { ticker?: string; from?: string | null; to?: string | null; limit: number; offset: number; ownerId?: string | null }):
   Promise<{ total: number; limit: number; offset: number; events: AlertEvent[] }> {
   const oid = normalizeOwnerId(opts.ownerId);
   const store = await readStore();
   const history = store.tenants[oid]?.history ?? [];
-  const filtered = opts.ticker
-    ? history.filter((e) => e.ticker === opts.ticker)
-    : history;
+  const filtered = filterHistoryEvents(history, { ticker: opts.ticker, from: opts.from, to: opts.to });
   const sorted = filtered.slice().sort((a, b) => b.fired_at.localeCompare(a.fired_at));
   return {
     total: sorted.length,
@@ -251,16 +281,15 @@ export async function listHistory(opts: { ticker?: string; limit: number; offset
 }
 
 // listAllHistory returns every event for export, ignoring the paginated
-// limit/offset that drives the on-screen table. The ticker filter still
-// applies so users get exactly what they see in the UI when a filter is set.
-export async function listAllHistory(opts: { ticker?: string; ownerId?: string | null }):
+// limit/offset that drives the on-screen table. The ticker and date-range
+// filters still apply so users get exactly what they see in the UI when a
+// filter is set.
+export async function listAllHistory(opts: { ticker?: string; from?: string | null; to?: string | null; ownerId?: string | null }):
   Promise<AlertEvent[]> {
   const oid = normalizeOwnerId(opts.ownerId);
   const store = await readStore();
   const history = store.tenants[oid]?.history ?? [];
-  const filtered = opts.ticker
-    ? history.filter((e) => e.ticker === opts.ticker)
-    : history;
+  const filtered = filterHistoryEvents(history, { ticker: opts.ticker, from: opts.from, to: opts.to });
   return filtered.slice().sort((a, b) => b.fired_at.localeCompare(a.fired_at));
 }
 
