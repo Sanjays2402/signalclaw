@@ -80,7 +80,19 @@ export type JournalUrlState = {
   query: string;
   conviction: "" | "1" | "2" | "3" | "4" | "5";
   tag: string;
+  /** Inclusive lower bound on updated_at, formatted YYYY-MM-DD. Empty means unset. */
+  since: string;
+  /** Inclusive upper bound on updated_at, formatted YYYY-MM-DD. Empty means unset. */
+  until: string;
 };
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function normalizeDateParam(raw: string | null): string {
+  if (!raw) return "";
+  const v = raw.slice(0, 10);
+  return ISO_DATE_RE.test(v) ? v : "";
+}
 
 export function parseJournalUrlState(
   search: string | URLSearchParams,
@@ -92,7 +104,9 @@ export function parseJournalUrlState(
     ? (rawConv as JournalUrlState["conviction"])
     : "";
   const tag = (sp.get("tag") ?? "").slice(0, 64);
-  return { query: q, conviction: conv, tag };
+  const since = normalizeDateParam(sp.get("since"));
+  const until = normalizeDateParam(sp.get("until"));
+  return { query: q, conviction: conv, tag, since, until };
 }
 
 export function serializeJournalUrlState(state: JournalUrlState): string {
@@ -100,6 +114,8 @@ export function serializeJournalUrlState(state: JournalUrlState): string {
   if (state.query) sp.set("q", state.query);
   if (state.conviction) sp.set("conviction", state.conviction);
   if (state.tag) sp.set("tag", state.tag);
+  if (state.since) sp.set("since", state.since);
+  if (state.until) sp.set("until", state.until);
   return sp.toString();
 }
 
@@ -110,6 +126,10 @@ export type JournalFilter = {
   conviction?: number | null;
   /** Optional exact-match tag (case insensitive). Entry must have a tag equal to this. */
   tag?: string | null;
+  /** Inclusive lower bound on the entry's updated_at date (YYYY-MM-DD). Invalid = ignored. */
+  since?: string | null;
+  /** Inclusive upper bound on the entry's updated_at date (YYYY-MM-DD). Invalid = ignored. */
+  until?: string | null;
 };
 
 /**
@@ -129,12 +149,22 @@ export function filterEntries(
       ? filter.conviction
       : null;
   const tag = (filter.tag ?? "").trim().toLowerCase();
-  if (!q && conv === null && !tag) return entries;
+  const sinceRaw = (filter.since ?? "").trim();
+  const untilRaw = (filter.until ?? "").trim();
+  const since = ISO_DATE_RE.test(sinceRaw) ? sinceRaw : "";
+  const until = ISO_DATE_RE.test(untilRaw) ? untilRaw : "";
+  if (!q && conv === null && !tag && !since && !until) return entries;
   return entries.filter((e) => {
     if (conv !== null && e.conviction !== conv) return false;
     if (tag) {
       const tags = (e.tags ?? []).map((t) => t.toLowerCase());
       if (!tags.includes(tag)) return false;
+    }
+    if (since || until) {
+      const day = (e.updated_at ?? "").slice(0, 10);
+      if (!ISO_DATE_RE.test(day)) return false;
+      if (since && day < since) return false;
+      if (until && day > until) return false;
     }
     if (!q) return true;
     if ((e.trade_id ?? "").toLowerCase().includes(q)) return true;

@@ -27,6 +27,8 @@ function Journal() {
   const [query, setQuery] = useState("");
   const [convFilter, setConvFilter] = useState<"" | "1" | "2" | "3" | "4" | "5">("");
   const [tagFilter, setTagFilter] = useState("");
+  const [sinceFilter, setSinceFilter] = useState("");
+  const [untilFilter, setUntilFilter] = useState("");
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate filters from the URL once so /journal?tag=earnings&conviction=4
@@ -36,6 +38,8 @@ function Journal() {
     if (s.query) setQuery(s.query);
     if (s.conviction) setConvFilter(s.conviction);
     if (s.tag) setTagFilter(s.tag);
+    if (s.since) setSinceFilter(s.since);
+    if (s.until) setUntilFilter(s.until);
     setHydrated(true);
   }, []);
 
@@ -44,11 +48,11 @@ function Journal() {
   // history on each keystroke and avoids a server re-render.
   useEffect(() => {
     if (!hydrated) return;
-    const qs = serializeJournalUrlState({ query, conviction: convFilter, tag: tagFilter });
+    const qs = serializeJournalUrlState({ query, conviction: convFilter, tag: tagFilter, since: sinceFilter, until: untilFilter });
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     const current = window.location.pathname + window.location.search;
     if (next !== current) window.history.replaceState(null, "", next);
-  }, [hydrated, query, convFilter, tagFilter]);
+  }, [hydrated, query, convFilter, tagFilter, sinceFilter, untilFilter]);
 
   const allEntries = list.data?.entries ?? [];
   const tagOptions = useMemo(() => collectTags(allEntries), [allEntries]);
@@ -57,8 +61,10 @@ function Journal() {
       query,
       conviction: convFilter === "" ? null : parseInt(convFilter, 10),
       tag: tagFilter || null,
+      since: sinceFilter || null,
+      until: untilFilter || null,
     }),
-    [allEntries, query, convFilter, tagFilter],
+    [allEntries, query, convFilter, tagFilter, sinceFilter, untilFilter],
   );
 
   async function refresh() {
@@ -144,14 +150,32 @@ function Journal() {
                       <option key={t} value={t}>{t}</option>
                     ))}
                   </Select>
+                  <Input
+                    type="date"
+                    value={sinceFilter}
+                    onChange={(e) => setSinceFilter(e.target.value)}
+                    title="Show entries updated on or after this date"
+                    aria-label="Updated since"
+                    data-testid="journal-filter-since"
+                    className="w-auto"
+                  />
+                  <Input
+                    type="date"
+                    value={untilFilter}
+                    onChange={(e) => setUntilFilter(e.target.value)}
+                    title="Show entries updated on or before this date"
+                    aria-label="Updated until"
+                    data-testid="journal-filter-until"
+                    className="w-auto"
+                  />
                   <span className="muted text-xs mono" data-testid="journal-filter-count">
                     {filtered.length}/{allEntries.length}
                   </span>
-                  {(query || convFilter || tagFilter) && (
+                  {(query || convFilter || tagFilter || sinceFilter || untilFilter) && (
                     <button
                       type="button"
                       className="text-[10px] uppercase tracking-widest mono px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)]"
-                      onClick={() => { setQuery(""); setConvFilter(""); setTagFilter(""); }}
+                      onClick={() => { setQuery(""); setConvFilter(""); setTagFilter(""); setSinceFilter(""); setUntilFilter(""); }}
                     >
                       Clear
                     </button>

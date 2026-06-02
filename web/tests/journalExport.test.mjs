@@ -128,14 +128,14 @@ test("collectTags returns sorted, deduped, case-insensitive union", () => {
 
 test("parseJournalUrlState pulls q, conviction, tag from URL search", () => {
   const s = mod.parseJournalUrlState("?q=foo&conviction=4&tag=earnings");
-  assert.deepEqual(s, { query: "foo", conviction: "4", tag: "earnings" });
+  assert.deepEqual(s, { query: "foo", conviction: "4", tag: "earnings", since: "", until: "" });
 });
 
 test("parseJournalUrlState ignores invalid conviction and missing params", () => {
-  assert.deepEqual(mod.parseJournalUrlState(""), { query: "", conviction: "", tag: "" });
-  assert.deepEqual(mod.parseJournalUrlState("?conviction=9"), { query: "", conviction: "", tag: "" });
-  assert.deepEqual(mod.parseJournalUrlState("?conviction=abc"), { query: "", conviction: "", tag: "" });
-  assert.deepEqual(mod.parseJournalUrlState("?conviction=0"), { query: "", conviction: "", tag: "" });
+  assert.deepEqual(mod.parseJournalUrlState(""), { query: "", conviction: "", tag: "", since: "", until: "" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=9"), { query: "", conviction: "", tag: "", since: "", until: "" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=abc"), { query: "", conviction: "", tag: "", since: "", until: "" });
+  assert.deepEqual(mod.parseJournalUrlState("?conviction=0"), { query: "", conviction: "", tag: "", since: "", until: "" });
 });
 
 test("parseJournalUrlState accepts URLSearchParams and clamps lengths", () => {
@@ -150,12 +150,12 @@ test("parseJournalUrlState accepts URLSearchParams and clamps lengths", () => {
 });
 
 test("serializeJournalUrlState skips empty fields and roundtrips", () => {
-  assert.equal(mod.serializeJournalUrlState({ query: "", conviction: "", tag: "" }), "");
+  assert.equal(mod.serializeJournalUrlState({ query: "", conviction: "", tag: "", since: "", until: "" }), "");
   assert.equal(
-    mod.serializeJournalUrlState({ query: "foo", conviction: "3", tag: "ai" }),
+    mod.serializeJournalUrlState({ query: "foo", conviction: "3", tag: "ai", since: "", until: "" }),
     "q=foo&conviction=3&tag=ai",
   );
-  const state = { query: "foo bar", conviction: "5", tag: "earnings" };
+  const state = { query: "foo bar", conviction: "5", tag: "earnings", since: "", until: "" };
   const round = mod.parseJournalUrlState(mod.serializeJournalUrlState(state));
   assert.deepEqual(round, state);
 });
@@ -183,6 +183,55 @@ test("entriesToMarkdown handles empty list with a placeholder", () => {
   assert.match(md, /\u00b7 0 entries/);
   assert.match(md, /_No journal entries yet\._/);
   assert.ok(!md.includes("| Trade ID |"));
+});
+
+test("filterEntries date range filters on updated_at YYYY-MM-DD", () => {
+  assert.deepEqual(
+    mod.filterEntries(entries, { since: "2025-01-03" }).map((e) => e.trade_id),
+    ["t2,with comma"],
+  );
+  assert.deepEqual(
+    mod.filterEntries(entries, { until: "2025-01-02" }).map((e) => e.trade_id),
+    ["t1"],
+  );
+  assert.deepEqual(
+    mod.filterEntries(entries, { since: "2025-01-02", until: "2025-01-03" }).map((e) => e.trade_id),
+    ["t1", "t2,with comma"],
+  );
+  // Single-day window (both bounds equal) is inclusive.
+  assert.deepEqual(
+    mod.filterEntries(entries, { since: "2025-01-02", until: "2025-01-02" }).map((e) => e.trade_id),
+    ["t1"],
+  );
+  // Out of range returns empty.
+  assert.deepEqual(mod.filterEntries(entries, { since: "2025-02-01" }), []);
+  // Invalid dates are ignored (treated as unset).
+  assert.deepEqual(mod.filterEntries(entries, { since: "not-a-date" }), entries);
+  assert.deepEqual(mod.filterEntries(entries, { until: "2025/01/02" }), entries);
+  // Entries with no updated_at are dropped only when a date filter is active.
+  const noDate = [{ trade_id: "t3", thesis: "", conviction: 3, tags: [], exit_reason: null, created_at: "", updated_at: "" }];
+  assert.deepEqual(mod.filterEntries(noDate, {}), noDate);
+  assert.deepEqual(mod.filterEntries(noDate, { since: "2025-01-01" }), []);
+});
+
+test("parseJournalUrlState pulls since/until and validates YYYY-MM-DD", () => {
+  assert.deepEqual(
+    mod.parseJournalUrlState("?since=2025-01-02&until=2025-01-03"),
+    { query: "", conviction: "", tag: "", since: "2025-01-02", until: "2025-01-03" },
+  );
+  assert.deepEqual(
+    mod.parseJournalUrlState("?since=bad&until=2025/01/02"),
+    { query: "", conviction: "", tag: "", since: "", until: "" },
+  );
+});
+
+test("serializeJournalUrlState round-trips since/until", () => {
+  const state = { query: "", conviction: "", tag: "", since: "2025-01-02", until: "2025-01-03" };
+  assert.equal(
+    mod.serializeJournalUrlState(state),
+    "since=2025-01-02&until=2025-01-03",
+  );
+  assert.deepEqual(mod.parseJournalUrlState(mod.serializeJournalUrlState(state)), state);
 });
 
 test("exportFilename supports md extension", () => {
