@@ -92,6 +92,8 @@ export default function HistoryPage() {
   const [tag, setTag] = useState<string>("");
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [sort, setSort] = useState<SortValue>("recent");
+  const [since, setSince] = useState<string>("");
+  const [until, setUntil] = useState<string>("");
   const [offset, setOffset] = useState(0);
   const [hydrated, setHydrated] = useState(false);
 
@@ -112,6 +114,10 @@ export default function HistoryPage() {
     if (urlSort && SORTS.some((s) => s.value === urlSort)) {
       setSort(urlSort as SortValue);
     }
+    const urlSince = sp.get("since");
+    if (urlSince && /^\d{4}-\d{2}-\d{2}$/.test(urlSince)) setSince(urlSince);
+    const urlUntil = sp.get("until");
+    if (urlUntil && /^\d{4}-\d{2}-\d{2}$/.test(urlUntil)) setUntil(urlUntil);
     setHydrated(true);
   }, []);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
@@ -135,13 +141,15 @@ export default function HistoryPage() {
     if (tag) sp.set("tag", tag);
     if (pinnedOnly) sp.set("pinned", "1");
     if (sort !== "recent") sp.set("sort", sort);
+    if (since) sp.set("since", since);
+    if (until) sp.set("until", until);
     const qs = sp.toString();
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     const current = window.location.pathname + window.location.search;
     if (next !== current) {
       window.history.replaceState(null, "", next);
     }
-  }, [hydrated, dq, regime, tag, pinnedOnly, sort]);
+  }, [hydrated, dq, regime, tag, pinnedOnly, sort, since, until]);
 
   const params = new URLSearchParams();
   if (dq) params.set("q", dq);
@@ -149,6 +157,8 @@ export default function HistoryPage() {
   if (tag) params.set("tag", tag);
   if (pinnedOnly) params.set("pinned", "1");
   if (sort !== "recent") params.set("sort", sort);
+  if (since) params.set("since", since);
+  if (until) params.set("until", until);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
 
@@ -176,6 +186,8 @@ export default function HistoryPage() {
   if (tag) exportParams.set("tag", tag);
   if (pinnedOnly) exportParams.set("pinned", "1");
   if (sort !== "recent") exportParams.set("sort", sort);
+  if (since) exportParams.set("since", since);
+  if (until) exportParams.set("until", until);
 
   function go(delta: number) {
     const next = Math.max(0, offset + delta * PAGE_SIZE);
@@ -275,6 +287,8 @@ export default function HistoryPage() {
     setTag("");
     setPinnedOnly(false);
     setSort("recent");
+    setSince("");
+    setUntil("");
     setOffset(0);
   }
 
@@ -282,7 +296,7 @@ export default function HistoryPage() {
   const page = data?.runs ?? [];
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + page.length, total);
-  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly || sort !== "recent";
+  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -335,6 +349,8 @@ export default function HistoryPage() {
                 if (tag) sp.set("tag", tag);
                 if (pinnedOnly) sp.set("pinned", "1");
                 if (sort !== "recent") sp.set("sort", sort);
+                if (since) sp.set("since", since);
+                if (until) sp.set("until", until);
                 const qs = sp.toString();
                 const path = qs ? `/history?${qs}` : `/history`;
                 const url = new URL(path, window.location.origin).toString();
@@ -455,6 +471,42 @@ export default function HistoryPage() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label
+              className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 muted hover:bg-white/5"
+              title="Only include runs saved on or after this date (UTC)"
+            >
+              From
+              <input
+                type="date"
+                value={since}
+                max={until || undefined}
+                onChange={(e) => {
+                  setSince(e.target.value);
+                  setOffset(0);
+                }}
+                aria-label="Filter runs saved on or after this date"
+                data-testid="filter-since"
+                className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none cursor-pointer"
+              />
+            </label>
+            <label
+              className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 muted hover:bg-white/5"
+              title="Only include runs saved on or before this date (UTC, inclusive)"
+            >
+              To
+              <input
+                type="date"
+                value={until}
+                min={since || undefined}
+                onChange={(e) => {
+                  setUntil(e.target.value);
+                  setOffset(0);
+                }}
+                aria-label="Filter runs saved on or before this date"
+                data-testid="filter-until"
+                className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none cursor-pointer"
+              />
             </label>
             {hasFilters && (
               <button
