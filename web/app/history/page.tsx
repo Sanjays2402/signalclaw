@@ -115,6 +115,7 @@ export default function HistoryPage() {
   if (dq) exportParams.set("q", dq);
   if (regime !== "all") exportParams.set("regime", regime);
   if (tag) exportParams.set("tag", tag);
+  if (pinnedOnly) exportParams.set("pinned", "1");
 
   function go(delta: number) {
     const next = Math.max(0, offset + delta * PAGE_SIZE);
@@ -245,14 +246,14 @@ export default function HistoryPage() {
             <a
               href={`/api/runs/export?${exportParams.toString()}&format=csv`}
               className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
-              title="Download CSV of matching runs"
+              title={total > 200 ? `Download CSV (first 200 of ${total} matching runs)` : "Download CSV of matching runs"}
             >
               <FileCsv size={11} weight="bold" /> CSV
             </a>
             <a
               href={`/api/runs/export?${exportParams.toString()}&format=json`}
               className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5"
-              title="Download JSON of matching runs"
+              title={total > 200 ? `Download JSON (first 200 of ${total} matching runs)` : "Download JSON of matching runs"}
             >
               <Code size={11} weight="bold" /> JSON
             </a>
