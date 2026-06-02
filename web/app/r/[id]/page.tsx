@@ -11,6 +11,7 @@ import {
   LightningSlash,
   ArrowRight,
   NotePencil,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 
 export const runtime = "nodejs";
@@ -99,6 +100,24 @@ export default async function SharePage({ params }: Params) {
               data-testid="download-pdf"
             >
               Download PDF
+            </a>
+            <a
+              href={`/api/runs/${run.id}/export?format=csv`}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5 focus:outline-none focus:ring-1 focus:ring-[var(--amber)]"
+              aria-label="Download this run as CSV"
+              data-testid="download-csv"
+              title="Download bars and regime labels as CSV"
+            >
+              <DownloadSimple size={12} weight="bold" /> CSV
+            </a>
+            <a
+              href={`/api/runs/${run.id}/export?format=json`}
+              className="text-[11px] px-3 py-2 rounded-sm border border-[var(--border)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1.5 focus:outline-none focus:ring-1 focus:ring-[var(--amber)]"
+              aria-label="Download this run as JSON"
+              data-testid="download-json"
+              title="Download full run payload as JSON"
+            >
+              <DownloadSimple size={12} weight="bold" /> JSON
             </a>
             <Link
               href="/demo"
