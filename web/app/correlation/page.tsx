@@ -4,8 +4,9 @@ import useSWR from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { swrFetcher, type CorrelationMatrix, type Diversification } from "@/lib/api";
-import { GridFour, Warning, ChartLine } from "@phosphor-icons/react/dist/ssr";
+import { GridFour, Warning, ChartLine, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
+import { correlationToCSV, correlationToJSON, correlationFilename } from "@/lib/correlationExport";
 
 export default function CorrelationPage() {
   return (
@@ -125,6 +126,20 @@ function Metric({ label, value, tone }: { label: string; value: React.ReactNode;
   );
 }
 
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Defer revoke so the download starts in all browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function corrColor(v: number): string {
   // -1 red, 0 transparent, +1 green
   if (!Number.isFinite(v)) return "transparent";
@@ -149,6 +164,34 @@ function MatrixCard({
             <Empty title="No data" hint="Need price history for at least two tickers." />
           ) : (
             <div className="overflow-x-auto">
+              <div className="flex flex-wrap gap-2 mb-3 text-xs">
+                <button
+                  type="button"
+                  onClick={() => downloadBlob(
+                    correlationToCSV(data),
+                    "text/csv;charset=utf-8",
+                    correlationFilename(data.window, "csv"),
+                  )}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+                  title="Download the correlation matrix as CSV for spreadsheet analysis"
+                  data-testid="correlation-export-csv"
+                >
+                  <DownloadSimple size={12} weight="bold" /> CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadBlob(
+                    correlationToJSON(data),
+                    "application/json;charset=utf-8",
+                    correlationFilename(data.window, "json"),
+                  )}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+                  title="Download the correlation matrix as JSON"
+                  data-testid="correlation-export-json"
+                >
+                  <DownloadSimple size={12} weight="bold" /> JSON
+                </button>
+              </div>
               <table className="text-xs border-collapse">
                 <thead>
                   <tr>
