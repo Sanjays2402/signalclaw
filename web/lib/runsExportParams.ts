@@ -36,6 +36,13 @@ export function parseMinConfidence(raw: string | null | undefined): number | und
   return frac;
 }
 
+// Same parsing rules as parseMinConfidence. Kept as a separate symbol so call
+// sites read clearly and so we can evolve the upper-bound behavior
+// independently later (for example, clamping max to never fall below min).
+export function parseMaxConfidence(raw: string | null | undefined): number | undefined {
+  return parseMinConfidence(raw);
+}
+
 export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFilter"> {
   const pinnedRaw = sp.get("pinned");
   const pinnedOnly = pinnedRaw === "1" || pinnedRaw === "true";
@@ -58,6 +65,7 @@ export function parseExportQuery(sp: URLSearchParams): Omit<QueryOpts, "ownerFil
     since: since || undefined,
     until: until || undefined,
     minConfidence: parseMinConfidence(sp.get("min_confidence")),
+    maxConfidence: parseMaxConfidence(sp.get("max_confidence")),
     sort,
     limit: parseExportLimit(sp.get("limit")),
     offset: 0,

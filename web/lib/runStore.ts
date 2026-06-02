@@ -332,6 +332,11 @@ export type QueryOpts = {
   // when this filter is set. Values outside [0, 1] or non-finite numbers
   // are ignored, matching the lenient behavior of the other filters.
   minConfidence?: number;
+  // Inclusive upper bound on the run's snapshot confidence, expressed as a
+  // fraction in [0, 1]. Same lenience rules as minConfidence. Pairs with
+  // minConfidence to bracket a confidence window (for example, surfacing
+  // "uncertain" runs in 30-60% for review).
+  maxConfidence?: number;
   limit?: number;
   offset?: number;
   // Sort order for the returned page. Default "recent" matches the legacy
@@ -417,6 +422,13 @@ export async function queryRuns(opts: QueryOpts = {}): Promise<QueryResult> {
     filtered = filtered.filter((r) => {
       const c = r.payload.snapshot?.confidence;
       return typeof c === "number" && Number.isFinite(c) && c >= minConf;
+    });
+  }
+  const maxConf = opts.maxConfidence;
+  if (typeof maxConf === "number" && Number.isFinite(maxConf) && maxConf >= 0 && maxConf <= 1) {
+    filtered = filtered.filter((r) => {
+      const c = r.payload.snapshot?.confidence;
+      return typeof c === "number" && Number.isFinite(c) && c <= maxConf;
     });
   }
   const sort = opts.sort ?? "recent";

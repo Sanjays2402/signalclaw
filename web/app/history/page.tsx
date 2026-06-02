@@ -95,6 +95,7 @@ export default function HistoryPage() {
   const [since, setSince] = useState<string>("");
   const [until, setUntil] = useState<string>("");
   const [minConf, setMinConf] = useState<string>("");
+  const [maxConf, setMaxConf] = useState<string>("");
   const [offset, setOffset] = useState(0);
   const [hydrated, setHydrated] = useState(false);
 
@@ -124,6 +125,11 @@ export default function HistoryPage() {
       const n = Number.parseInt(urlMinConf, 10);
       if (n >= 0 && n <= 100) setMinConf(String(n));
     }
+    const urlMaxConf = sp.get("max_confidence");
+    if (urlMaxConf && /^\d{1,3}$/.test(urlMaxConf)) {
+      const n = Number.parseInt(urlMaxConf, 10);
+      if (n >= 0 && n <= 100) setMaxConf(String(n));
+    }
     setHydrated(true);
   }, []);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
@@ -150,13 +156,14 @@ export default function HistoryPage() {
     if (since) sp.set("since", since);
     if (until) sp.set("until", until);
     if (minConf) sp.set("min_confidence", minConf);
+    if (maxConf) sp.set("max_confidence", maxConf);
     const qs = sp.toString();
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     const current = window.location.pathname + window.location.search;
     if (next !== current) {
       window.history.replaceState(null, "", next);
     }
-  }, [hydrated, dq, regime, tag, pinnedOnly, sort, since, until, minConf]);
+  }, [hydrated, dq, regime, tag, pinnedOnly, sort, since, until, minConf, maxConf]);
 
   const params = new URLSearchParams();
   if (dq) params.set("q", dq);
@@ -167,6 +174,7 @@ export default function HistoryPage() {
   if (since) params.set("since", since);
   if (until) params.set("until", until);
   if (minConf) params.set("min_confidence", minConf);
+  if (maxConf) params.set("max_confidence", maxConf);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
 
@@ -299,6 +307,7 @@ export default function HistoryPage() {
     setSince("");
     setUntil("");
     setMinConf("");
+    setMaxConf("");
     setOffset(0);
   }
 
@@ -306,7 +315,7 @@ export default function HistoryPage() {
   const page = data?.runs ?? [];
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + page.length, total);
-  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0 || minConf.length > 0;
+  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0 || minConf.length > 0 || maxConf.length > 0;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -544,6 +553,35 @@ export default function HistoryPage() {
                 placeholder="0"
                 aria-label="Minimum snapshot confidence percent"
                 data-testid="filter-min-confidence"
+                className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none w-10 text-right"
+              />
+              <span aria-hidden="true">%</span>
+            </label>
+            <label
+              className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 muted hover:bg-white/5"
+              title="Only include runs whose snapshot confidence is at most this percent (0-100). Pairs with Min conf to bracket an uncertainty window."
+            >
+              Max conf
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                inputMode="numeric"
+                value={maxConf}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setMaxConf("");
+                  } else {
+                    const n = Math.max(0, Math.min(100, Math.floor(Number(raw))));
+                    setMaxConf(Number.isFinite(n) ? String(n) : "");
+                  }
+                  setOffset(0);
+                }}
+                placeholder="100"
+                aria-label="Maximum snapshot confidence percent"
+                data-testid="filter-max-confidence"
                 className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none w-10 text-right"
               />
               <span aria-hidden="true">%</span>
