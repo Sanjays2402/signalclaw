@@ -89,6 +89,7 @@ function useDebounced<T>(value: T, ms = 200): T {
 export default function HistoryPage() {
   const [q, setQ] = useState("");
   const [regime, setRegime] = useState<(typeof REGIMES)[number]>("all");
+  const [ticker, setTicker] = useState<string>("");
   const [tag, setTag] = useState<string>("");
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [sort, setSort] = useState<SortValue>("recent");
@@ -109,6 +110,8 @@ export default function HistoryPage() {
     if (urlRegime && (REGIMES as readonly string[]).includes(urlRegime)) {
       setRegime(urlRegime as (typeof REGIMES)[number]);
     }
+    const urlTicker = sp.get("ticker");
+    if (urlTicker) setTicker(urlTicker.toUpperCase().slice(0, 32));
     const urlTag = sp.get("tag");
     if (urlTag) setTag(urlTag);
     if (sp.get("pinned") === "1") setPinnedOnly(true);
@@ -140,6 +143,7 @@ export default function HistoryPage() {
   const [bulkTagMode, setBulkTagMode] = useState<null | "add" | "remove">(null);
 
   const dq = useDebounced(q, 200);
+  const dticker = useDebounced(ticker.trim().toUpperCase(), 200);
 
   // After hydration, mirror active filters back into the address bar so the
   // current view is shareable by copying the URL and survives reloads. We use
@@ -150,6 +154,7 @@ export default function HistoryPage() {
     const sp = new URLSearchParams();
     if (dq) sp.set("q", dq);
     if (regime !== "all") sp.set("regime", regime);
+    if (dticker) sp.set("ticker", dticker);
     if (tag) sp.set("tag", tag);
     if (pinnedOnly) sp.set("pinned", "1");
     if (sort !== "recent") sp.set("sort", sort);
@@ -163,11 +168,12 @@ export default function HistoryPage() {
     if (next !== current) {
       window.history.replaceState(null, "", next);
     }
-  }, [hydrated, dq, regime, tag, pinnedOnly, sort, since, until, minConf, maxConf]);
+  }, [hydrated, dq, regime, dticker, tag, pinnedOnly, sort, since, until, minConf, maxConf]);
 
   const params = new URLSearchParams();
   if (dq) params.set("q", dq);
   if (regime !== "all") params.set("regime", regime);
+  if (dticker) params.set("ticker", dticker);
   if (tag) params.set("tag", tag);
   if (pinnedOnly) params.set("pinned", "1");
   if (sort !== "recent") params.set("sort", sort);
@@ -199,6 +205,7 @@ export default function HistoryPage() {
   const exportParams = new URLSearchParams();
   if (dq) exportParams.set("q", dq);
   if (regime !== "all") exportParams.set("regime", regime);
+  if (dticker) exportParams.set("ticker", dticker);
   if (tag) exportParams.set("tag", tag);
   if (pinnedOnly) exportParams.set("pinned", "1");
   if (sort !== "recent") exportParams.set("sort", sort);
@@ -302,6 +309,7 @@ export default function HistoryPage() {
   function resetFilters() {
     setQ("");
     setRegime("all");
+    setTicker("");
     setTag("");
     setPinnedOnly(false);
     setSort("recent");
@@ -316,7 +324,7 @@ export default function HistoryPage() {
   const page = data?.runs ?? [];
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + page.length, total);
-  const hasFilters = dq.length > 0 || regime !== "all" || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0 || minConf.length > 0 || maxConf.length > 0;
+  const hasFilters = dq.length > 0 || regime !== "all" || dticker.length > 0 || tag.length > 0 || pinnedOnly || sort !== "recent" || since.length > 0 || until.length > 0 || minConf.length > 0 || maxConf.length > 0;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -492,6 +500,26 @@ export default function HistoryPage() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label
+              className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 muted hover:bg-white/5"
+              title="Only include runs whose ticker matches exactly (case-insensitive)"
+            >
+              Ticker
+              <input
+                type="text"
+                value={ticker}
+                onChange={(e) => {
+                  setTicker(e.target.value.toUpperCase().slice(0, 32));
+                  setOffset(0);
+                }}
+                placeholder="any"
+                aria-label="Filter by ticker symbol"
+                data-testid="filter-ticker"
+                spellCheck={false}
+                autoCapitalize="characters"
+                className="bg-transparent text-[10px] mono uppercase tracking-widest focus:outline-none w-14"
+              />
             </label>
             <label
               className="text-[10px] px-2 py-1.5 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 muted hover:bg-white/5"
