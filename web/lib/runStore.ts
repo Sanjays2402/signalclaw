@@ -514,6 +514,97 @@ export function runsToCSV(runs: SavedRun[]): string {
   return lines.join("\n") + "\n";
 }
 
+// Pure Markdown serializer for one saved run. Designed for pasting into Slack,
+// GitHub issues, or notes apps without losing the headline numbers.
+export function runToMarkdown(run: SavedRun): string {
+  const snap = run.payload.snapshot;
+  const dates = run.payload.dates ?? [];
+  const close = run.payload.close ?? [];
+  const counts = run.payload.counts ?? {};
+  const totalBars = Object.values(counts).reduce(
+    (a, b) => a + (typeof b === "number" ? b : 0),
+    0,
+  );
+  const pct = (v: number) =>
+    totalBars > 0 ? `${((v / totalBars) * 100).toFixed(1)}%` : "--";
+  const firstDate = dates[0] ?? "";
+  const lastDate = dates[dates.length - 1] ?? "";
+  const firstClose = typeof close[0] === "number" ? close[0] : null;
+  const lastClose =
+    typeof close[close.length - 1] === "number" ? close[close.length - 1] : null;
+  const periodReturn =
+    firstClose !== null && lastClose !== null && firstClose !== 0
+      ? ((lastClose / firstClose - 1) * 100).toFixed(2) + "%"
+      : "--";
+  const fmtNum = (n: number | null | undefined, digits = 4) =>
+    typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "--";
+  const fmtPctNum = (n: number | null | undefined) =>
+    typeof n === "number" && Number.isFinite(n)
+      ? (n * 100).toFixed(2) + "%"
+      : "--";
+
+  const lines: string[] = [];
+  lines.push(`# ${run.label}`);
+  lines.push("");
+  lines.push(
+    `**${run.ticker}** · ${run.lookback_days}d window · ${dates.length} bars · saved ${run.created_at}`,
+  );
+  if ((run.tags ?? []).length > 0) {
+    lines.push("");
+    lines.push("Tags: " + run.tags.map((t) => "`#" + t + "`").join(" "));
+  }
+  lines.push("");
+  lines.push("## Snapshot");
+  lines.push("");
+  if (snap) {
+    lines.push("| Field | Value |");
+    lines.push("| --- | --- |");
+    lines.push(`| Regime | ${snap.label.toUpperCase()} |`);
+    lines.push(`| Confidence | ${(snap.confidence * 100).toFixed(0)}% |`);
+    lines.push(`| Realized vol (annualized, 20d) | ${fmtPctNum(snap.realized_vol)} |`);
+    lines.push(`| Trend slope (OLS on log price) | ${fmtNum(snap.trend_slope)} |`);
+    lines.push(`| Drawdown from recent high | ${fmtPctNum(snap.drawdown)} |`);
+    lines.push(`| Risk scale | ${fmtNum(snap.risk_scale, 2)} |`);
+    lines.push(`| As of | ${snap.as_of} |`);
+  } else {
+    lines.push("_no snapshot_");
+  }
+  lines.push("");
+  lines.push("## Window");
+  lines.push("");
+  lines.push("| Field | Value |");
+  lines.push("| --- | --- |");
+  lines.push(`| First bar | ${firstDate || "--"}${firstClose !== null ? ` (${firstClose})` : ""} |`);
+  lines.push(`| Last bar | ${lastDate || "--"}${lastClose !== null ? ` (${lastClose})` : ""} |`);
+  lines.push(`| Period return | ${periodReturn} |`);
+  lines.push("");
+  lines.push("## Regime mix");
+  lines.push("");
+  lines.push("| Regime | Bars | Share |");
+  lines.push("| --- | ---: | ---: |");
+  for (const k of ["bull", "chop", "bear", "crash"] as const) {
+    const v = (counts as Record<string, number>)[k] || 0;
+    lines.push(`| ${k} | ${v} | ${pct(v)} |`);
+  }
+  if (run.notes && run.notes.trim().length > 0) {
+    lines.push("");
+    lines.push("## Notes");
+    lines.push("");
+    // Escape leading '#' so notes don't become headings.
+    for (const ln of run.notes.split(/\r?\n/)) {
+      lines.push(ln.replace(/^(#+)/, "\\$1"));
+    }
+  }
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  lines.push(
+    `_${run.payload.disclaimer || "SignalClaw is research tooling. Outputs may be wrong. Do your own work."}_`,
+  );
+  lines.push(`_Run id: \`${run.id}\`_`);
+  return lines.join("\n") + "\n";
+}
+
 // Test helper: in-memory reset, only used by unit tests.
 export async function _resetForTests(): Promise<void> {
   try {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRun, runsToCSV } from "@/lib/runStore";
+import { getRun, runsToCSV, runToMarkdown } from "@/lib/runStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,9 +8,9 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const format = (req.nextUrl.searchParams.get("format") ?? "csv").toLowerCase();
-  if (format !== "csv" && format !== "json") {
+  if (format !== "csv" && format !== "json" && format !== "md" && format !== "markdown") {
     return NextResponse.json(
-      { error: { code: "bad_format", message: "format must be csv or json" } },
+      { error: { code: "bad_format", message: "format must be csv, json, or md" } },
       { status: 400 },
     );
   }
@@ -29,6 +29,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       headers: {
         "content-type": "application/json; charset=utf-8",
         "content-disposition": `attachment; filename="${base}.json"`,
+      },
+    });
+  }
+  if (format === "md" || format === "markdown") {
+    return new NextResponse(runToMarkdown(run), {
+      status: 200,
+      headers: {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="${base}.md"`,
       },
     });
   }

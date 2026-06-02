@@ -204,6 +204,51 @@ test("runsToCSV: header + one row per bar + escaping", async () => {
   assert.equal(empty.trim().split("\n").length, 1);
 });
 
+test("runToMarkdown: headline numbers, regime mix, tags, notes, disclaimer", async () => {
+  await store._resetForTests();
+  const created = await store.createRun({
+    label: "SPY swing check",
+    ticker: "SPY",
+    lookback_days: 504,
+    tags: ["swing", "q2"],
+    notes: "watch fed meeting\n# not a heading",
+    payload: samplePayload,
+  });
+  const md = store.runToMarkdown(created);
+  // Title and header line.
+  assert.ok(md.startsWith("# SPY swing check\n"));
+  assert.ok(md.includes("**SPY**"));
+  assert.ok(md.includes("504d window"));
+  assert.ok(md.includes("2 bars"));
+  // Tags rendered.
+  assert.ok(md.includes("`#swing`"));
+  assert.ok(md.includes("`#q2`"));
+  // Snapshot row exposes uppercased regime and confidence percent.
+  assert.ok(md.includes("| Regime | BULL |"));
+  assert.ok(md.includes("| Confidence | 82% |"));
+  // Period return is computed from first/last close.
+  // (471.5 / 470.1 - 1) * 100 = 0.30%
+  assert.ok(md.includes("| Period return | 0.30% |"));
+  // Regime mix shows shares.
+  assert.ok(md.includes("| bull | 2 | 100.0% |"));
+  assert.ok(md.includes("| chop | 0 | 0.0% |"));
+  // Notes are included and leading '#' is escaped so it does not become a heading.
+  assert.ok(md.includes("## Notes"));
+  assert.ok(md.includes("watch fed meeting"));
+  assert.ok(md.includes("\\# not a heading"));
+  // Disclaimer and run id footer.
+  assert.ok(md.includes("research only"));
+  assert.ok(md.includes("Run id: `" + created.id + "`"));
+  // No snapshot variant still renders without throwing.
+  const noSnap = {
+    ...created,
+    payload: { ...created.payload, snapshot: null, dates: [], close: [], counts: {} },
+  };
+  const md2 = store.runToMarkdown(noSnap);
+  assert.ok(md2.includes("_no snapshot_"));
+  assert.ok(md2.includes("| Period return | -- |"));
+});
+
 test("normalizeTags: lowercases, slugifies, dedups, caps at 8", async () => {
   const out = store.normalizeTags([
     "Swing",
