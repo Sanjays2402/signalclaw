@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import RuleVisual from "@/components/RuleVisual";
@@ -16,7 +16,8 @@ import {
   fmtUsd,
 } from "@/components/ui";
 import { api, swrFetcher, type Alert, type AlertIn, type AlertHistory } from "@/lib/api";
-import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple, Power } from "@phosphor-icons/react/dist/ssr";
+import { filterAlerts, type AlertStateFilter } from "@/lib/alertFilter";
+import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple, Power, MagnifyingGlass } from "@phosphor-icons/react/dist/ssr";
 
 const CONDITIONS = [
   { v: "price_above", l: "price >" },
@@ -37,6 +38,13 @@ function Alerts() {
   const { data, error, isLoading } = useSWR<{ alerts: Alert[] }>("/api/alerts", swrFetcher);
   const [busy, setBusy] = useState<string | null>(null);
   const [formErr, setFormErr] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<AlertStateFilter>("");
+  const allAlerts = data?.alerts ?? [];
+  const visibleAlerts = useMemo(
+    () => filterAlerts(allAlerts, { query, state: stateFilter }),
+    [allAlerts, query, stateFilter],
+  );
 
   async function onCreate(input: AlertIn) {
     setFormErr(null);
@@ -114,7 +122,46 @@ function Alerts() {
         ) : data.alerts.length === 0 ? (
           <Empty title="No alerts armed" hint="Add one above to watch a level." />
         ) : (
-          <div className="overflow-x-auto -mx-3">
+          <>
+            <div className="flex items-center gap-2 flex-wrap pb-3 mb-3 border-b border-[var(--border)]">
+              <div className="relative flex-1 min-w-[200px]">
+                <MagnifyingGlass weight="duotone" size={14} className="absolute left-2 top-1/2 -translate-y-1/2 opacity-60 pointer-events-none" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search ticker or note"
+                  className="pl-7"
+                  data-testid="alert-filter-query"
+                />
+              </div>
+              <Select
+                value={stateFilter}
+                onChange={(e) => setStateFilter(e.target.value as AlertStateFilter)}
+                title="Filter by enabled state"
+                data-testid="alert-filter-state"
+                className="w-auto"
+              >
+                <option value="">All states</option>
+                <option value="enabled">Enabled only</option>
+                <option value="disabled">Disabled only</option>
+              </Select>
+              <span className="muted text-xs mono" data-testid="alert-filter-count">
+                {visibleAlerts.length}/{allAlerts.length}
+              </span>
+              {(query || stateFilter) && (
+                <button
+                  type="button"
+                  className="text-[10px] uppercase tracking-widest mono px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)]"
+                  onClick={() => { setQuery(""); setStateFilter(""); }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {visibleAlerts.length === 0 ? (
+              <Empty title="No alerts match" hint="Try clearing the filter or widening your search." />
+            ) : (
+            <div className="overflow-x-auto -mx-3">
             <table className="trade">
               <thead>
                 <tr>
@@ -130,7 +177,7 @@ function Alerts() {
                 </tr>
               </thead>
               <tbody>
-                {data.alerts.map((a) => {
+                {visibleAlerts.map((a) => {
                   const val = typeof a.value === "number" ? a.value : parseFloat(String(a.value));
                   const isPct = a.condition.includes("pct");
                   const valDisp =
@@ -189,6 +236,8 @@ function Alerts() {
               </tbody>
             </table>
           </div>
+            )}
+          </>
         )}
       </Card>
     </div>
