@@ -6,6 +6,7 @@ import { Card, Loading, ErrorBox, Empty, Badge } from "@/components/ui";
 import PinnedRail from "@/components/PinnedRail";
 import {
   ClockCounterClockwise,
+  ArrowsLeftRight,
   Trash,
   PencilSimple,
   Check,
@@ -657,6 +658,40 @@ export default function HistoryPage() {
                   >
                     <DownloadSimple size={11} weight="bold" /> MD
                   </button>
+                  {(() => {
+                    const ids = Array.from(selected);
+                    const canCompare = ids.length === 2;
+                    const href = canCompare
+                      ? `/compare?a=${encodeURIComponent(ids[0])}&b=${encodeURIComponent(ids[1])}`
+                      : "#";
+                    const title = canCompare
+                      ? "Open /compare with the two selected runs"
+                      : `Select exactly 2 runs to compare (currently ${selected.size})`;
+                    if (canCompare) {
+                      return (
+                        <Link
+                          href={href}
+                          data-testid="bulk-compare"
+                          title={title}
+                          className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] hover:bg-white/5 uppercase tracking-widest font-semibold mono flex items-center gap-1"
+                        >
+                          <ArrowsLeftRight size={11} weight="bold" /> Compare
+                        </Link>
+                      );
+                    }
+                    return (
+                      <button
+                        type="button"
+                        disabled
+                        aria-disabled="true"
+                        data-testid="bulk-compare"
+                        title={title}
+                        className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border-strong)] uppercase tracking-widest font-semibold mono flex items-center gap-1 opacity-50 cursor-not-allowed"
+                      >
+                        <ArrowsLeftRight size={11} weight="bold" /> Compare
+                      </button>
+                    );
+                  })()}
                   <button
                     disabled={bulkBusy}
                     onClick={() => runBulk("delete")}
