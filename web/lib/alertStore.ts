@@ -233,6 +233,51 @@ export async function listHistory(opts: { ticker?: string; limit: number; offset
   };
 }
 
+// listAllHistory returns every event for export, ignoring the paginated
+// limit/offset that drives the on-screen table. The ticker filter still
+// applies so users get exactly what they see in the UI when a filter is set.
+export async function listAllHistory(opts: { ticker?: string; ownerId?: string | null }):
+  Promise<AlertEvent[]> {
+  const oid = normalizeOwnerId(opts.ownerId);
+  const store = await readStore();
+  const history = store.tenants[oid]?.history ?? [];
+  const filtered = opts.ticker
+    ? history.filter((e) => e.ticker === opts.ticker)
+    : history;
+  return filtered.slice().sort((a, b) => b.fired_at.localeCompare(a.fired_at));
+}
+
+function csvEscape(v: string): string {
+  if (v === "") return "";
+  if (/[",\n\r]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
+  return v;
+}
+
+export function eventsToCSV(events: AlertEvent[]): string {
+  const header = "fired_at,ticker,condition,value,observed,alert_id,note";
+  const lines = events.map((e) =>
+    [
+      e.fired_at,
+      e.ticker,
+      e.condition,
+      String(e.value),
+      String(e.observed),
+      e.alert_id,
+      csvEscape(e.note ?? ""),
+    ].join(","),
+  );
+  return [header, ...lines].join("\n") + "\n";
+}
+
+export function eventsToJSON(events: AlertEvent[]): string {
+  const payload = {
+    exported_at: new Date().toISOString(),
+    count: events.length,
+    events,
+  };
+  return JSON.stringify(payload, null, 2) + "\n";
+}
+
 export async function clearHistory(ownerId?: string | null): Promise<number> {
   const oid = normalizeOwnerId(ownerId);
   const store = await readStore();

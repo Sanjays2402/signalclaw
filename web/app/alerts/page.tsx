@@ -16,7 +16,7 @@ import {
   fmtUsd,
 } from "@/components/ui";
 import { api, swrFetcher, type Alert, type AlertIn, type AlertHistory } from "@/lib/api";
-import { BellRinging, Trash, Plus, ClockCounterClockwise } from "@phosphor-icons/react/dist/ssr";
+import { BellRinging, Trash, Plus, ClockCounterClockwise, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 
 const CONDITIONS = [
   { v: "price_above", l: "price >" },
@@ -318,6 +318,38 @@ function AlertHistoryCard({ refreshKey }: { refreshKey: number }) {
           >
             Next
           </Button>
+          {(() => {
+            const exportQs = new URLSearchParams();
+            if (ticker.trim()) exportQs.set("ticker", ticker.trim().toUpperCase());
+            const suffix = exportQs.toString() ? `&${exportQs.toString()}` : "";
+            const disabled = !data || data.total === 0;
+            const linkCls =
+              "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono" +
+              (disabled ? " opacity-40 pointer-events-none" : "");
+            const tip = ticker.trim()
+              ? `Download fire history for ${ticker.trim().toUpperCase()}`
+              : "Download all fire history";
+            return (
+              <>
+                <a
+                  href={`/api/alerts/history?format=csv${suffix}`}
+                  className={linkCls}
+                  title={`${tip} as CSV`}
+                  data-testid="alert-history-export-csv"
+                >
+                  <DownloadSimple weight="duotone" size={11} /> CSV
+                </a>
+                <a
+                  href={`/api/alerts/history?format=json${suffix}`}
+                  className={linkCls}
+                  title={`${tip} as JSON`}
+                  data-testid="alert-history-export-json"
+                >
+                  <DownloadSimple weight="duotone" size={11} /> JSON
+                </a>
+              </>
+            );
+          })()}
           <Button variant="danger" onClick={onClear} disabled={busy} className="text-[10px]">
             <Trash weight="duotone" size={11} className="inline mr-1" />
             Clear
