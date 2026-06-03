@@ -13,8 +13,27 @@ import {
   WarningCircle,
   Sparkle,
   Info,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { Card, Button, Empty, Loading, ErrorBox } from "@/components/ui";
+import {
+  activityEventsToCSV,
+  activityEventsToJSON,
+  activityFilename,
+} from "@/lib/activityExport";
+
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 type Ev = {
   id: string;
@@ -173,6 +192,36 @@ export default function ActivityPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            onClick={() =>
+              data &&
+              downloadBlob(
+                activityEventsToCSV(data.events),
+                "text/csv;charset=utf-8",
+                activityFilename(kindFilter, unreadOnly, "csv"),
+              )
+            }
+            disabled={!data || data.events.length === 0}
+            data-testid="activity-export-csv"
+            title="Download the filtered events as CSV"
+          >
+            <DownloadSimple size={14} weight="duotone" /> CSV
+          </Button>
+          <Button
+            onClick={() =>
+              data &&
+              downloadBlob(
+                activityEventsToJSON(data.events),
+                "application/json;charset=utf-8",
+                activityFilename(kindFilter, unreadOnly, "json"),
+              )
+            }
+            disabled={!data || data.events.length === 0}
+            data-testid="activity-export-json"
+            title="Download the filtered events as JSON"
+          >
+            <DownloadSimple size={14} weight="duotone" /> JSON
+          </Button>
           <Button onClick={markAllRead} disabled={busy === "all"}>
             <CheckCircle size={14} weight="duotone" /> Mark all read
           </Button>
