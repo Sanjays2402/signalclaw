@@ -4,7 +4,7 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { api, swrFetcher, type WebhookList, type WebhookIn, type WebhookDelivery, type WebhookDeliveryLog } from "@/lib/api";
-import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple, ShieldCheck, ShieldWarning, Globe, Lock, LockOpen, Key, Pause, Play } from "@phosphor-icons/react/dist/ssr";
+import { PlugsConnected as WebhooksIcon, Trash, Plus, Lightning, CheckCircle, XCircle, Receipt, ArrowClockwise, FunnelSimple, ShieldCheck, ShieldWarning, Globe, Lock, LockOpen, Key, Pause, Play, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 
 const EVENT_KINDS = ["entered", "exited", "upgraded", "downgraded", "score_jump"];
 
@@ -210,24 +210,54 @@ function Webhooks() {
             <span className="flex items-center gap-1">
               <Receipt weight="duotone" size={12} /> Most recent attempts, newest first.
             </span>
-            <div className="flex items-center gap-1" role="tablist" aria-label="Filter delivery log">
-              <FunnelSimple weight="duotone" size={12} className="muted" />
-              {(["all", "ok", "failed"] as const).map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  role="tab"
-                  aria-selected={logFilter === f}
-                  onClick={() => setLogFilter(f)}
-                  className={`px-2 py-0.5 rounded-md text-[11px] mono border ${
-                    logFilter === f
-                      ? "border-[var(--accent)] text-[var(--accent)]"
-                      : "border-[var(--border)] muted hover:text-[var(--fg)]"
-                  }`}
-                >
-                  {f}
-                </button>
-              ))}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1" role="tablist" aria-label="Filter delivery log">
+                <FunnelSimple weight="duotone" size={12} className="muted" />
+                {(["all", "ok", "failed"] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    role="tab"
+                    aria-selected={logFilter === f}
+                    onClick={() => setLogFilter(f)}
+                    className={`px-2 py-0.5 rounded-md text-[11px] mono border ${
+                      logFilter === f
+                        ? "border-[var(--accent)] text-[var(--accent)]"
+                        : "border-[var(--border)] muted hover:text-[var(--fg)]"
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+              {(() => {
+                const suffix = logFilter === "all" ? "" : `&status=${logFilter}`;
+                const linkCls =
+                  "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono";
+                const tip = logFilter === "all"
+                  ? "Download all webhook deliveries"
+                  : `Download ${logFilter} webhook deliveries`;
+                return (
+                  <>
+                    <a
+                      href={`/api/webhooks/deliveries?format=csv${suffix}`}
+                      className={linkCls}
+                      title={`${tip} as CSV`}
+                      data-testid="webhook-deliveries-export-csv"
+                    >
+                      <DownloadSimple weight="duotone" size={11} /> CSV
+                    </a>
+                    <a
+                      href={`/api/webhooks/deliveries?format=json${suffix}`}
+                      className={linkCls}
+                      title={`${tip} as JSON`}
+                      data-testid="webhook-deliveries-export-json"
+                    >
+                      <DownloadSimple weight="duotone" size={11} /> JSON
+                    </a>
+                  </>
+                );
+              })()}
             </div>
           </div>
           {replayErr && <ErrorBox err={replayErr} />}
