@@ -19,7 +19,21 @@ import {
   colorOf,
 } from "@/components/ui";
 import { api, swrFetcher, type Bracket, type BracketIn, type BracketStats } from "@/lib/api";
-import { ArrowsClockwise, Trash, Plus, CheckCircle, X } from "@phosphor-icons/react/dist/ssr";
+import { bracketsToCSV, bracketsToJSON, bracketsFilename } from "@/lib/bracketsExport";
+import { ArrowsClockwise, Trash, Plus, CheckCircle, X, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 export default function BracketsPage() {
   return (
@@ -144,6 +158,35 @@ function Brackets() {
         ) : list.data.plans.length === 0 ? (
           <Empty title="No bracket plans" hint="Create one above to start tracking R." />
         ) : (
+          <>
+          <div className="flex flex-wrap gap-2 text-xs mb-3">
+            <button
+              type="button"
+              onClick={() => downloadBlob(
+                bracketsToCSV(list.data.plans),
+                "text/csv;charset=utf-8",
+                bracketsFilename("csv"),
+              )}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+              title="Download bracket plans as CSV for spreadsheet import"
+              data-testid="brackets-export-csv"
+            >
+              <DownloadSimple size={12} weight="bold" /> CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadBlob(
+                bracketsToJSON(list.data.plans),
+                "application/json;charset=utf-8",
+                bracketsFilename("json"),
+              )}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+              title="Download bracket plans as JSON for scripting or backup"
+              data-testid="brackets-export-json"
+            >
+              <DownloadSimple size={12} weight="bold" /> JSON
+            </button>
+          </div>
           <div className="overflow-x-auto -mx-3">
             <table className="trade">
               <thead>
@@ -236,6 +279,7 @@ function Brackets() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </Card>
     </div>
