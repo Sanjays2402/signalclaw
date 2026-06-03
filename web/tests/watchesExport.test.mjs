@@ -98,3 +98,37 @@ test("Filename helper", () => {
   assert.equal(mod.watchesFilename("csv"), "watches.csv");
   assert.equal(mod.watchesFilename("json"), "watches.json");
 });
+
+test("filterWatches: empty filter returns a copy of every row", () => {
+  const out = mod.filterWatches(sample, {});
+  assert.equal(out.length, sample.length);
+  assert.notEqual(out, sample);
+});
+
+test("filterWatches: ticker substring is case-insensitive", () => {
+  const out = mod.filterWatches(sample, { ticker: "aap" });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].ticker, "AAPL");
+});
+
+test("filterWatches: state=active keeps enabled watches only", () => {
+  const out = mod.filterWatches(sample, { state: "active" });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].ticker, "SPY");
+});
+
+test("filterWatches: state=paused keeps disabled watches only", () => {
+  const out = mod.filterWatches(sample, { state: "paused" });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].ticker, "AAPL");
+});
+
+test("filterWatches: combined ticker and state", () => {
+  const out = mod.filterWatches(sample, { ticker: "SPY", state: "paused" });
+  assert.equal(out.length, 0);
+});
+
+test("filterWatches: whitespace-only ticker is treated as no filter", () => {
+  const out = mod.filterWatches(sample, { ticker: "   " });
+  assert.equal(out.length, sample.length);
+});

@@ -40,6 +40,26 @@ function sortedWatches(rows: WatchLite[]): WatchLite[] {
   });
 }
 
+export type WatchFilter = {
+  // Free-text substring matched against the watch ticker (case-insensitive).
+  ticker?: string;
+  // Enabled-state bucket. "all" returns every row, "active" keeps enabled,
+  // "paused" keeps disabled.
+  state?: "all" | "active" | "paused";
+};
+
+export function filterWatches(rows: WatchLite[], f: WatchFilter): WatchLite[] {
+  const q = (f.ticker ?? "").trim().toUpperCase();
+  const state = f.state ?? "all";
+  if (!q && state === "all") return rows.slice();
+  return rows.filter((w) => {
+    if (q && !(w.ticker ?? "").toUpperCase().includes(q)) return false;
+    if (state === "active" && !w.enabled) return false;
+    if (state === "paused" && w.enabled) return false;
+    return true;
+  });
+}
+
 export function watchesToCSV(rows: WatchLite[]): string {
   const lines: string[] = [];
   lines.push(

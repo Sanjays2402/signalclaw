@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
@@ -15,8 +15,29 @@ import {
   Field,
 } from "@/components/ui";
 import { api, swrFetcher, ApiError } from "@/lib/api";
-import { watchesToCSV, watchesToJSON, watchesFilename } from "@/lib/watchesExport";
-import { Eye, Trash, Plus, Play, ArrowRight, Clock, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import {
+  watchesToCSV,
+  watchesToJSON,
+  watchesFilename,
+  filterWatches,
+} from "@/lib/watchesExport";
+import {
+  WATCH_STATE_FILTERS,
+  WATCHES_FILTER_DEFAULT,
+  parseWatchesUrlState,
+  serializeWatchesUrlState,
+  type WatchStateUrl,
+} from "@/lib/watchesUrl";
+import {
+  Eye,
+  Trash,
+  Plus,
+  Play,
+  ArrowRight,
+  Clock,
+  DownloadSimple,
+  Link as LinkIcon,
+} from "@phosphor-icons/react/dist/ssr";
 
 function downloadBlob(content: string, mime: string, filename: string) {
   const blob = new Blob([content], { type: mime });
@@ -97,6 +118,30 @@ function Watches() {
   const [busy, setBusy] = useState<string | null>(null);
   const [formErr, setFormErr] = useState<string | null>(null);
 
+  // Filter state mirrors to /watches?q=...&state=... so a teammate can
+  // land on the same filtered view from a shared link.
+  const [query, setQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<WatchStateUrl>(
+    WATCHES_FILTER_DEFAULT.state,
+  );
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const s = parseWatchesUrlState(globalThis.window.location.search);
+    setQuery(s.query);
+    setStateFilter(s.state);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeWatchesUrlState({ query, state: stateFilter });
+    const loc = globalThis.window.location;
+    const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
+    const current = loc.pathname + loc.search;
+    if (next !== current) globalThis.window.history.replaceState(null, "", next);
+  }, [hydrated, query, stateFilter]);
+
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setFormErr(null);
@@ -164,7 +209,12 @@ function Watches() {
     }
   }
 
-  const watches = data?.watches ?? [];
+  const allWatches = data?.watches ?? [];
+  const watches = useMemo(
+    () => filterWatches(allWatches, { ticker: query, state: stateFilter }),
+    [allWatches, query, stateFilter],
+  );
+  const filterActive = query.trim() !== "" || stateFilter !== WATCHES_FILTER_DEFAULT.state;
 
   return (
     <div className="space-y-6">
@@ -209,7 +259,11 @@ function Watches() {
             <DownloadSimple size={14} weight="duotone" /> JSON
           </Button>
           <div className="text-[11px] muted mono">
-            {data ? `${data.total}/${data.limit} watches` : ""}
+            {data
+              ? filterActive
+                ? `${watches.length}/${data.total} shown · ${data.total}/${data.limit} watches`
+                : `${data.total}/${data.limit} watches`
+              : ""}
           </div>
         </div>
       </header>
@@ -272,9 +326,59 @@ function Watches() {
         <Loading label="Loading watches" />
       ) : error ? (
         <ErrorBox err={error} />
-      ) : watches.length === 0 ? (
+      ) : allWatches.length === 0 ? (
         <Empty title="No watches yet" hint="Add a ticker above to schedule recurring regime runs." />
       ) : (
+        <>
+        <Card>
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="Filter ticker">
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value.slice(0, 64))}
+                placeholder="e.g. SPY"
+                aria-label="Filter watches by ticker"
+                data-testid="watches-filter-q"
+              />
+            </Field>
+            <Field label="State">
+              <Select
+                value={stateFilter}
+                onChange={(e) => setStateFilter(e.target.value as WatchStateUrl)}
+                aria-label="Filter watches by state"
+                data-testid="watches-filter-state"
+              >
+                {WATCH_STATE_FILTERS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <div className="flex items-center gap-2">
+              {filterActive ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery("");
+                    setStateFilter(WATCHES_FILTER_DEFAULT.state);
+                  }}
+                  className="text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono"
+                  data-testid="watches-filter-clear"
+                >
+                  Clear
+                </button>
+              ) : null}
+              <CopyLinkButton />
+            </div>
+          </div>
+        </Card>
+        {watches.length === 0 ? (
+          <Empty
+            title="No watches match"
+            hint="Try a different ticker or clear the filter to see every row."
+          />
+        ) : (
         <Card>
           <div className="overflow-x-auto">
             <table className="w-full text-[12px] mono">
@@ -368,6 +472,8 @@ function Watches() {
             </table>
           </div>
         </Card>
+        )}
+        </>
       )}
 
       <Card>
@@ -392,5 +498,46 @@ curl http://localhost:7430/api/watches/run \\
         </div>
       </Card>
     </div>
+  );
+}
+
+function CopyLinkButton() {
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState(false);
+  async function onClick() {
+    try {
+      const url = window.location.href;
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        if (!ok) throw new Error("copy failed");
+      }
+      setErr(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setErr(true);
+      setTimeout(() => setErr(false), 1500);
+    }
+  }
+  const label = err ? "FAILED" : copied ? "COPIED" : "COPY LINK";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono"
+      title="Copy a shareable link that preserves the current filter"
+      data-testid="watches-copy-link"
+    >
+      <LinkIcon size={11} weight="duotone" /> {label}
+    </button>
   );
 }
