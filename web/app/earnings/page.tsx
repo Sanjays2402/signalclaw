@@ -1,10 +1,16 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { api, swrFetcher, type EarningsList, type EarningsIn } from "@/lib/api";
 import { earningsToCSV, earningsToJSON, earningsFilename } from "@/lib/earningsExport";
+import {
+  EARNINGS_WITHIN_CHOICES,
+  parseEarningsUrlState,
+  serializeEarningsUrlState,
+  tickerMatchesEarningsQuery,
+} from "@/lib/earningsUrl";
 import { CalendarBlank, Trash, FloppyDisk, CheckCircle, Circle, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -38,10 +44,36 @@ function daysUntil(iso: string): number | null {
 
 function Earnings() {
   const [within, setWithin] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  const [hydrated, setHydrated] = useState(false);
   const key = within ? `/earnings?within_days=${within}` : "/earnings";
   const { data, error, isLoading } = useSWR<EarningsList>(key, swrFetcher);
   const [busy, setBusy] = useState<string | null>(null);
   const [formErr, setFormErr] = useState<string | null>(null);
+
+  // Hydrate filter state from the URL on first mount so a shared link like
+  // /earnings?q=aapl&within=14 lands on the same view the sender saw.
+  useEffect(() => {
+    const s = parseEarningsUrlState(globalThis.window.location.search);
+    setQuery(s.query);
+    setWithin(s.within);
+    setHydrated(true);
+  }, []);
+
+  // Mirror filter state back into the URL without adding history entries.
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeEarningsUrlState({ query, within });
+    const loc = globalThis.window.location;
+    const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
+    const current = loc.pathname + loc.search;
+    if (next !== current) globalThis.window.history.replaceState(null, "", next);
+  }, [hydrated, query, within]);
+
+  const visibleRows = useMemo(() => {
+    if (!data) return [] as EarningsList["rows"];
+    return data.rows.filter((r) => tickerMatchesEarningsQuery(r.ticker, query));
+  }, [data, query]);
 
   async function upsert(ticker: string, body: EarningsIn) {
     setFormErr(null);
@@ -81,9 +113,18 @@ function Earnings() {
           </h1>
           <p className="muted text-xs">Upcoming earnings dates by ticker. Used to gate picks near events.</p>
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center flex-wrap">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value.slice(0, 64))}
+            placeholder="Filter ticker"
+            aria-label="Filter earnings by ticker"
+            data-testid="earnings-filter"
+            className="text-[10px] mono px-2 py-1 rounded-sm bg-transparent border border-[var(--border)] focus:border-[var(--accent)] outline-none uppercase tracking-widest w-28"
+          />
           <span className="muted text-xs">Window</span>
-          {[null, 7, 14, 30].map((d) => (
+          {EARNINGS_WITHIN_CHOICES.map((d) => (
             <button
               key={String(d)}
               onClick={() => setWithin(d)}
@@ -106,13 +147,26 @@ function Earnings() {
         <Empty title="No upcoming earnings" hint="Add a row above to track an upcoming report." />
       )}
 
-      {data && data.rows.length > 0 && (
-        <Card title={`${data.rows.length} rows`}>
+      {data && data.rows.length > 0 && visibleRows.length === 0 && (
+        <Empty
+          title="No earnings match"
+          hint={query ? `Clear or change the "${query}" filter.` : undefined}
+        />
+      )}
+
+      {data && visibleRows.length > 0 && (
+        <Card
+          title={
+            query.trim()
+              ? `${visibleRows.length} of ${data.rows.length} rows`
+              : `${data.rows.length} rows`
+          }
+        >
           <div className="flex flex-wrap gap-2 text-xs mb-3">
             <button
               type="button"
               onClick={() => downloadBlob(
-                earningsToCSV(data.rows),
+                earningsToCSV(visibleRows),
                 "text/csv;charset=utf-8",
                 earningsFilename(within, "csv"),
               )}
@@ -125,7 +179,7 @@ function Earnings() {
             <button
               type="button"
               onClick={() => downloadBlob(
-                earningsToJSON(data.rows),
+                earningsToJSON(visibleRows),
                 "application/json;charset=utf-8",
                 earningsFilename(within, "json"),
               )}
@@ -149,7 +203,7 @@ function Earnings() {
                 </tr>
               </thead>
               <tbody>
-                {data.rows
+                {visibleRows
                   .slice()
                   .sort((a, b) => a.next_report.localeCompare(b.next_report))
                   .map((r) => {
