@@ -25,7 +25,12 @@ import {
   type DrawdownReport,
   type Position,
 } from "@/lib/api";
-import { CaretUp, CaretDown } from "@phosphor-icons/react/dist/ssr";
+import { CaretUp, CaretDown, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import {
+  positionsToCSV,
+  positionsToJSON,
+  portfolioExportFilename,
+} from "@/lib/portfolioExport";
 
 export default function PortfolioPage() {
   return (
@@ -85,9 +90,12 @@ function Portfolio() {
         title="Positions"
         right={
           snap.data && (
-            <span className="muted text-[10px] uppercase tracking-widest mono">
-              {snap.data.positions.length} rows
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="muted text-[10px] uppercase tracking-widest mono">
+                {snap.data.positions.length} rows
+              </span>
+              <PortfolioExportButtons snap={snap.data} />
+            </div>
           )
         }
       >
@@ -272,6 +280,51 @@ function PositionsTable({ snap }: { snap: PortfolioSnapshot }) {
           </tr>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function PortfolioExportButtons({ snap }: { snap: PortfolioSnapshot }) {
+  const disabled = snap.positions.length === 0;
+  function download(ext: "csv" | "json") {
+    const body = ext === "csv" ? positionsToCSV(snap) : positionsToJSON(snap);
+    const mime =
+      ext === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8";
+    const blob = new Blob([body], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = portfolioExportFilename(ext);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const cls =
+    "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono" +
+    (disabled ? " opacity-40 pointer-events-none" : "");
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => download("csv")}
+        disabled={disabled}
+        className={cls}
+        title="Download positions as CSV"
+        data-testid="portfolio-export-csv"
+      >
+        <DownloadSimple weight="duotone" size={11} /> CSV
+      </button>
+      <button
+        type="button"
+        onClick={() => download("json")}
+        disabled={disabled}
+        className={cls}
+        title="Download positions as JSON"
+        data-testid="portfolio-export-json"
+      >
+        <DownloadSimple weight="duotone" size={11} /> JSON
+      </button>
     </div>
   );
 }
