@@ -5,13 +5,18 @@ import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { swrFetcher, type Diversification } from "@/lib/api";
-import { Graph, ShieldWarning, ArrowRight } from "@phosphor-icons/react/dist/ssr";
+import { Graph, ShieldWarning, ArrowRight, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import {
   DIV_THRESHOLD_DEFAULT,
   DIV_WINDOW_DEFAULT,
   parseDiversificationUrlState,
   serializeDiversificationUrlState,
 } from "@/lib/diversificationUrl";
+import {
+  diversificationToCSV,
+  diversificationToJSON,
+  diversificationFilename,
+} from "@/lib/diversificationExport";
 
 export default function Page() {
   return (
@@ -98,6 +103,20 @@ function DivView() {
   );
 }
 
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Defer revoke so the download starts in all browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function Body({ data }: { data: Diversification }) {
   if (data.n_tickers < 2) {
     return <Empty title="Not enough tickers to cluster" hint="Add at least two tickers with cached OHLCV to the watchlist." />;
@@ -105,6 +124,34 @@ function Body({ data }: { data: Diversification }) {
   const pair = data.most_correlated_pair;
   return (
     <div className="space-y-5">
+      <div className="flex flex-wrap gap-2 text-xs">
+        <button
+          type="button"
+          onClick={() => downloadBlob(
+            diversificationToCSV(data),
+            "text/csv;charset=utf-8",
+            diversificationFilename(data.window, data.threshold, "csv"),
+          )}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+          title="Download the diversification snapshot as CSV for spreadsheet analysis"
+          data-testid="diversification-export-csv"
+        >
+          <DownloadSimple size={12} weight="bold" /> CSV
+        </button>
+        <button
+          type="button"
+          onClick={() => downloadBlob(
+            diversificationToJSON(data),
+            "application/json;charset=utf-8",
+            diversificationFilename(data.window, data.threshold, "json"),
+          )}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+          title="Download the diversification snapshot as JSON"
+          data-testid="diversification-export-json"
+        >
+          <DownloadSimple size={12} weight="bold" /> JSON
+        </button>
+      </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat label="tickers" value={data.n_tickers.toString()} />
         <Stat label="avg pairwise corr" value={data.avg_pairwise_corr.toFixed(3)} />
