@@ -47,6 +47,16 @@ export default function PortfolioPage() {
   );
 }
 
+// Returns the number of positions that pass the ticker filter. Hoisted so
+// the Card header can show "N of M rows" without re-running the table sort.
+function filteredCount(snap: PortfolioSnapshot, query: string): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return snap.positions.length;
+  let n = 0;
+  for (const p of snap.positions) if (p.ticker.toLowerCase().includes(q)) n++;
+  return n;
+}
+
 type SortKey = "ticker" | "qty" | "avg" | "mark" | "mv" | "weight" | "pnl" | "pct" | "realized";
 
 type SortState = { k: SortKey; dir: 1 | -1 };
@@ -58,22 +68,28 @@ function Portfolio() {
     k: PORTFOLIO_SORT_DEFAULT.k as SortKey,
     dir: PORTFOLIO_SORT_DEFAULT.dir,
   });
+  const [query, setQuery] = useState("");
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     const s = parsePortfolioUrlState(globalThis.window.location.search);
     setSort({ k: s.sortKey as SortKey, dir: s.sortDir });
+    setQuery(s.query);
     setHydrated(true);
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    const qs = serializePortfolioUrlState({ sortKey: sort.k, sortDir: sort.dir as PortfolioSortDir });
+    const qs = serializePortfolioUrlState({
+      sortKey: sort.k,
+      sortDir: sort.dir as PortfolioSortDir,
+      query,
+    });
     const loc = globalThis.window.location;
     const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
     const current = loc.pathname + loc.search;
     if (next !== current) globalThis.window.history.replaceState(null, "", next);
-  }, [hydrated, sort]);
+  }, [hydrated, sort, query]);
 
   const snap = useSWR<PortfolioSnapshot>("/portfolio/snapshot", swrFetcher, {
     refreshInterval: 30000,
@@ -123,8 +139,17 @@ function Portfolio() {
         right={
           snap.data && (
             <div className="flex items-center gap-3">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value.slice(0, 64))}
+                placeholder="Filter ticker"
+                aria-label="Filter positions by ticker"
+                data-testid="portfolio-filter"
+                className="text-[10px] mono px-2 py-1 rounded-sm bg-transparent border border-[var(--border)] focus:border-[var(--accent)] outline-none uppercase tracking-widest w-28"
+              />
               <span className="muted text-[10px] uppercase tracking-widest mono">
-                {snap.data.positions.length} rows
+                {filteredCount(snap.data, query)} of {snap.data.positions.length} rows
               </span>
               <CopyLinkButton />
               <PortfolioExportButtons snap={snap.data} />
@@ -139,7 +164,7 @@ function Portfolio() {
         ) : snap.data.positions.length === 0 ? (
           <Empty title="No open positions" hint="POST /portfolio/trades to start tracking." />
         ) : (
-          <PositionsTable snap={snap.data} sort={sort} setSort={setSort} />
+          <PositionsTable snap={snap.data} sort={sort} setSort={setSort} query={query} />
         )}
       </Card>
     </div>
@@ -233,12 +258,18 @@ function PositionsTable({
   snap,
   sort,
   setSort,
+  query,
 }: {
   snap: PortfolioSnapshot;
   sort: SortState;
   setSort: (s: SortState) => void;
+  query: string;
 }) {
   const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? snap.positions.filter((p) => p.ticker.toLowerCase().includes(q))
+      : snap.positions;
     const cmp = (a: Position, b: Position) => {
       const wA = snap.weights[a.ticker] ?? (snap.total_market_value > 0 ? a.market_value / snap.total_market_value : 0);
       const wB = snap.weights[b.ticker] ?? (snap.total_market_value > 0 ? b.market_value / snap.total_market_value : 0);
@@ -259,8 +290,17 @@ function PositionsTable({
       if (typeof av === "string" && typeof bv === "string") return sort.dir * av.localeCompare(bv);
       return sort.dir * ((av as number) - (bv as number));
     };
-    return [...snap.positions].sort(cmp);
-  }, [snap, sort]);
+    return [...filtered].sort(cmp);
+  }, [snap, sort, query]);
+
+  if (rows.length === 0) {
+    return (
+      <Empty
+        title="No positions match"
+        hint={query ? `Clear or change the "${query}" filter.` : undefined}
+      />
+    );
+  }
 
   return (
     <div className="overflow-x-auto -mx-3">
@@ -301,22 +341,36 @@ function PositionsTable({
               </tr>
             );
           })}
-          {/* Totals row */}
-          <tr style={{ background: "var(--panel-2)", borderTop: "1px solid var(--border-strong)" }}>
-            <td className="mono font-semibold" style={{ color: "var(--amber)" }}>TOTAL</td>
-            <td colSpan={3} />
-            <td className="r mono font-semibold">{fmtUsd(snap.total_market_value, 0)}</td>
-            <td className="r mono muted">100.00%</td>
-            <td className={`r mono font-semibold ${colorOf(snap.total_unrealized)}`}>
-              {fmtUsdSigned(snap.total_unrealized, 0)}
-            </td>
-            <td className={`r mono ${colorOf(snap.total_unrealized)}`}>
-              {fmtPctSigned(snap.total_cost > 0 ? snap.total_unrealized / snap.total_cost : 0)}
-            </td>
-            <td className={`r mono font-semibold ${colorOf(snap.total_realized)}`}>
-              {fmtUsdSigned(snap.total_realized, 0)}
-            </td>
-          </tr>
+          {/* Totals row. Reflects the visible (filtered) rows so the
+              subtotal makes sense when a user is narrowing to a few
+              tickers. Weight is the share of total portfolio market value
+              that the visible rows make up, not 100% of the filter. */}
+          {(() => {
+            const subMv = rows.reduce((s, p) => s + p.market_value, 0);
+            const subCost = rows.reduce((s, p) => s + p.avg_cost * p.quantity, 0);
+            const subUnreal = rows.reduce((s, p) => s + p.unrealized_pnl, 0);
+            const subReal = rows.reduce((s, p) => s + p.realized_pnl, 0);
+            const subWeight = snap.total_market_value > 0 ? subMv / snap.total_market_value : 0;
+            const subPct = subCost > 0 ? subUnreal / subCost : 0;
+            const label = query ? "SUBTOTAL" : "TOTAL";
+            return (
+              <tr style={{ background: "var(--panel-2)", borderTop: "1px solid var(--border-strong)" }}>
+                <td className="mono font-semibold" style={{ color: "var(--amber)" }}>{label}</td>
+                <td colSpan={3} />
+                <td className="r mono font-semibold">{fmtUsd(subMv, 0)}</td>
+                <td className="r mono muted">{fmtPct(subWeight)}</td>
+                <td className={`r mono font-semibold ${colorOf(subUnreal)}`}>
+                  {fmtUsdSigned(subUnreal, 0)}
+                </td>
+                <td className={`r mono ${colorOf(subUnreal)}`}>
+                  {fmtPctSigned(subPct)}
+                </td>
+                <td className={`r mono font-semibold ${colorOf(subReal)}`}>
+                  {fmtUsdSigned(subReal, 0)}
+                </td>
+              </tr>
+            );
+          })()}
         </tbody>
       </table>
     </div>

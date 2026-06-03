@@ -30,6 +30,9 @@ export const PORTFOLIO_SORT_DEFAULT: { k: PortfolioSortKey; dir: PortfolioSortDi
 export type PortfolioUrlState = {
   sortKey: PortfolioSortKey;
   sortDir: PortfolioSortDir;
+  // Free-text filter applied client-side against the position ticker.
+  // Empty string means no filter.
+  query: string;
 };
 
 function isSortKey(s: string | null): s is PortfolioSortKey {
@@ -54,7 +57,8 @@ export function parsePortfolioUrlState(
   const rawKey = sp.get("sort");
   const sortKey = isSortKey(rawKey) ? rawKey : PORTFOLIO_SORT_DEFAULT.k;
   const sortDir = parseDir(sp.get("dir"));
-  return { sortKey, sortDir };
+  const query = (sp.get("q") ?? "").trim().slice(0, 64);
+  return { sortKey, sortDir, query };
 }
 
 /**
@@ -67,5 +71,7 @@ export function serializePortfolioUrlState(state: PortfolioUrlState): string {
   if (state.sortDir !== PORTFOLIO_SORT_DEFAULT.dir) {
     sp.set("dir", state.sortDir === 1 ? "asc" : "desc");
   }
+  const q = (state.query ?? "").trim();
+  if (q) sp.set("q", q.slice(0, 64));
   return sp.toString();
 }
