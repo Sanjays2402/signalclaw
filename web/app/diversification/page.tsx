@@ -1,11 +1,17 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { swrFetcher, type Diversification } from "@/lib/api";
 import { Graph, ShieldWarning, ArrowRight } from "@phosphor-icons/react/dist/ssr";
+import {
+  DIV_THRESHOLD_DEFAULT,
+  DIV_WINDOW_DEFAULT,
+  parseDiversificationUrlState,
+  serializeDiversificationUrlState,
+} from "@/lib/diversificationUrl";
 
 export default function Page() {
   return (
@@ -16,11 +22,34 @@ export default function Page() {
 }
 
 function DivView() {
-  const [window, setWindow] = useState(60);
-  const [threshold, setThreshold] = useState(0.7);
-  const [applied, setApplied] = useState({ window: 60, threshold: 0.7 });
+  const [window, setWindow] = useState(DIV_WINDOW_DEFAULT);
+  const [threshold, setThreshold] = useState(DIV_THRESHOLD_DEFAULT);
+  const [applied, setApplied] = useState({ window: DIV_WINDOW_DEFAULT, threshold: DIV_THRESHOLD_DEFAULT });
+  const [hydrated, setHydrated] = useState(false);
   const key = `/diversification?window=${applied.window}&threshold=${applied.threshold}`;
   const { data, error, isLoading, mutate } = useSWR<Diversification>(key, swrFetcher);
+
+  // Hydrate window and threshold from the URL once so /diversification?window=120&threshold=0.85
+  // works as a shareable deep link, matching the /correlation page.
+  useEffect(() => {
+    const s = parseDiversificationUrlState(globalThis.window.location.search);
+    setWindow(s.window);
+    setThreshold(s.threshold);
+    setApplied(s);
+    setHydrated(true);
+  }, []);
+
+  // After hydration, mirror the applied state back to the address bar so the
+  // current view is shareable by copying the URL. replaceState avoids
+  // polluting browser history each time Recompute is clicked.
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeDiversificationUrlState(applied);
+    const loc = globalThis.window.location;
+    const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
+    const current = loc.pathname + loc.search;
+    if (next !== current) globalThis.window.history.replaceState(null, "", next);
+  }, [hydrated, applied]);
 
   function apply(e: React.FormEvent) {
     e.preventDefault();
