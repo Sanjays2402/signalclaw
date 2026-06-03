@@ -146,3 +146,62 @@ test("bracketsFilename: shape is signalclaw-brackets-YYYY-MM-DD.ext", () => {
   assert.match(csv, /^signalclaw-brackets-\d{4}-\d{2}-\d{2}\.csv$/);
   assert.match(json, /^signalclaw-brackets-\d{4}-\d{2}-\d{2}\.json$/);
 });
+
+test("filterPlans: status=all returns all rows (copy)", () => {
+  const out = mod.filterPlans(samplePlans, { status: "all" });
+  assert.equal(out.length, samplePlans.length);
+  assert.notEqual(out, samplePlans);
+});
+
+test("filterPlans: empty filter returns all rows", () => {
+  const out = mod.filterPlans(samplePlans, {});
+  assert.equal(out.length, samplePlans.length);
+});
+
+test("filterPlans: ticker substring is case insensitive", () => {
+  const out = mod.filterPlans(samplePlans, { ticker: "aap" });
+  assert.equal(out.length, 2);
+  assert.ok(out.every((p) => p.ticker === "AAPL"));
+});
+
+test("filterPlans: status=open matches only open plans", () => {
+  const out = mod.filterPlans(samplePlans, { status: "open" });
+  assert.equal(out.length, 2);
+  assert.ok(out.every((p) => p.status === "open"));
+});
+
+test("filterPlans: status=live groups open + filled", () => {
+  const out = mod.filterPlans(samplePlans, { status: "live" });
+  assert.equal(out.length, 3);
+  assert.ok(out.every((p) => p.status === "open" || p.status === "filled"));
+});
+
+test("filterPlans: status=closed groups closed_win + closed_loss", () => {
+  const out = mod.filterPlans(samplePlans, { status: "closed" });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].status, "closed_win");
+});
+
+test("filterPlans: ticker + status combine with AND", () => {
+  const out = mod.filterPlans(samplePlans, { ticker: "AAPL", status: "open" });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].ticker, "AAPL");
+  assert.equal(out[0].status, "open");
+});
+
+test("filterPlans: no match returns empty array", () => {
+  const out = mod.filterPlans(samplePlans, { ticker: "ZZZZ" });
+  assert.equal(out.length, 0);
+});
+
+test("filterPlans: whitespace-only ticker is ignored", () => {
+  const out = mod.filterPlans(samplePlans, { ticker: "   " });
+  assert.equal(out.length, samplePlans.length);
+});
+
+test("filterPlans: does not mutate input array", () => {
+  const before = samplePlans.map((p) => p.id).join(",");
+  mod.filterPlans(samplePlans, { ticker: "aapl", status: "open" });
+  const after = samplePlans.map((p) => p.id).join(",");
+  assert.equal(before, after);
+});

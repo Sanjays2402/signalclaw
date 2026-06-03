@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import RuleVisual from "@/components/RuleVisual";
@@ -19,8 +19,19 @@ import {
   colorOf,
 } from "@/components/ui";
 import { api, swrFetcher, type Bracket, type BracketIn, type BracketStats } from "@/lib/api";
-import { bracketsToCSV, bracketsToJSON, bracketsFilename } from "@/lib/bracketsExport";
-import { ArrowsClockwise, Trash, Plus, CheckCircle, X, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import {
+  bracketsToCSV,
+  bracketsToJSON,
+  bracketsFilename,
+  filterPlans,
+} from "@/lib/bracketsExport";
+import {
+  BRACKETS_FILTER_DEFAULT,
+  parseBracketsUrlState,
+  serializeBracketsUrlState,
+  type BracketStatusUrl,
+} from "@/lib/bracketsUrl";
+import { ArrowsClockwise, Trash, Plus, CheckCircle, X, DownloadSimple, Link as LinkIcon } from "@phosphor-icons/react/dist/ssr";
 
 function downloadBlob(content: string, mime: string, filename: string) {
   if (typeof window === "undefined") return;
@@ -56,6 +67,28 @@ function Brackets() {
   const stats = useSWR<BracketStats>("/brackets/stats", swrFetcher);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  // Filter state mirrors to /brackets?q=...&status=... so a teammate
+  // can land on the same filtered view from a shared link.
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<BracketStatusUrl>(BRACKETS_FILTER_DEFAULT.status);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const s = parseBracketsUrlState(globalThis.window.location.search);
+    setQuery(s.query);
+    setStatusFilter(s.status);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeBracketsUrlState({ query, status: statusFilter });
+    const loc = globalThis.window.location;
+    const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
+    const current = loc.pathname + loc.search;
+    if (next !== current) globalThis.window.history.replaceState(null, "", next);
+  }, [hydrated, query, statusFilter]);
 
   async function refresh() {
     await Promise.all([mutate("/brackets"), mutate("/brackets/stats")]);
@@ -158,12 +191,101 @@ function Brackets() {
         ) : list.data.plans.length === 0 ? (
           <Empty title="No bracket plans" hint="Create one above to start tracking R." />
         ) : (
-          <>
-          <div className="flex flex-wrap gap-2 text-xs mb-3">
+          <BracketsTable
+            plans={list.data.plans}
+            query={query}
+            setQuery={setQuery}
+            statusFilter={statusFilter}
+            setStatusFilter={setStatusFilter}
+            busy={busy}
+            onFill={onFill}
+            onClose={onClose}
+            onCancel={onCancel}
+            onDelete={onDelete}
+          />
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function BracketsTable({
+  plans,
+  query,
+  setQuery,
+  statusFilter,
+  setStatusFilter,
+  busy,
+  onFill,
+  onClose,
+  onCancel,
+  onDelete,
+}: {
+  plans: Bracket[];
+  query: string;
+  setQuery: (s: string) => void;
+  statusFilter: BracketStatusUrl;
+  setStatusFilter: (s: BracketStatusUrl) => void;
+  busy: string | null;
+  onFill: (id: string) => void;
+  onClose: (id: string) => void;
+  onCancel: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const filtered = useMemo(
+    () => filterPlans(plans as any, { ticker: query, status: statusFilter }) as Bracket[],
+    [plans, query, statusFilter],
+  );
+  const isFiltered = query.trim().length > 0 || statusFilter !== BRACKETS_FILTER_DEFAULT.status;
+  return (
+        <>
+          <div className="flex flex-wrap items-end gap-2 mb-3">
+            <Field label="Ticker">
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="AAPL"
+                aria-label="Filter plans by ticker substring"
+                data-testid="brackets-filter-ticker"
+              />
+            </Field>
+            <Field label="Status">
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as BracketStatusUrl)}
+                aria-label="Filter plans by status"
+                data-testid="brackets-filter-status"
+              >
+                <option value="all">all</option>
+                <option value="live">live (open + filled)</option>
+                <option value="open">open</option>
+                <option value="filled">filled</option>
+                <option value="closed">closed (win + loss)</option>
+                <option value="closed_win">closed_win</option>
+                <option value="closed_loss">closed_loss</option>
+                <option value="cancelled">cancelled</option>
+              </Select>
+            </Field>
+            {isFiltered && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setQuery("");
+                  setStatusFilter(BRACKETS_FILTER_DEFAULT.status);
+                }}
+              >
+                <X weight="duotone" className="inline mr-1" size={11} /> Clear
+              </Button>
+            )}
+            <div className="ml-auto">
+              <CopyLinkButton />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs mb-3 items-center">
             <button
               type="button"
               onClick={() => downloadBlob(
-                bracketsToCSV(list.data.plans),
+                bracketsToCSV(filtered),
                 "text/csv;charset=utf-8",
                 bracketsFilename("csv"),
               )}
@@ -176,7 +298,7 @@ function Brackets() {
             <button
               type="button"
               onClick={() => downloadBlob(
-                bracketsToJSON(list.data.plans),
+                bracketsToJSON(filtered),
                 "application/json;charset=utf-8",
                 bracketsFilename("json"),
               )}
@@ -186,7 +308,15 @@ function Brackets() {
             >
               <DownloadSimple size={12} weight="bold" /> JSON
             </button>
+            <span className="muted mono ml-1">
+              {isFiltered
+                ? `${filtered.length} of ${plans.length} plans`
+                : `${plans.length} plans`}
+            </span>
           </div>
+          {filtered.length === 0 ? (
+            <Empty title="No plans match this filter" hint="Loosen the ticker or status filter to see more rows." />
+          ) : (
           <div className="overflow-x-auto -mx-3">
             <table className="trade">
               <thead>
@@ -206,7 +336,7 @@ function Brackets() {
                 </tr>
               </thead>
               <tbody>
-                {list.data.plans.map((b) => (
+                {filtered.map((b) => (
                   <tr key={b.id}>
                     <td className="mono font-semibold">{b.ticker}</td>
                     <td>
@@ -279,10 +409,49 @@ function Brackets() {
               </tbody>
             </table>
           </div>
-          </>
-        )}
-      </Card>
-    </div>
+          )}
+        </>
+  );
+}
+
+function CopyLinkButton() {
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState(false);
+  async function onClick() {
+    try {
+      const url = window.location.href;
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        if (!ok) throw new Error("copy failed");
+      }
+      setErr(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setErr(true);
+      setTimeout(() => setErr(false), 1500);
+    }
+  }
+  const label = err ? "FAILED" : copied ? "COPIED" : "COPY LINK";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono"
+      title="Copy a shareable link that preserves the current filter"
+      data-testid="brackets-copy-link"
+    >
+      <LinkIcon size={11} weight="duotone" /> {label}
+    </button>
   );
 }
 

@@ -59,6 +59,39 @@ function sortedPlans(rows: BracketLite[]): BracketLite[] {
   });
 }
 
+export type BracketStatusFilter =
+  | "all"
+  | "open"
+  | "filled"
+  | "live"
+  | "closed"
+  | "closed_win"
+  | "closed_loss"
+  | "cancelled";
+
+export type BracketFilter = {
+  ticker?: string;
+  status?: BracketStatusFilter;
+};
+
+function matchStatus(plan: BracketLite, status: BracketStatusFilter): boolean {
+  if (status === "all") return true;
+  if (status === "live") return plan.status === "open" || plan.status === "filled";
+  if (status === "closed") return plan.status === "closed_win" || plan.status === "closed_loss";
+  return plan.status === status;
+}
+
+export function filterPlans(rows: BracketLite[], f: BracketFilter): BracketLite[] {
+  const q = (f.ticker ?? "").trim().toUpperCase();
+  const status = f.status ?? "all";
+  if (!q && status === "all") return rows.slice();
+  return rows.filter((p) => {
+    if (q && !(p.ticker ?? "").toUpperCase().includes(q)) return false;
+    if (!matchStatus(p, status)) return false;
+    return true;
+  });
+}
+
 export function bracketsToCSV(rows: BracketLite[]): string {
   const lines: string[] = [];
   lines.push(
