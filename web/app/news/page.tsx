@@ -10,8 +10,22 @@ import {
   type NewsEventIn,
   type EventStudy,
 } from "@/lib/api";
-import { Newspaper, Trash, Plus, ChartLine, ArrowSquareOut } from "@phosphor-icons/react/dist/ssr";
+import { Newspaper, Trash, Plus, ChartLine, ArrowSquareOut, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
+import { newsEventsToCSV, newsEventsToJSON, newsFilename } from "@/lib/newsExport";
+
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 export default function NewsPage() {
   return (
@@ -107,6 +121,34 @@ function News() {
           )}
           {data && data.events.length > 0 && (
             <Card title={`${data.events.length} events`}>
+              <div className="flex flex-wrap gap-2 text-xs mb-3">
+                <button
+                  type="button"
+                  onClick={() => downloadBlob(
+                    newsEventsToCSV(data.events),
+                    "text/csv;charset=utf-8",
+                    newsFilename(ticker, tag, "csv"),
+                  )}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+                  title="Download the filtered event list as CSV"
+                  data-testid="news-export-csv"
+                >
+                  <DownloadSimple size={12} weight="bold" /> CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadBlob(
+                    newsEventsToJSON(data.events),
+                    "application/json;charset=utf-8",
+                    newsFilename(ticker, tag, "json"),
+                  )}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+                  title="Download the filtered event list as JSON"
+                  data-testid="news-export-json"
+                >
+                  <DownloadSimple size={12} weight="bold" /> JSON
+                </button>
+              </div>
               <ul className="divide-y divide-[var(--border)]">
                 {data.events
                   .slice()
