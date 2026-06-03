@@ -4,8 +4,22 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type StopRule, type StopRuleIn, type StopCheck } from "@/lib/api";
-import { Shield, ShieldCheck, Trash, Plus, Target } from "@phosphor-icons/react/dist/ssr";
+import { stopsToCSV, stopsToJSON, stopsFilename } from "@/lib/stopsExport";
+import { Shield, ShieldCheck, Trash, Plus, Target, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
+
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 const KINDS = [
   { v: "stop_loss", l: "stop loss" },
@@ -122,6 +136,35 @@ function Stops() {
             data.rules.length === 0 ? (
               <Empty title="No stop rules" hint="Add a stop loss, take profit, or trailing rule above." />
             ) : (
+              <>
+              <div className="flex flex-wrap gap-2 text-xs mb-3">
+                <button
+                  type="button"
+                  onClick={() => downloadBlob(
+                    stopsToCSV(data.rules),
+                    "text/csv;charset=utf-8",
+                    stopsFilename("csv"),
+                  )}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+                  title="Download active stop rules as CSV for spreadsheet import"
+                  data-testid="stops-export-csv"
+                >
+                  <DownloadSimple size={12} weight="bold" /> CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadBlob(
+                    stopsToJSON(data.rules),
+                    "application/json;charset=utf-8",
+                    stopsFilename("json"),
+                  )}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+                  title="Download active stop rules as JSON for scripting or backup"
+                  data-testid="stops-export-json"
+                >
+                  <DownloadSimple size={12} weight="bold" /> JSON
+                </button>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -163,6 +206,7 @@ function Stops() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
       </Card>
     </div>
