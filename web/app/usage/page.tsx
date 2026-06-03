@@ -9,7 +9,9 @@ import {
   CalendarBlank,
   ChartBar,
   ArrowClockwise,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
+import { usageToCSV, usageToJSON, usageFilename } from "@/lib/usageExport";
 
 type DayBucket = { date: string; count: number };
 type Summary = {
@@ -99,11 +101,14 @@ export default function UsagePage() {
             Free tier resets monthly. Saved runs and shareable links count toward your quota.
           </p>
         </div>
-        <Button onClick={() => mutate()}>
-          <span className="inline-flex items-center gap-1">
-            <ArrowClockwise weight="duotone" size={14} /> Refresh
-          </span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportButtons summary={data} />
+          <Button onClick={() => mutate()}>
+            <span className="inline-flex items-center gap-1">
+              <ArrowClockwise weight="duotone" size={14} /> Refresh
+            </span>
+          </Button>
+        </div>
       </header>
 
       <Card>
@@ -255,6 +260,51 @@ export default function UsagePage() {
           </div>
         </div>
       </Card>
+    </div>
+  );
+}
+
+function ExportButtons({ summary }: { summary: Summary }) {
+  const disabled = !summary.by_day || summary.by_day.length === 0;
+  function download(ext: "csv" | "json") {
+    const body = ext === "csv" ? usageToCSV(summary) : usageToJSON(summary);
+    const mime =
+      ext === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8";
+    const blob = new Blob([body], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = usageFilename(summary, ext);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const cls =
+    "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono" +
+    (disabled ? " opacity-40 pointer-events-none" : "");
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => download("csv")}
+        disabled={disabled}
+        className={cls}
+        title="Download daily usage as CSV"
+        data-testid="usage-export-csv"
+      >
+        <DownloadSimple weight="duotone" size={11} /> CSV
+      </button>
+      <button
+        type="button"
+        onClick={() => download("json")}
+        disabled={disabled}
+        className={cls}
+        title="Download usage summary as JSON"
+        data-testid="usage-export-json"
+      >
+        <DownloadSimple weight="duotone" size={11} /> JSON
+      </button>
     </div>
   );
 }
