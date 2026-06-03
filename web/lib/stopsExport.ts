@@ -70,3 +70,22 @@ export function stopsFilename(ext: "csv" | "json"): string {
   const stamp = new Date().toISOString().slice(0, 10);
   return `signalclaw-stops-${stamp}.${ext}`;
 }
+
+export type StopsFilter = {
+  // Free-text substring matched against the rule ticker (case-insensitive).
+  ticker?: string;
+  // Kind bucket. "all" returns every row, otherwise only rules whose kind
+  // matches exactly.
+  kind?: "all" | "stop_loss" | "take_profit" | "trailing";
+};
+
+export function filterStops(rows: StopRuleLite[], f: StopsFilter): StopRuleLite[] {
+  const q = (f.ticker ?? "").trim().toUpperCase();
+  const kind = f.kind ?? "all";
+  if (!q && kind === "all") return rows.slice();
+  return rows.filter((r) => {
+    if (q && !(r.ticker ?? "").toUpperCase().includes(q)) return false;
+    if (kind !== "all" && (r.kind ?? "") !== kind) return false;
+    return true;
+  });
+}

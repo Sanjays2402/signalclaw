@@ -136,3 +136,38 @@ test("stopsToCSV: non-finite values become empty cells", () => {
   assert.equal(cols[2], "");
   assert.equal(cols[3], "");
 });
+
+test("filterStops: no filter returns a copy of every row", () => {
+  const out = mod.filterStops(sampleRules, {});
+  assert.equal(out.length, sampleRules.length);
+  assert.notEqual(out, sampleRules);
+});
+
+test("filterStops: ticker substring is case-insensitive", () => {
+  const out = mod.filterStops(sampleRules, { ticker: "msf" });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].ticker, "MSFT");
+});
+
+test("filterStops: kind=all keeps every row", () => {
+  const out = mod.filterStops(sampleRules, { kind: "all" });
+  assert.equal(out.length, sampleRules.length);
+});
+
+test("filterStops: specific kind keeps only matching rows", () => {
+  const out = mod.filterStops(sampleRules, { kind: "trailing" });
+  assert.ok(out.length >= 1);
+  for (const r of out) assert.equal(r.kind, "trailing");
+});
+
+test("filterStops: ticker and kind compose with AND", () => {
+  const out = mod.filterStops(sampleRules, { ticker: "aapl", kind: "trailing" });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].ticker, "AAPL");
+  assert.equal(out[0].kind, "trailing");
+});
+
+test("filterStops: whitespace-only ticker is treated as no filter", () => {
+  const out = mod.filterStops(sampleRules, { ticker: "   " });
+  assert.equal(out.length, sampleRules.length);
+});

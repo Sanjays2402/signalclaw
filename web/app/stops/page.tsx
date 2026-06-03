@@ -1,10 +1,17 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd, fmtPct } from "@/components/ui";
 import { api, swrFetcher, type StopRule, type StopRuleIn, type StopCheck } from "@/lib/api";
-import { stopsToCSV, stopsToJSON, stopsFilename } from "@/lib/stopsExport";
+import { stopsToCSV, stopsToJSON, stopsFilename, filterStops } from "@/lib/stopsExport";
+import {
+  parseStopsUrlState,
+  serializeStopsUrlState,
+  STOPS_FILTER_DEFAULT,
+  STOP_KIND_FILTERS,
+  type StopKindUrl,
+} from "@/lib/stopsUrl";
 import { Shield, ShieldCheck, Trash, Plus, Target, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 
@@ -52,6 +59,38 @@ function Stops() {
   const [busy, setBusy] = useState<string | null>(null);
   const [formErr, setFormErr] = useState<string | null>(null);
   const [lastCheck, setLastCheck] = useState<StopCheck | null>(null);
+
+  // Filter state mirrors to /stops?q=...&kind=... so a teammate can land
+  // on the same filtered view from a shared link.
+  const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<StopKindUrl>(
+    STOPS_FILTER_DEFAULT.kind,
+  );
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const s = parseStopsUrlState(globalThis.window.location.search);
+    setQuery(s.query);
+    setKindFilter(s.kind);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeStopsUrlState({ query, kind: kindFilter });
+    const loc = globalThis.window.location;
+    const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
+    const current = loc.pathname + loc.search;
+    if (next !== current) globalThis.window.history.replaceState(null, "", next);
+  }, [hydrated, query, kindFilter]);
+
+  const allRules = data?.rules ?? [];
+  const visibleRules = useMemo(
+    () => filterStops(allRules, { ticker: query, kind: kindFilter }),
+    [allRules, query, kindFilter],
+  );
+  const filterActive =
+    query.trim() !== "" || kindFilter !== STOPS_FILTER_DEFAULT.kind;
 
   async function onCreate(input: StopRuleIn) {
     setFormErr(null);
@@ -137,11 +176,55 @@ function Stops() {
               <Empty title="No stop rules" hint="Add a stop loss, take profit, or trailing rule above." />
             ) : (
               <>
+              <div className="flex flex-wrap items-end gap-3 mb-3">
+                <Field label="Filter ticker">
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value.slice(0, 64))}
+                    placeholder="e.g. AAPL"
+                    aria-label="Filter stops by ticker"
+                    data-testid="stops-filter-q"
+                  />
+                </Field>
+                <Field label="Kind">
+                  <Select
+                    value={kindFilter}
+                    onChange={(e) => setKindFilter(e.target.value as StopKindUrl)}
+                    aria-label="Filter stops by kind"
+                    data-testid="stops-filter-kind"
+                  >
+                    {STOP_KIND_FILTERS.map((k) => (
+                      <option key={k} value={k}>
+                        {k === "all" ? "all" : k.replace("_", " ")}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                {filterActive && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuery("");
+                      setKindFilter(STOPS_FILTER_DEFAULT.kind);
+                    }}
+                    className="text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono"
+                    data-testid="stops-filter-clear"
+                  >
+                    Clear
+                  </button>
+                )}
+                <span
+                  className="text-[11px] muted mono"
+                  data-testid="stops-filter-count"
+                >
+                  {visibleRules.length} of {allRules.length}
+                </span>
+              </div>
               <div className="flex flex-wrap gap-2 text-xs mb-3">
                 <button
                   type="button"
                   onClick={() => downloadBlob(
-                    stopsToCSV(data.rules),
+                    stopsToCSV(visibleRules),
                     "text/csv;charset=utf-8",
                     stopsFilename("csv"),
                   )}
@@ -154,7 +237,7 @@ function Stops() {
                 <button
                   type="button"
                   onClick={() => downloadBlob(
-                    stopsToJSON(data.rules),
+                    stopsToJSON(visibleRules),
                     "application/json;charset=utf-8",
                     stopsFilename("json"),
                   )}
@@ -179,7 +262,14 @@ function Stops() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.rules.map((r) => (
+                    {visibleRules.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-4 text-xs muted text-center">
+                          No rules match the current filter.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {visibleRules.map((r) => (
                       <tr key={r.id} className="border-b border-[var(--border)] hover:bg-white/[0.02]">
                         <td className="py-2 pr-3">
                           <Link href={`/ticker/${r.ticker}`} className="mono hover:underline">{r.ticker}</Link>
