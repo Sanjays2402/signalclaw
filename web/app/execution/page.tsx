@@ -3,7 +3,8 @@ import { useMemo, useState } from "react";
 import AuthGate from "@/components/AuthGate";
 import { Card, Stat, Loading, ErrorBox, Empty, Button, Input, Select, Field, fmtUsd } from "@/components/ui";
 import { api, ApiError, type ExecReport, type ExecBar } from "@/lib/api";
-import { Lightning, Play, ArrowsClockwise } from "@phosphor-icons/react/dist/ssr";
+import { Lightning, Play, ArrowsClockwise, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import { executionToCSV, executionToJSON, executionFilename } from "@/lib/executionExport";
 
 export default function Page() {
   return (
@@ -244,7 +245,15 @@ function Result({ r }: { r: ExecReport }) {
         <Stat label="unfilled" value={r.unfilled_shares.toLocaleString()} tone={r.unfilled_shares > 0 ? "down" : "neutral"} />
       </div>
 
-      <Card title={`Fills (${r.fills.length})`} right={<Lightning weight="duotone" className="text-[var(--accent)]" size={16} />}>
+      <Card
+        title={`Fills (${r.fills.length})`}
+        right={
+          <div className="flex items-center gap-2">
+            <ExportButtons report={r} />
+            <Lightning weight="duotone" className="text-[var(--accent)]" size={16} />
+          </div>
+        }
+      >
         {r.fills.length === 0 ? (
           <Empty title="No fills" hint="The schedule produced zero filled shares for this market." />
         ) : (
@@ -278,6 +287,51 @@ function Result({ r }: { r: ExecReport }) {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+function ExportButtons({ report }: { report: ExecReport }) {
+  const disabled = !report.fills || report.fills.length === 0;
+  function download(ext: "csv" | "json") {
+    const body = ext === "csv" ? executionToCSV(report) : executionToJSON(report);
+    const mime =
+      ext === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8";
+    const blob = new Blob([body], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = executionFilename(report.ticker, report.side, ext);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const cls =
+    "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono" +
+    (disabled ? " opacity-40 pointer-events-none" : "");
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => download("csv")}
+        disabled={disabled}
+        className={cls}
+        title="Download fills as CSV"
+        data-testid="execution-export-csv"
+      >
+        <DownloadSimple weight="duotone" size={11} /> CSV
+      </button>
+      <button
+        type="button"
+        onClick={() => download("json")}
+        disabled={disabled}
+        className={cls}
+        title="Download execution report as JSON"
+        data-testid="execution-export-json"
+      >
+        <DownloadSimple weight="duotone" size={11} /> JSON
+      </button>
     </div>
   );
 }
