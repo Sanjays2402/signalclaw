@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import AuthGate from "@/components/AuthGate";
 import Link from "next/link";
@@ -9,6 +9,11 @@ import {
 } from "@/components/ui";
 import { swrFetcher, type TaxReport } from "@/lib/api";
 import { taxEventsToCSV, taxReportToJSON, taxFilename } from "@/lib/taxExport";
+import {
+  parseTaxUrlState,
+  serializeTaxUrlState,
+  tickerMatchesTaxQuery,
+} from "@/lib/taxUrl";
 import { Receipt, Warning, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 
 function downloadBlob(content: string, mime: string, filename: string) {
@@ -38,6 +43,25 @@ function Tax() {
   const [method, setMethod] = useState<(typeof METHODS)[number]>("fifo");
   const [washWindow, setWashWindow] = useState(30);
   const [applied, setApplied] = useState({ method: "fifo", wash_window: 30 });
+  // Ticker filter mirrors to /tax?q=... so a shared link lands a teammate
+  // on the same filtered view of realized events and wash sales.
+  const [query, setQuery] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const s = parseTaxUrlState(globalThis.window.location.search);
+    setQuery(s.query);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializeTaxUrlState({ query });
+    const loc = globalThis.window.location;
+    const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
+    const current = loc.pathname + loc.search;
+    if (next !== current) globalThis.window.history.replaceState(null, "", next);
+  }, [hydrated, query]);
 
   const key = `/portfolio/tax?method=${applied.method}&wash_window=${applied.wash_window}`;
   const { data, error, isLoading, mutate } = useSWR<TaxReport>(key, swrFetcher);
@@ -86,14 +110,45 @@ function Tax() {
         </form>
       </Card>
 
+      <Card title="Filter">
+        <Field label="Ticker contains">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value.slice(0, 64))}
+            placeholder="e.g. AAPL"
+            spellCheck={false}
+            autoCapitalize="characters"
+            data-testid="tax-ticker-filter"
+          />
+        </Field>
+        <p className="muted text-xs mt-2">
+          Filters realized events, wash sales, and the CSV/JSON downloads below.
+          The query mirrors to the URL so you can share the filtered view.
+        </p>
+      </Card>
+
       {error ? <ErrorBox err={error} /> :
         isLoading || !data ? <Loading label="Computing tax report" /> :
-        <Report data={data} washWindow={applied.wash_window} />}
+        <Report data={data} washWindow={applied.wash_window} query={query} />}
     </div>
   );
 }
 
-function Report({ data, washWindow }: { data: TaxReport; washWindow: number }) {
+function Report({ data, washWindow, query }: { data: TaxReport; washWindow: number; query: string }) {
+  const filteredEvents = useMemo(
+    () => data.events.filter((e) => tickerMatchesTaxQuery(e.ticker, query)),
+    [data.events, query],
+  );
+  const filteredWashSales = useMemo(
+    () => data.wash_sales.filter((w) => tickerMatchesTaxQuery(w.ticker, query)),
+    [data.wash_sales, query],
+  );
+  // Downloads honour the active filter so the spreadsheet matches the screen.
+  const filteredReport = useMemo(
+    () => ({ ...data, events: filteredEvents, wash_sales: filteredWashSales }),
+    [data, filteredEvents, filteredWashSales],
+  );
+  const hasFilter = query.trim().length > 0;
   const totalTone = data.realized_total >= 0 ? "up" : "down";
   return (
     <>
@@ -109,16 +164,18 @@ function Report({ data, washWindow }: { data: TaxReport; washWindow: number }) {
           tone={data.wash_sales.length > 0 ? "down" : "neutral"} />
       </div>
 
-      <Card title={`Realized events (${data.method.toUpperCase()})`}>
+      <Card title={`Realized events (${data.method.toUpperCase()})${hasFilter ? ` (${filteredEvents.length} of ${data.events.length})` : ""}`}>
         {data.events.length === 0 ? (
           <Empty title="No realized events" hint="Close some positions to see lot accounting here." />
+        ) : filteredEvents.length === 0 ? (
+          <Empty title="No events match the filter" hint={`Clear the ticker filter to see all ${data.events.length} events.`} />
         ) : (
           <>
           <div className="flex flex-wrap gap-2 text-xs mb-3">
             <button
               type="button"
               onClick={() => downloadBlob(
-                taxEventsToCSV(data.events),
+                taxEventsToCSV(filteredEvents),
                 "text/csv;charset=utf-8",
                 taxFilename(data.method, washWindow, "csv"),
               )}
@@ -131,7 +188,7 @@ function Report({ data, washWindow }: { data: TaxReport; washWindow: number }) {
             <button
               type="button"
               onClick={() => downloadBlob(
-                taxReportToJSON(data),
+                taxReportToJSON(filteredReport),
                 "application/json;charset=utf-8",
                 taxFilename(data.method, washWindow, "json"),
               )}
@@ -157,7 +214,7 @@ function Report({ data, washWindow }: { data: TaxReport; washWindow: number }) {
                 </tr>
               </thead>
               <tbody>
-                {data.events.map((e, i) => (
+                {filteredEvents.map((e, i) => (
                   <tr key={`${e.sell_trade_id}-${i}`} className="border-b border-[var(--border)] hover:bg-white/[0.02]">
                     <td className="py-2 pr-3 mono text-xs">{e.sell_date.slice(0, 10)}</td>
                     <td className="pr-3 mono">
@@ -190,12 +247,14 @@ function Report({ data, washWindow }: { data: TaxReport; washWindow: number }) {
         )}
       </Card>
 
-      <Card title="Wash sales">
+      <Card title={`Wash sales${hasFilter ? ` (${filteredWashSales.length} of ${data.wash_sales.length})` : ""}`}>
         {data.wash_sales.length === 0 ? (
           <Empty title="No wash sales flagged" hint={`Within a ${data.events.length > 0 ? "configured" : ""} ${"\u00B1"}window around each loss.`} />
+        ) : filteredWashSales.length === 0 ? (
+          <Empty title="No wash sales match the filter" hint={`Clear the ticker filter to see all ${data.wash_sales.length} flagged sales.`} />
         ) : (
           <div className="space-y-2">
-            {data.wash_sales.map((w, i) => (
+            {filteredWashSales.map((w, i) => (
               <div key={i} className="panel p-3 flex flex-wrap items-center gap-3 text-sm">
                 <Warning weight="duotone" size={18} className="text-[var(--amber)]" />
                 <span className="mono">{w.ticker}</span>
