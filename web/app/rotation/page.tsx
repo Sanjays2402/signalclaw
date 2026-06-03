@@ -4,7 +4,8 @@ import useSWR from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Field, Input, Button, fmtPct } from "@/components/ui";
 import { swrFetcher, type RotationReport, type Concentration } from "@/lib/api";
-import { ChartLineUp, ChartLineDown, Compass, Warning } from "@phosphor-icons/react/dist/ssr";
+import { ChartLineUp, ChartLineDown, Compass, Warning, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import { rotationToCSV, rotationToJSON, rotationFilename } from "@/lib/rotationExport";
 
 export default function Page() {
   return (
@@ -71,7 +72,43 @@ function Rotation() {
 
       <Card
         title="Sector scores"
-        right={rot.data && <span className="muted text-xs">as of {rot.data.asof} vs {rot.data.benchmark}</span>}
+        right={
+          rot.data ? (
+            <div className="flex items-center gap-3">
+              <span className="muted text-xs">as of {rot.data.asof} vs {rot.data.benchmark}</span>
+              {rot.data.scores.length > 0 && (
+                <div className="flex items-center gap-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => downloadBlob(
+                      rotationToCSV(rot.data!),
+                      "text/csv;charset=utf-8",
+                      rotationFilename(rot.data!.benchmark, "csv"),
+                    )}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+                    title="Download sector scores as CSV for spreadsheet analysis"
+                    data-testid="rotation-export-csv"
+                  >
+                    <DownloadSimple size={12} weight="bold" /> CSV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadBlob(
+                      rotationToJSON(rot.data!),
+                      "application/json;charset=utf-8",
+                      rotationFilename(rot.data!.benchmark, "json"),
+                    )}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+                    title="Download sector scores as JSON"
+                    data-testid="rotation-export-json"
+                  >
+                    <DownloadSimple size={12} weight="bold" /> JSON
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : null
+        }
       >
         {rot.error ? <ErrorBox err={rot.error} /> :
           !rot.data ? <Loading label="Scoring sectors" /> :
@@ -97,6 +134,20 @@ function Rotation() {
       </Card>
     </div>
   );
+}
+
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Defer revoke so the download starts in all browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function SectorGrid({ report }: { report: RotationReport }) {
