@@ -15,7 +15,20 @@ import {
   Field,
 } from "@/components/ui";
 import { api, swrFetcher, ApiError } from "@/lib/api";
-import { Eye, Trash, Plus, Play, ArrowRight, Clock } from "@phosphor-icons/react/dist/ssr";
+import { watchesToCSV, watchesToJSON, watchesFilename } from "@/lib/watchesExport";
+import { Eye, Trash, Plus, Play, ArrowRight, Clock, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+
+function downloadBlob(content: string, mime: string, filename: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 type Watch = {
   id: string;
@@ -164,8 +177,40 @@ function Watches() {
             activity event. Wire a cron to POST <code className="mono">/api/watches/run</code>.
           </p>
         </div>
-        <div className="text-[11px] muted mono">
-          {data ? `${data.total}/${data.limit} watches` : ""}
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() =>
+              watches.length > 0 &&
+              downloadBlob(
+                watchesToCSV(watches),
+                "text/csv;charset=utf-8",
+                watchesFilename("csv"),
+              )
+            }
+            disabled={watches.length === 0}
+            data-testid="watches-export-csv"
+            title="Download watches as CSV"
+          >
+            <DownloadSimple size={14} weight="duotone" /> CSV
+          </Button>
+          <Button
+            onClick={() =>
+              watches.length > 0 &&
+              downloadBlob(
+                watchesToJSON(watches),
+                "application/json;charset=utf-8",
+                watchesFilename("json"),
+              )
+            }
+            disabled={watches.length === 0}
+            data-testid="watches-export-json"
+            title="Download watches as JSON"
+          >
+            <DownloadSimple size={14} weight="duotone" /> JSON
+          </Button>
+          <div className="text-[11px] muted mono">
+            {data ? `${data.total}/${data.limit} watches` : ""}
+          </div>
         </div>
       </header>
 
