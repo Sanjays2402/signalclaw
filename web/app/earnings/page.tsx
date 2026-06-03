@@ -4,8 +4,22 @@ import useSWR, { mutate } from "swr";
 import AuthGate from "@/components/AuthGate";
 import { Card, Badge, Loading, ErrorBox, Empty, Button, Input, Field } from "@/components/ui";
 import { api, swrFetcher, type EarningsList, type EarningsIn } from "@/lib/api";
-import { CalendarBlank, Trash, FloppyDisk, CheckCircle, Circle } from "@phosphor-icons/react/dist/ssr";
+import { earningsToCSV, earningsToJSON, earningsFilename } from "@/lib/earningsExport";
+import { CalendarBlank, Trash, FloppyDisk, CheckCircle, Circle, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
+
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 export default function EarningsPage() {
   return (
@@ -94,6 +108,34 @@ function Earnings() {
 
       {data && data.rows.length > 0 && (
         <Card title={`${data.rows.length} rows`}>
+          <div className="flex flex-wrap gap-2 text-xs mb-3">
+            <button
+              type="button"
+              onClick={() => downloadBlob(
+                earningsToCSV(data.rows),
+                "text/csv;charset=utf-8",
+                earningsFilename(within, "csv"),
+              )}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+              title="Download the earnings calendar as CSV for spreadsheet analysis"
+              data-testid="earnings-export-csv"
+            >
+              <DownloadSimple size={12} weight="bold" /> CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadBlob(
+                earningsToJSON(data.rows),
+                "application/json;charset=utf-8",
+                earningsFilename(within, "json"),
+              )}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+              title="Download the earnings calendar as JSON"
+              data-testid="earnings-export-json"
+            >
+              <DownloadSimple size={12} weight="bold" /> JSON
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-left muted text-xs uppercase tracking-wide">
