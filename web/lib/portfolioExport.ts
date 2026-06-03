@@ -80,7 +80,62 @@ export function positionsToJSON(snap: PortfolioSnapshotLite): string {
   return JSON.stringify(payload, null, 2) + "\n";
 }
 
-export function portfolioExportFilename(ext: "csv" | "json"): string {
+function fmtUsd(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "";
+  const sign = v < 0 ? "-" : "";
+  const abs = Math.abs(v);
+  return `${sign}$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function fmtPct(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "";
+  return `${(v * 100).toFixed(2)}%`;
+}
+
+/**
+ * Render the positions snapshot as a Markdown report (header + totals block +
+ * positions table). Mirrors the shape of `entriesToMarkdown` in journalExport
+ * so a trader can paste a portfolio snapshot into a trade review doc the same
+ * way they paste journal entries.
+ */
+export function positionsToMarkdown(snap: PortfolioSnapshotLite): string {
+  const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const count = snap.positions.length;
+  const head = [
+    `# SignalClaw portfolio`,
+    ``,
+    `Exported ${stamp} \u00b7 ${count} position${count === 1 ? "" : "s"}`,
+    ``,
+    `- Market value: ${fmtUsd(snap.total_market_value)}`,
+    `- Cost basis: ${fmtUsd(snap.total_cost)}`,
+    `- Unrealized: ${fmtUsd(snap.total_unrealized)}` +
+      (snap.total_cost > 0
+        ? ` (${fmtPct(snap.total_unrealized / snap.total_cost)})`
+        : ""),
+    `- Realized: ${fmtUsd(snap.total_realized)}`,
+    ``,
+  ];
+  if (count === 0) {
+    return head.concat([`_No open positions._`, ``]).join("\n");
+  }
+  const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  const table = [
+    `| Ticker | Qty | Avg | Mark | Mkt val | Weight | P&L | P&L % | Realized |`,
+    `| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
+  ];
+  for (const p of snap.positions) {
+    table.push(
+      `| ${esc(p.ticker)} | ${p.quantity} | ${fmtUsd(p.avg_cost)} | ${
+        p.last_price == null ? "--" : fmtUsd(p.last_price)
+      } | ${fmtUsd(p.market_value)} | ${fmtPct(weightOf(snap, p))} | ${fmtUsd(
+        p.unrealized_pnl,
+      )} | ${fmtPct(p.unrealized_pct)} | ${fmtUsd(p.realized_pnl)} |`,
+    );
+  }
+  return head.concat(table, [""]).join("\n");
+}
+
+export function portfolioExportFilename(ext: "csv" | "json" | "md"): string {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   return `signalclaw-portfolio-${stamp}.${ext}`;
 }

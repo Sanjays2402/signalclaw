@@ -29,6 +29,7 @@ import { CaretUp, CaretDown, DownloadSimple } from "@phosphor-icons/react/dist/s
 import {
   positionsToCSV,
   positionsToJSON,
+  positionsToMarkdown,
   portfolioExportFilename,
 } from "@/lib/portfolioExport";
 
@@ -286,10 +287,19 @@ function PositionsTable({ snap }: { snap: PortfolioSnapshot }) {
 
 function PortfolioExportButtons({ snap }: { snap: PortfolioSnapshot }) {
   const disabled = snap.positions.length === 0;
-  function download(ext: "csv" | "json") {
-    const body = ext === "csv" ? positionsToCSV(snap) : positionsToJSON(snap);
+  function download(ext: "csv" | "json" | "md") {
+    const body =
+      ext === "csv"
+        ? positionsToCSV(snap)
+        : ext === "json"
+          ? positionsToJSON(snap)
+          : positionsToMarkdown(snap);
     const mime =
-      ext === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8";
+      ext === "csv"
+        ? "text/csv;charset=utf-8"
+        : ext === "json"
+          ? "application/json;charset=utf-8"
+          : "text/markdown;charset=utf-8";
     const blob = new Blob([body], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -324,6 +334,16 @@ function PortfolioExportButtons({ snap }: { snap: PortfolioSnapshot }) {
         data-testid="portfolio-export-json"
       >
         <DownloadSimple weight="duotone" size={11} /> JSON
+      </button>
+      <button
+        type="button"
+        onClick={() => download("md")}
+        disabled={disabled}
+        className={cls}
+        title="Download positions as Markdown"
+        data-testid="portfolio-export-md"
+      >
+        <DownloadSimple weight="duotone" size={11} /> MD
       </button>
     </div>
   );

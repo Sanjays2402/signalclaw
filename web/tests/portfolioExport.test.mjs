@@ -92,3 +92,63 @@ test("portfolioExportFilename has expected shape", () => {
   const j = mod.portfolioExportFilename("json");
   assert.match(j, /^signalclaw-portfolio-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/);
 });
+
+test("positionsToMarkdown emits header, totals block, and rows", () => {
+  const md = mod.positionsToMarkdown(snap);
+  assert.match(md, /^# SignalClaw portfolio\n/);
+  assert.match(md, /Exported \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z \u00b7 2 positions/);
+  assert.match(md, /- Market value: \$2,600\.00/);
+  assert.match(md, /- Cost basis: \$2,100\.00/);
+  assert.match(md, /- Unrealized: \$500\.00 \(23\.81%\)/);
+  assert.match(md, /- Realized: -\$25\.00/);
+  // Table header + AAPL row.
+  assert.match(md, /\| Ticker \| Qty \| Avg \| Mark \| Mkt val \| Weight \| P&L \| P&L % \| Realized \|/);
+  assert.match(md, /\| AAPL \| 10 \| \$150\.00 \| \$200\.00 \| \$2,000\.00 \| 76\.92% \| \$500\.00 \| 33\.33% \| \$0\.00 \|/);
+  // Null mark renders as --; ticker with a pipe would be escaped; trailing newline.
+  assert.match(md, /\| 2 \| \$300\.00 \| -- \| \$600\.00 \|/);
+  assert.ok(md.endsWith("\n"));
+});
+
+test("positionsToMarkdown handles empty positions and singular wording", () => {
+  const md = mod.positionsToMarkdown({
+    positions: [],
+    total_cost: 0,
+    total_market_value: 0,
+    total_unrealized: 0,
+    total_realized: 0,
+    weights: {},
+  });
+  assert.match(md, /\u00b7 0 positions/);
+  assert.match(md, /_No open positions\._/);
+  // No table when empty.
+  assert.ok(!md.includes("| Ticker |"));
+});
+
+test("positionsToMarkdown escapes pipe characters in ticker", () => {
+  const md = mod.positionsToMarkdown({
+    positions: [
+      {
+        ticker: "WEIRD|TKR",
+        quantity: 1,
+        avg_cost: 10,
+        last_price: 11,
+        market_value: 11,
+        cost: 10,
+        unrealized_pnl: 1,
+        unrealized_pct: 0.1,
+        realized_pnl: 0,
+      },
+    ],
+    total_cost: 10,
+    total_market_value: 11,
+    total_unrealized: 1,
+    total_realized: 0,
+    weights: {},
+  });
+  assert.match(md, /WEIRD\\\|TKR/);
+});
+
+test("portfolioExportFilename supports md extension", () => {
+  const m = mod.portfolioExportFilename("md");
+  assert.match(m, /^signalclaw-portfolio-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.md$/);
+});
