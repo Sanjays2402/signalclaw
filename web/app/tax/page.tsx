@@ -8,7 +8,21 @@ import {
   fmtUsd,
 } from "@/components/ui";
 import { swrFetcher, type TaxReport } from "@/lib/api";
-import { Receipt, Warning } from "@phosphor-icons/react/dist/ssr";
+import { taxEventsToCSV, taxReportToJSON, taxFilename } from "@/lib/taxExport";
+import { Receipt, Warning, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+
+function downloadBlob(content: string, mime: string, filename: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 const METHODS = ["fifo", "lifo", "hifo", "avgco"] as const;
 
@@ -74,12 +88,12 @@ function Tax() {
 
       {error ? <ErrorBox err={error} /> :
         isLoading || !data ? <Loading label="Computing tax report" /> :
-        <Report data={data} />}
+        <Report data={data} washWindow={applied.wash_window} />}
     </div>
   );
 }
 
-function Report({ data }: { data: TaxReport }) {
+function Report({ data, washWindow }: { data: TaxReport; washWindow: number }) {
   const totalTone = data.realized_total >= 0 ? "up" : "down";
   return (
     <>
@@ -99,6 +113,35 @@ function Report({ data }: { data: TaxReport }) {
         {data.events.length === 0 ? (
           <Empty title="No realized events" hint="Close some positions to see lot accounting here." />
         ) : (
+          <>
+          <div className="flex flex-wrap gap-2 text-xs mb-3">
+            <button
+              type="button"
+              onClick={() => downloadBlob(
+                taxEventsToCSV(data.events),
+                "text/csv;charset=utf-8",
+                taxFilename(data.method, washWindow, "csv"),
+              )}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+              title="Download realized events as CSV for spreadsheet or tax software import"
+              data-testid="tax-export-csv"
+            >
+              <DownloadSimple size={12} weight="bold" /> CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadBlob(
+                taxReportToJSON(data),
+                "application/json;charset=utf-8",
+                taxFilename(data.method, washWindow, "json"),
+              )}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[var(--border)] hover:border-[var(--accent)] rounded"
+              title="Download the full tax report (totals, events, wash sales) as JSON"
+              data-testid="tax-export-json"
+            >
+              <DownloadSimple size={12} weight="bold" /> JSON
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -143,6 +186,7 @@ function Report({ data }: { data: TaxReport }) {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </Card>
 
