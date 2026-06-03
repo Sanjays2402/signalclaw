@@ -285,3 +285,45 @@ test("serializeJournalUrlState omits sort when it is the default", () => {
     "sort=conviction_desc",
   );
 });
+
+// CSV formula injection: thesis or exit_reason starting with =, +, -, @, tab,
+// or CR would execute as a formula when the CSV is opened in Excel, Numbers,
+// LibreOffice, or Google Sheets. Prefix such cells with a single quote so the
+// spreadsheet treats them as literal text. Cells that do not begin with one
+// of those characters must round-trip unchanged.
+test("entriesToCSV neutralises spreadsheet formula injection", () => {
+  const evil = [
+    {
+      trade_id: "+CMD",
+      thesis: "=HYPERLINK(\"http://evil\",\"click\")",
+      conviction: 3,
+      tags: ["-bad", "ok"],
+      exit_reason: "@SUM(A1:A9)",
+      created_at: "2025-02-01T00:00:00.000Z",
+      updated_at: "2025-02-01T00:00:00.000Z",
+    },
+    {
+      trade_id: "safe",
+      thesis: "normal thesis with = inside is fine",
+      conviction: 1,
+      tags: ["normal"],
+      exit_reason: null,
+      created_at: "2025-02-02T00:00:00.000Z",
+      updated_at: "2025-02-02T00:00:00.000Z",
+    },
+  ];
+  const csv = mod.entriesToCSV(evil);
+  const lines = csv.split("\n");
+  // Row 1: every user-controlled cell that started with a dangerous char is
+  // now prefixed with '. The formula cell also needs quoting because of the
+  // embedded comma.
+  assert.equal(lines[1].startsWith("'+CMD,"), true, "trade_id formula-guarded");
+  assert.match(lines[1], /"'=HYPERLINK\(""http:\/\/evil"",""click""\)"/);
+  assert.match(lines[1], /,'@SUM\(A1:A9\),/);
+  assert.match(lines[1], /,'-bad\|ok,/);
+  // Row 2: nothing changes for safe inputs.
+  assert.equal(
+    lines[2],
+    "safe,2025-02-02T00:00:00.000Z,2025-02-02T00:00:00.000Z,1,,normal,normal thesis with = inside is fine",
+  );
+});

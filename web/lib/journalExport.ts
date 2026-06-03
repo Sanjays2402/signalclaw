@@ -11,10 +11,19 @@ export type JournalEntryLite = {
   updated_at: string;
 };
 
+// Spreadsheet apps (Excel, Numbers, LibreOffice, Google Sheets) treat a cell
+// whose first character is one of = + - @ \t \r as a formula. Because
+// thesis/tags/exit_reason are operator-supplied free text, a row like
+// `=HYPERLINK("http://evil","click")` in a thesis would execute on import.
+// Prefix such cells with a single quote, which spreadsheets strip on display
+// but which neutralises the formula. Re-importers that split on comma still
+// see the original text minus the leading sentinel.
 function csvEscape(v: string): string {
   if (v === "") return "";
-  if (/[",\n\r]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
-  return v;
+  const needsFormulaGuard = /^[=+\-@\t\r]/.test(v);
+  const guarded = needsFormulaGuard ? `'${v}` : v;
+  if (/[",\n\r]/.test(guarded)) return `"${guarded.replace(/"/g, '""')}"`;
+  return guarded;
 }
 
 export function entriesToCSV(entries: JournalEntryLite[]): string {
