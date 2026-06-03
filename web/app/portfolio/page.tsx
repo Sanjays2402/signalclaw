@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
@@ -25,13 +25,19 @@ import {
   type DrawdownReport,
   type Position,
 } from "@/lib/api";
-import { CaretUp, CaretDown, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import { CaretUp, CaretDown, DownloadSimple, Check, Link as LinkIcon } from "@phosphor-icons/react/dist/ssr";
 import {
   positionsToCSV,
   positionsToJSON,
   positionsToMarkdown,
   portfolioExportFilename,
 } from "@/lib/portfolioExport";
+import {
+  PORTFOLIO_SORT_DEFAULT,
+  parsePortfolioUrlState,
+  serializePortfolioUrlState,
+  type PortfolioSortDir,
+} from "@/lib/portfolioUrl";
 
 export default function PortfolioPage() {
   return (
@@ -43,7 +49,32 @@ export default function PortfolioPage() {
 
 type SortKey = "ticker" | "qty" | "avg" | "mark" | "mv" | "weight" | "pnl" | "pct" | "realized";
 
+type SortState = { k: SortKey; dir: 1 | -1 };
+
 function Portfolio() {
+  // Sort state lives on the page so it can mirror to the address bar.
+  // /portfolio?sort=pnl&dir=asc lands a teammate on the exact same view.
+  const [sort, setSort] = useState<SortState>({
+    k: PORTFOLIO_SORT_DEFAULT.k as SortKey,
+    dir: PORTFOLIO_SORT_DEFAULT.dir,
+  });
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const s = parsePortfolioUrlState(globalThis.window.location.search);
+    setSort({ k: s.sortKey as SortKey, dir: s.sortDir });
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = serializePortfolioUrlState({ sortKey: sort.k, sortDir: sort.dir as PortfolioSortDir });
+    const loc = globalThis.window.location;
+    const next = qs ? `${loc.pathname}?${qs}` : loc.pathname;
+    const current = loc.pathname + loc.search;
+    if (next !== current) globalThis.window.history.replaceState(null, "", next);
+  }, [hydrated, sort]);
+
   const snap = useSWR<PortfolioSnapshot>("/portfolio/snapshot", swrFetcher, {
     refreshInterval: 30000,
   });
@@ -95,6 +126,7 @@ function Portfolio() {
               <span className="muted text-[10px] uppercase tracking-widest mono">
                 {snap.data.positions.length} rows
               </span>
+              <CopyLinkButton />
               <PortfolioExportButtons snap={snap.data} />
             </div>
           )
@@ -107,7 +139,7 @@ function Portfolio() {
         ) : snap.data.positions.length === 0 ? (
           <Empty title="No open positions" hint="POST /portfolio/trades to start tracking." />
         ) : (
-          <PositionsTable snap={snap.data} />
+          <PositionsTable snap={snap.data} sort={sort} setSort={setSort} />
         )}
       </Card>
     </div>
@@ -197,9 +229,15 @@ function Th({
   );
 }
 
-function PositionsTable({ snap }: { snap: PortfolioSnapshot }) {
-  const [sort, setSort] = useState<{ k: SortKey; dir: 1 | -1 }>({ k: "mv", dir: -1 });
-
+function PositionsTable({
+  snap,
+  sort,
+  setSort,
+}: {
+  snap: PortfolioSnapshot;
+  sort: SortState;
+  setSort: (s: SortState) => void;
+}) {
   const rows = useMemo(() => {
     const cmp = (a: Position, b: Position) => {
       const wA = snap.weights[a.ticker] ?? (snap.total_market_value > 0 ? a.market_value / snap.total_market_value : 0);
@@ -282,6 +320,50 @@ function PositionsTable({ snap }: { snap: PortfolioSnapshot }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function CopyLinkButton() {
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState(false);
+  async function onClick() {
+    try {
+      const url = window.location.href;
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        if (!ok) throw new Error("copy failed");
+      }
+      setErr(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setErr(true);
+      setTimeout(() => setErr(false), 1500);
+    }
+  }
+  const cls =
+    "text-[10px] inline-flex items-center gap-1 px-2 py-1 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] uppercase tracking-widest font-semibold mono";
+  const label = err ? "FAILED" : copied ? "COPIED" : "COPY LINK";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cls}
+      title="Copy a shareable URL of the current sorted view"
+      data-testid="portfolio-copy-link"
+      aria-label="Copy shareable link to current view"
+    >
+      {copied ? <Check weight="duotone" size={11} /> : <LinkIcon weight="duotone" size={11} />} {label}
+    </button>
   );
 }
 
