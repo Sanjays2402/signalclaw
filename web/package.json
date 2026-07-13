@@ -10,11 +10,11 @@
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "dependencies": {
-    "next": "16.2.9",
+    "next": "16.2.10",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "lightweight-charts": "5.2.0",
-    "recharts": "3.9.0",
+    "recharts": "3.9.2",
     "@phosphor-icons/react": "2.1.10",
     "swr": "2.4.2",
     "clsx": "2.1.1"
@@ -26,6 +26,6 @@
     "typescript": "6.0.3",
     "tailwindcss": "4.3.2",
     "@tailwindcss/postcss": "4.3.2",
-    "postcss": "8.5.16"
+    "postcss": "8.5.19"
   }
 }
