@@ -306,3 +306,10 @@ def events_to_csv(events: Iterable[NewsEvent]) -> str:
             "|".join(e.tags), e.source, e.url, e.created_at,
         ])
     return buf.getvalue()
+
+
+def events_to_json(events: Iterable[NewsEvent]) -> str:
+    """Serialize events as a JSON array, sorted by (event_date, ticker)."""
+    rows = sorted((asdict(e) for e in events),
+                  key=lambda d: (d.get("event_date") or "", d.get("ticker") or ""))
+    return json.dumps(rows, indent=2, default=str)

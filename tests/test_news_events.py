@@ -13,6 +13,7 @@ from signalclaw.news_events import (
     compute_event_returns,
     event_study,
     events_to_csv,
+    events_to_json,
 )
 
 
@@ -176,6 +177,21 @@ def test_events_to_csv(tmp_path):
     assert lines[0] == "id,ticker,event_date,headline,tags,source,url,created_at"
     assert "AAPL,2026-01-05,apple news" in lines[1]
     assert "beat|earnings" in lines[1]
+
+
+def test_events_to_json():
+    events = [
+        NewsEvent(ticker="TSLA", headline="later", event_date="2026-02-01",
+                   tags=["upgrade"], source="cnbc"),
+        NewsEvent(ticker="AAPL", headline="apple news", event_date="2026-01-05",
+                   tags=["earnings", "beat"], source="reuters"),
+    ]
+    rows = json.loads(events_to_json(events))
+    assert [r["ticker"] for r in rows] == ["AAPL", "TSLA"]  # sorted by event_date
+    aapl = rows[0]
+    assert aapl["headline"] == "apple news"
+    assert sorted(aapl["tags"]) == ["beat", "earnings"]
+    assert aapl["id"].startswith("nev_")
 
 
 def test_persistence_file_shape(tmp_path):

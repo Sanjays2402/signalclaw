@@ -1250,11 +1250,15 @@ def news_events_study(tag, horizons):
 
 @news_events_grp.command("export")
 @click.option("--out", default="news_events.csv")
-def news_events_export(out):
+@click.option("--format", "fmt", type=click.Choice(["csv", "json"]), default="csv",
+              help="Export format (default csv; json keeps full event shape).")
+def news_events_export(out, fmt):
     s = get_settings()
     store = NewsEventStore(s.data_dir / "news_events.json")
+    from ..news_events import events_to_json
     from pathlib import Path as _P
-    _P(out).write_text(events_to_csv(store.list()))
+    text = events_to_json(store.list()) if fmt == "json" else events_to_csv(store.list())
+    _P(out).write_text(text)
     console.print(f"wrote {out}")
 
 

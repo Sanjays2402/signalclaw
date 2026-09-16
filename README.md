@@ -2838,6 +2838,7 @@ CLI (`signalclaw <cmd>`, defined in `pyproject.toml` and `src/signalclaw/cli/mai
 | `correlation` | Pairwise correlation matrix (`--window`, `--threshold`) |
 | `rotation` | Rotation scoring report |
 | `pretrade` | Pretrade risk check |
+| `news-events export` | Dump the news-event log (`--out`, `--format csv|json`; JSON keeps the full event shape, sorted by date) |
 
 Makefile shortcuts: `make dev`, `make test`, `make api`, `make web`, `make ingest`, `make run`, `make backtest`.
 
